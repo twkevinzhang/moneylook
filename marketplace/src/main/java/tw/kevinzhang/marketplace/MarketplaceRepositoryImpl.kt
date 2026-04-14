@@ -47,6 +47,9 @@ class MarketplaceRepositoryImpl @Inject constructor(
             val scriptUrl = "$rawBase/$path/${manifest.scriptPath}"
             val bytes = fetchBytes(scriptUrl)
             val scriptFile = File(context.filesDir, "extensions/$extensionId/script.js")
+            check(scriptFile.canonicalPath.startsWith(context.filesDir.canonicalPath)) {
+                "Script path escapes filesDir: ${scriptFile.canonicalPath}"
+            }
             scriptFile.parentFile?.mkdirs()
             scriptFile.writeBytes(bytes)
             scriptFile.absolutePath
@@ -58,6 +61,10 @@ class MarketplaceRepositoryImpl @Inject constructor(
         return if (normalized.contains("raw.githubusercontent.com")) {
             normalized
         } else {
+            require(
+                normalized.startsWith("https://github.com/") ||
+                normalized.startsWith("http://github.com/")
+            ) { "Unsupported repo URL (only GitHub is supported): $repoUrl" }
             normalized
                 .replace("https://github.com/", "https://raw.githubusercontent.com/")
                 .replace("http://github.com/", "https://raw.githubusercontent.com/") + "/main"
