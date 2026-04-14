@@ -1,6 +1,6 @@
 package tw.kevinzhang.extension_runtime.data
 
-data class HttpResult(
+data class HttpResult private constructor(
     val status: Int,
     val body: String,
     val headers: Map<String, String>,
