@@ -24,4 +24,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Moneylook"
 include(":app")
- 
+include(":core:data")
+include(":core:network")
+include(":marketplace")
+include(":extension-runtime")
