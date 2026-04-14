@@ -38,4 +38,9 @@ class MarketplaceRepositoryImplTest {
         val rawUrl = "https://raw.githubusercontent.com/owner/repo/main"
         assertEquals(rawUrl, repo.toRawBase(rawUrl))
     }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `non-github url throws IllegalArgumentException`() {
+        repo.toRawBase("https://gitlab.com/owner/repo")
+    }
 }
