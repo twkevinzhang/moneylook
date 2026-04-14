@@ -54,4 +54,11 @@ class SessionStoreTest {
         assertEquals("bot-cookie", store.getCookies("tw.bot"))
         assertEquals("esun-cookie", store.getCookies("tw.esun"))
     }
+
+    @Test
+    fun `putToken alone makes hasSession true with null cookies`() {
+        store.putToken("tw.bot", "Authorization", "Bearer x")
+        assertTrue(store.hasSession("tw.bot"))
+        assertNull(store.getCookies("tw.bot"))
+    }
 }
