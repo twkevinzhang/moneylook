@@ -108,10 +108,16 @@ class ExtensionRunnerImpl @Inject constructor(
      */
     private fun parseSyncResult(result: Any?, context: QuickJSContext): SyncResult {
         if (result == null) return SyncResult.Error("script returned null")
-        if (result !is JSObject) return SyncResult.Error("script must return an object")
+        if (result !is JSObject) {
+            (result as? JSObject)?.release()
+            return SyncResult.Error("script must return an object")
+        }
 
         val accountsArray = result.getJSArray("accounts")
-            ?: return SyncResult.Error("script result missing 'accounts' array")
+            ?: run {
+                result.release()
+                return SyncResult.Error("script result missing 'accounts' array")
+            }
 
         return try {
             val accounts = mutableListOf<AccountData>()
