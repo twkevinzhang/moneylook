@@ -61,7 +61,7 @@ class MarketplaceViewModel @Inject constructor(
                 marketplaceRepository.fetchIndex(url) // validate URL works
                 repoUrlRepository.addRepoUrl(url)
                 _addRepoUrl.value = ""
-                loadExtensions(url)
+                loadExtensionsSuspend(url)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -74,23 +74,27 @@ class MarketplaceViewModel @Inject constructor(
 
     fun loadExtensions(repoUrl: String) {
         viewModelScope.launch {
-            try {
-                val index = marketplaceRepository.fetchIndex(repoUrl)
-                val installed = installedExtensionDao.getAll()
-                val installedMap = installed.associateBy { it.id }
-                _extensions.value = index.map { entry ->
-                    val installedExt = installedMap[entry.id]
-                    ExtensionWithState(
-                        entry = entry,
-                        isInstalled = installedExt != null,
-                        hasUpdate = installedExt != null && installedExt.version < entry.version,
-                    )
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _error.value = "載入失敗: ${e.message}"
+            loadExtensionsSuspend(repoUrl)
+        }
+    }
+
+    private suspend fun loadExtensionsSuspend(repoUrl: String) {
+        try {
+            val index = marketplaceRepository.fetchIndex(repoUrl)
+            val installed = installedExtensionDao.getAll()
+            val installedMap = installed.associateBy { it.id }
+            _extensions.value = index.map { entry ->
+                val installedExt = installedMap[entry.id]
+                ExtensionWithState(
+                    entry = entry,
+                    isInstalled = installedExt != null,
+                    hasUpdate = installedExt != null && installedExt.version < entry.version,
+                )
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _error.value = "載入失敗: ${e.message}"
         }
     }
 
@@ -112,7 +116,7 @@ class MarketplaceViewModel @Inject constructor(
                         iconUrl = manifest.iconUrl,
                     )
                 )
-                loadExtensions(repoUrl)
+                loadExtensionsSuspend(repoUrl)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
