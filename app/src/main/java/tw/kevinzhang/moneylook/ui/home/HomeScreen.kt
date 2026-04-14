@@ -31,7 +31,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,7 +46,6 @@ fun HomeScreen(
     val extensions by viewModel.extensions.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val syncStatuses by viewModel.syncStatuses.collectAsStateWithLifecycle()
-    val context = LocalContext.current
 
     LaunchedEffect(extensions) { viewModel.refreshSessionStates() }
 
@@ -88,7 +86,7 @@ fun HomeScreen(
                         syncState = status?.syncState ?: SyncState.IDLE,
                         hasSession = status?.hasSession ?: false,
                         errorMessage = status?.errorMessage,
-                        onLogin = { viewModel.openLogin(context, ext) },
+                        onLogin = { viewModel.openLogin(ext) },
                     )
                 }
             }

@@ -1,6 +1,7 @@
 package tw.kevinzhang.moneylook.ui.home
 
 import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -55,13 +56,12 @@ class HomeViewModel @Inject constructor(
     val syncStatuses = _syncStatuses.asStateFlow()
 
     fun refreshSessionStates() {
-        val statuses = extensions.value.associate { ext ->
-            ext.id to ExtensionSyncStatus(
-                extension = ext,
-                hasSession = sessionStore.hasSession(ext.id),
-            )
+        _syncStatuses.update { current ->
+            extensions.value.associate { ext ->
+                ext.id to (current[ext.id]?.copy(hasSession = sessionStore.hasSession(ext.id))
+                    ?: ExtensionSyncStatus(ext, hasSession = sessionStore.hasSession(ext.id)))
+            }
         }
-        _syncStatuses.value = statuses
     }
 
     fun syncAll() {
@@ -113,7 +113,7 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun openLogin(context: Context, extension: InstalledExtension) {
+    fun openLogin(extension: InstalledExtension) {
         val targetDomains: List<String> = try {
             gson.fromJson(extension.targetDomainsJson, object : TypeToken<List<String>>() {}.type)
         } catch (e: Exception) { emptyList() }
@@ -125,7 +125,7 @@ class HomeViewModel @Inject constructor(
             extensionName = extension.name,
             targetDomains = targetDomains,
         )
-        context.startActivity(intent)
+        context.startActivity(intent.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
     }
 
     private fun updateStatus(id: String, update: (ExtensionSyncStatus) -> ExtensionSyncStatus) {

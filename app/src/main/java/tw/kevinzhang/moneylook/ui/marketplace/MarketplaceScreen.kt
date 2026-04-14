@@ -85,13 +85,15 @@ fun MarketplaceScreen(
                     )
                 }
                 items(extensions, key = { it.entry.id }) { ext ->
-                    val firstRepoUrl = repoUrls.firstOrNull() ?: return@items
-                    ExtensionItem(
-                        extensionWithState = ext,
-                        onInstall = { viewModel.install(firstRepoUrl, ext.entry) },
-                        onUninstall = { viewModel.uninstall(ext.entry.id) },
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+                    val firstRepoUrl = repoUrls.firstOrNull()
+                    if (firstRepoUrl != null) {
+                        ExtensionItem(
+                            extensionWithState = ext,
+                            onInstall = { viewModel.install(firstRepoUrl, ext.entry) },
+                            onUninstall = { viewModel.uninstall(ext.entry.id) },
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+                    }
                 }
             }
         }
