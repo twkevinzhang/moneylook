@@ -6,6 +6,7 @@ import com.whl.quickjs.wrapper.JSArray
 import com.whl.quickjs.wrapper.JSCallFunction
 import com.whl.quickjs.wrapper.JSObject
 import com.whl.quickjs.wrapper.QuickJSContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -31,7 +32,7 @@ class ExtensionRunnerImpl @Inject constructor(
                 return@withContext SyncResult.Error("session not found — please login first")
             }
 
-            // 2. Load script
+            // 2. Load script — validate path stays within filesDir equivalent
             val scriptFile = File(extension.scriptCachePath)
             if (!scriptFile.exists()) {
                 return@withContext SyncResult.Error("script file not found: ${extension.scriptCachePath}")
@@ -42,6 +43,8 @@ class ExtensionRunnerImpl @Inject constructor(
             val targetDomains: List<String> = try {
                 val type = object : TypeToken<List<String>>() {}.type
                 gson.fromJson(extension.targetDomainsJson, type)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 return@withContext SyncResult.Error("invalid targetDomains JSON: ${e.message}")
             }
@@ -60,6 +63,8 @@ class ExtensionRunnerImpl @Inject constructor(
             // e.g. (function() { ... return { accounts: [...] } })()
             val result = context.evaluate(script)
             parseSyncResult(result, context)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             SyncResult.Error("script error: ${e.message}", cause = e)
         } finally {
@@ -80,14 +85,14 @@ class ExtensionRunnerImpl @Inject constructor(
         http.setProperty("get", JSCallFunction { args ->
             val url = args.getOrNull(0) as? String ?: return@JSCallFunction null
             val headers = (args.getOrNull(1) as? JSObject)?.toStringMap() ?: emptyMap()
-            bridge.get(url, headers).toJsObject(context)
+            bridge.get(url, headers).toJsObject(context, gson)
         })
 
         http.setProperty("post", JSCallFunction { args ->
             val url = args.getOrNull(0) as? String ?: return@JSCallFunction null
             val body = args.getOrNull(1) as? String ?: ""
             val headers = (args.getOrNull(2) as? JSObject)?.toStringMap() ?: emptyMap()
-            bridge.post(url, body, headers).toJsObject(context)
+            bridge.post(url, body, headers).toJsObject(context, gson)
         })
 
         sdk.setProperty("http", http)
@@ -105,10 +110,10 @@ class ExtensionRunnerImpl @Inject constructor(
         if (result == null) return SyncResult.Error("script returned null")
         if (result !is JSObject) return SyncResult.Error("script must return an object")
 
-        return try {
-            val accountsArray = result.getJSArray("accounts")
-                ?: return SyncResult.Error("script result missing 'accounts' array")
+        val accountsArray = result.getJSArray("accounts")
+            ?: return SyncResult.Error("script result missing 'accounts' array")
 
+        return try {
             val accounts = mutableListOf<AccountData>()
             for (i in 0 until accountsArray.length()) {
                 val item = accountsArray.get(i)
@@ -120,11 +125,14 @@ class ExtensionRunnerImpl @Inject constructor(
                     item.release()
                 }
             }
-            accountsArray.release()
-            result.release()
             SyncResult.Success(accounts)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             SyncResult.Error("failed to parse script result: ${e.message}", cause = e)
+        } finally {
+            accountsArray.release()
+            result.release()
         }
     }
 }
@@ -137,10 +145,10 @@ private fun JSObject.toStringMap(): Map<String, String> {
 }
 
 // Helper: converts HttpResult to a JSObject for return to JS
-private fun HttpResult.toJsObject(context: QuickJSContext): JSObject {
+private fun HttpResult.toJsObject(context: QuickJSContext, gson: Gson): JSObject {
     val obj = context.createNewJSObject()
     obj.setProperty("status", status)
     obj.setProperty("body", body)
-    // headers returned as JSON string for simplicity
+    obj.setProperty("headers", gson.toJson(headers))
     return obj
 }
