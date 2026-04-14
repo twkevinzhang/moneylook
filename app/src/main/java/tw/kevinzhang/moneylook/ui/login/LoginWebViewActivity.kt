@@ -11,7 +11,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -82,6 +81,8 @@ class LoginWebViewActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Guard: if onCreate bailed out before initializing fields, skip the sweep
+        if (!::extensionId.isInitialized) return
         // Final capture on close — catches any accumulated cookies
         targetDomains.forEach { domain ->
             val cookies = CookieManager.getInstance().getCookie("https://$domain")
@@ -99,12 +100,23 @@ class LoginWebViewActivity : ComponentActivity() {
         }
     }
 
-    /** Layer 2: capture tokens from OAuth redirect URLs */
+    /** Layer 2: capture tokens from OAuth redirect URLs (query params and fragment) */
     private fun captureUrlTokens(url: String) {
         val uri = Uri.parse(url)
-        listOf("access_token", "token", "auth_token", "code", "id_token").forEach { key ->
-            uri.getQueryParameter(key)?.takeIf { it.isNotBlank() }?.let { value ->
-                sessionStore.putToken(extensionId, key, value)
+        val tokenKeys = listOf("access_token", "token", "auth_token", "code", "id_token")
+
+        // Query parameters (authorization code flow, most bank SSO)
+        tokenKeys.forEach { key ->
+            uri.getQueryParameter(key)?.takeIf { it.isNotBlank() }
+                ?.let { value -> sessionStore.putToken(extensionId, key, value) }
+        }
+
+        // Fragment parameters (OAuth implicit flow: #access_token=...)
+        uri.fragment?.let { fragment ->
+            val fragmentUri = Uri.parse("?$fragment")
+            tokenKeys.forEach { key ->
+                fragmentUri.getQueryParameter(key)?.takeIf { it.isNotBlank() }
+                    ?.let { value -> sessionStore.putToken(extensionId, key, value) }
             }
         }
     }
@@ -131,39 +143,37 @@ private fun LoginWebViewScreen(
             )
         }
     ) { innerPadding ->
-        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-            AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView, url: String) {
-                                super.onPageFinished(view, url)
-                                onPageFinished(url)
-                            }
-
-                            override fun shouldOverrideUrlLoading(
-                                view: WebView,
-                                request: WebResourceRequest,
-                            ): Boolean {
-                                onUrlOverride(request.url.toString())
-                                return false
-                            }
-
-                            /** Layer 3: response header capture deferred to post-v1 */
-                            override fun shouldInterceptRequest(
-                                view: WebView,
-                                request: WebResourceRequest,
-                            ): WebResourceResponse? {
-                                return super.shouldInterceptRequest(view, request)
-                            }
+        AndroidView(
+            factory = { context ->
+                WebView(context).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView, url: String) {
+                            super.onPageFinished(view, url)
+                            onPageFinished(url)
                         }
-                        loadUrl(loginUrl)
+
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView,
+                            request: WebResourceRequest,
+                        ): Boolean {
+                            onUrlOverride(request.url.toString())
+                            return false
+                        }
+
+                        /** Layer 3: response header capture deferred to post-v1 */
+                        override fun shouldInterceptRequest(
+                            view: WebView,
+                            request: WebResourceRequest,
+                        ): WebResourceResponse? {
+                            return super.shouldInterceptRequest(view, request)
+                        }
                     }
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+                    loadUrl(loginUrl)
+                }
+            },
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+        )
     }
 }
