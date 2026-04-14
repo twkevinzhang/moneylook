@@ -12,10 +12,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    buildFeatures { buildConfig = true }
 }
 
 dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
     api(libs.bundles.okhttp)
+    api(libs.gson)
 }

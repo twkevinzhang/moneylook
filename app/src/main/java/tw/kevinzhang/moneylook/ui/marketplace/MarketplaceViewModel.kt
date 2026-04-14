@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.marketplace.MarketplaceRepository
@@ -32,6 +33,7 @@ class MarketplaceViewModel @Inject constructor(
     private val marketplaceRepository: MarketplaceRepository,
     private val repoUrlRepository: RepoUrlRepository,
     private val installedExtensionDao: InstalledExtensionDao,
+    private val accountDao: AccountDao,
     private val gson: Gson,
 ) : ViewModel() {
 
@@ -130,6 +132,7 @@ class MarketplaceViewModel @Inject constructor(
     fun uninstall(extensionId: String) {
         viewModelScope.launch {
             installedExtensionDao.deleteById(extensionId)
+            accountDao.deleteByExtensionId(extensionId)
             _extensions.value = _extensions.value.map { ext ->
                 if (ext.entry.id == extensionId) ext.copy(isInstalled = false, hasUpdate = false)
                 else ext

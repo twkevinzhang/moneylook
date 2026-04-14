@@ -109,7 +109,6 @@ class ExtensionRunnerImpl @Inject constructor(
     private fun parseSyncResult(result: Any?, context: QuickJSContext): SyncResult {
         if (result == null) return SyncResult.Error("script returned null")
         if (result !is JSObject) {
-            (result as? JSObject)?.release()
             return SyncResult.Error("script must return an object")
         }
 

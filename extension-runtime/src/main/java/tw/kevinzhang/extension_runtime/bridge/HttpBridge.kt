@@ -38,8 +38,12 @@ class HttpBridge(
             Request.Builder().url(url).get()
         }
 
-        // Inject session only for targetDomains
-        if (targetDomains.any { domain -> url.contains(domain) }) {
+        // Inject session only for targetDomains — use host-segment match to prevent exfiltration
+        // via crafted URLs like "https://evil-example.com.attacker.com/"
+        val urlHost = runCatching { java.net.URL(url).host }.getOrNull()
+        if (urlHost != null && targetDomains.any { domain ->
+                urlHost == domain || urlHost.endsWith(".$domain")
+            }) {
             sessionStore.getCookies(extensionId)?.let { builder.header("Cookie", it) }
             sessionStore.getTokens(extensionId).forEach { (k, v) -> builder.header(k, v) }
         }
