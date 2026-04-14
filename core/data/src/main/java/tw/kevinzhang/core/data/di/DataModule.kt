@@ -20,6 +20,7 @@ object DataModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): MoneylookDatabase =
         Room.databaseBuilder(context, MoneylookDatabase::class.java, "moneylook.db")
+            .fallbackToDestructiveMigration() // pre-production: replace with real Migration objects before first production release
             .build()
 
     @Provides
