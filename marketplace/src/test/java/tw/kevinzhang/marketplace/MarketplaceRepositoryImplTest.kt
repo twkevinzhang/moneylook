@@ -1,26 +1,27 @@
 package tw.kevinzhang.marketplace
 
+import com.google.gson.Gson
+import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 
+@RunWith(RobolectricTestRunner::class)
 class MarketplaceRepositoryImplTest {
 
-    private fun toRawBase(url: String): String {
-        val normalized = url.trimEnd('/')
-        return if (normalized.contains("raw.githubusercontent.com")) {
-            normalized
-        } else {
-            normalized
-                .replace("https://github.com/", "https://raw.githubusercontent.com/")
-                .replace("http://github.com/", "https://raw.githubusercontent.com/") + "/main"
-        }
-    }
+    private val repo = MarketplaceRepositoryImpl(
+        context = RuntimeEnvironment.getApplication(),
+        okHttpClient = OkHttpClient(),
+        gson = Gson(),
+    )
 
     @Test
     fun `github url converts to raw base`() {
         assertEquals(
             "https://raw.githubusercontent.com/twkevinzhang/moneylook-extensions/main",
-            toRawBase("https://github.com/twkevinzhang/moneylook-extensions")
+            repo.toRawBase("https://github.com/twkevinzhang/moneylook-extensions")
         )
     }
 
@@ -28,13 +29,13 @@ class MarketplaceRepositoryImplTest {
     fun `trailing slash is stripped`() {
         assertEquals(
             "https://raw.githubusercontent.com/twkevinzhang/moneylook-extensions/main",
-            toRawBase("https://github.com/twkevinzhang/moneylook-extensions/")
+            repo.toRawBase("https://github.com/twkevinzhang/moneylook-extensions/")
         )
     }
 
     @Test
     fun `already raw url is unchanged`() {
         val rawUrl = "https://raw.githubusercontent.com/owner/repo/main"
-        assertEquals(rawUrl, toRawBase(rawUrl))
+        assertEquals(rawUrl, repo.toRawBase(rawUrl))
     }
 }
