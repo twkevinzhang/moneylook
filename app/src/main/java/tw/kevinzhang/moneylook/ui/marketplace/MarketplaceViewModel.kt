@@ -19,6 +19,7 @@ import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.marketplace.MarketplaceRepository
 import tw.kevinzhang.marketplace.RepoUrlRepository
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntry
+import tw.kevinzhang.moneylook.schedule.SchedulerManager
 import javax.inject.Inject
 
 data class ExtensionWithState(
@@ -36,6 +37,7 @@ class MarketplaceViewModel @Inject constructor(
     private val installedExtensionDao: InstalledExtensionDao,
     private val accountDao: AccountDao,
     private val gson: Gson,
+    private val schedulerManager: SchedulerManager,
 ) : ViewModel() {
 
     val repoUrls = repoUrlRepository.observeRepoUrls()
@@ -89,19 +91,22 @@ class MarketplaceViewModel @Inject constructor(
             setLoading(repoUrl, entry.id, true)
             try {
                 val manifest = marketplaceRepository.fetchManifest(repoUrl, entry.path)
-                val scriptPath = marketplaceRepository.downloadScript(repoUrl, entry.path, entry.id)
-                installedExtensionDao.insert(
-                    InstalledExtension(
-                        id = manifest.id,
-                        name = manifest.name,
-                        version = manifest.version,
-                        repoUrl = repoUrl,
-                        scriptCachePath = scriptPath,
-                        loginUrl = manifest.loginUrl,
-                        targetDomainsJson = gson.toJson(manifest.targetDomains),
-                        iconUrl = manifest.iconUrl,
-                    )
+                val syncTriggerCachePath = marketplaceRepository.downloadSyncTriggerScript(repoUrl, entry.path, entry.id)
+                val scheduleCachePath = marketplaceRepository.downloadScheduleScript(repoUrl, entry.path, entry.id)
+                val installed = InstalledExtension(
+                    id = manifest.id,
+                    name = manifest.name,
+                    version = manifest.version,
+                    repoUrl = repoUrl,
+                    syncTriggerCachePath = syncTriggerCachePath,
+                    loginUrl = manifest.loginUrl,
+                    targetDomainsJson = gson.toJson(manifest.targetDomains),
+                    iconUrl = manifest.iconUrl,
+                    scheduleCachePath = scheduleCachePath,
+                    scheduleCron = manifest.schedule?.cron,
                 )
+                installedExtensionDao.insert(installed)
+                schedulerManager.scheduleExtension(installed)
                 loadExtensionsSuspend(repoUrl)
             } catch (e: CancellationException) {
                 throw e
@@ -115,6 +120,7 @@ class MarketplaceViewModel @Inject constructor(
 
     fun uninstall(repoUrl: String, extensionId: String) {
         viewModelScope.launch {
+            schedulerManager.cancelExtension(extensionId)
             installedExtensionDao.deleteById(extensionId)
             accountDao.deleteByExtensionId(extensionId)
             _extensionsByRepo.update { map ->
