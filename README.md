@@ -7,7 +7,7 @@
 - **Dashboard**：一覽所有已安裝銀行的帳戶餘額，支援同時同步多家銀行
 - **Marketplace**：從 GitHub repo 安裝銀行 extension，支援更新與移除
 - **安全登入**：內建 WebView 登入流程，自動擷取 Cookie/OAuth Token，不儲存明文密碼
-- **沙盒執行**：銀行爬蟲腳本在 QuickJS 沙盒內執行，無法存取裝置本地資源
+- **沙盒執行**：銀行爬蟲腳本在 Webview 沙盒內執行，無法存取裝置本地資源
 
 ## 運作原理
 
@@ -39,7 +39,10 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
 ```typescript
 // extensions/my-bank/src/index.ts
 (function(): ExtensionResult {
-  const res = sdk.http.get('https://mybank.com/api/accounts')
+    
+  // 腳本中一切的 http request 只能使用 sdk.http 呼叫，無法使用其他第三方 request lib，例如 axios/fetch 等。
+  const res = sdk.http.get('https://mybank.com/api/accounts') 
+  
   const data = JSON.parse(res.body)
   return {
     accounts: data.accounts.map((a: any) => ({
@@ -53,14 +56,14 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
 
 `manifest.json` 範例：
 
-```json
+```json5
 {
   "id": "tw.mybank",
   "name": "My Bank",
   "version": 1,
   "versionName": "1.0.0",
   "loginUrl": "https://mybank.com/login",
-  "targetDomains": ["mybank.com"],
+  "targetDomains": ["mybank.com"], // 腳本只能呼叫這些網域。
   "iconUrl": null
 }
 ```
@@ -78,7 +81,7 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
 ```
 :app                  — UI 層（Compose、ViewModel、Navigation）
 :marketplace          — Extension 清單、下載、repo URL 管理
-:extension-runtime    — QuickJS 執行器、HttpBridge、SessionStore
+:extension-runtime    — Webview 執行器、HttpBridge、SessionStore
 :core:data            — Room 資料庫（Account、InstalledExtension）
 :core:network         — OkHttp、Gson DI 模組
 ```
