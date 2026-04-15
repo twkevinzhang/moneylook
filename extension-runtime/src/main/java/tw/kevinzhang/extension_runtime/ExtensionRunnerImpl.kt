@@ -87,29 +87,44 @@ class ExtensionRunnerImpl @Inject constructor(
         }
 
     /**
-     * Wraps the user IIFE script with sdk injection and result capture.
-     * The user script is expected to be an IIFE: (function() { ... return {...} })()
+     * Wraps the user script with sdk injection and result capture.
+     *
+     * The script is embedded via eval() so that top-level function declarations
+     * (e.g. `function r(t){...}`) are hoisted inside the eval scope and don't
+     * interfere with the `var result = ...` assignment — a bare interpolation
+     * would cause JS to parse `function r(t){...}(IIFE_result)`, calling `r`
+     * as a function instead of the IIFE.
      */
-    private fun buildWrappedScript(userScript: String): String = """
-        (function() {
-            try {
-                var sdk = {
-                    http: {
-                        get: function(url, headers) {
-                            return JSON.parse(sdk_http.get(url, JSON.stringify(headers || {})));
-                        },
-                        post: function(url, body, headers) {
-                            return JSON.parse(sdk_http.post(url, body || '', JSON.stringify(headers || {})));
+    private fun buildWrappedScript(userScript: String): String {
+        // Escape the script for embedding inside a JS double-quoted string literal.
+        val escaped = userScript
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\r\n", "\\n")
+            .replace("\n", "\\n")
+            .replace("\r", "\\n")
+
+        return """
+            (function() {
+                try {
+                    var sdk = {
+                        http: {
+                            get: function(url, headers) {
+                                return JSON.parse(sdk_http.get(url, JSON.stringify(headers || {})));
+                            },
+                            post: function(url, body, headers) {
+                                return JSON.parse(sdk_http.post(url, body || '', JSON.stringify(headers || {})));
+                            }
                         }
-                    }
-                };
-                var result = $userScript;
-                __bridge__.onResult(JSON.stringify(result));
-            } catch(e) {
-                __bridge__.onError(e.message || String(e));
-            }
-        })();
-    """.trimIndent()
+                    };
+                    var result = eval("$escaped");
+                    __bridge__.onResult(JSON.stringify(result));
+                } catch(e) {
+                    __bridge__.onError(e.message || String(e));
+                }
+            })();
+        """.trimIndent()
+    }
 }
 
 /**
