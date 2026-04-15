@@ -1,18 +1,25 @@
 package tw.kevinzhang.extension_runtime.session
 
+import com.google.gson.Gson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 
+@RunWith(RobolectricTestRunner::class)
 class SessionStoreTest {
 
     private lateinit var store: SessionStore
 
     @Before
-    fun setUp() { store = SessionStore() }
+    fun setUp() {
+        store = SessionStore(RuntimeEnvironment.getApplication(), Gson())
+    }
 
     @Test
     fun `hasSession returns false before any data stored`() {
