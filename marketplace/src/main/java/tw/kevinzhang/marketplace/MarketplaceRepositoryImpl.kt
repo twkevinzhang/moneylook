@@ -44,7 +44,7 @@ class MarketplaceRepositoryImpl @Inject constructor(
                 fetchString("$rawBase/$path/manifest.json"),
                 ExtensionManifest::class.java
             )
-            val scriptUrl = "$rawBase/$path/${manifest.scriptPath}"
+            val scriptUrl = "$rawBase/$path/${manifest.syncTrigger.scriptPath}"
             val bytes = fetchBytes(scriptUrl)
             val scriptFile = File(context.filesDir, "extensions/$extensionId/script.js")
             check(scriptFile.canonicalPath.startsWith(context.filesDir.canonicalPath)) {

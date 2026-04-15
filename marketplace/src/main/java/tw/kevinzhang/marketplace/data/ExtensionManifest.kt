@@ -8,6 +8,16 @@ data class ExtensionManifest(
     val description: String,
     val loginUrl: String,
     val targetDomains: List<String>,
-    val scriptPath: String,
+    val syncTrigger: SyncTriggerConfig,
+    val schedule: ScheduleConfig?,
     val iconUrl: String?,
-)
+) {
+    data class SyncTriggerConfig(
+        val scriptPath: String = "sync-trigger.min.js",
+    )
+
+    data class ScheduleConfig(
+        val cron: String,
+        val scriptPath: String = "schedule.min.js",
+    )
+}
