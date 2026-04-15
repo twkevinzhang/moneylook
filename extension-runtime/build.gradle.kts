@@ -19,7 +19,6 @@ dependencies {
     implementation(project(":core:network"))
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
-    implementation(libs.quickjs.android)
     implementation(libs.gson)
     implementation(libs.coroutines.android)
     testImplementation(libs.junit4)

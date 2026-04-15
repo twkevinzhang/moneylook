@@ -1,25 +1,27 @@
 package tw.kevinzhang.extension_runtime
 
+import android.content.Context
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import com.whl.quickjs.wrapper.JSArray
-import com.whl.quickjs.wrapper.JSCallFunction
-import com.whl.quickjs.wrapper.JSObject
-import com.whl.quickjs.wrapper.QuickJSContext
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.extension_runtime.bridge.HttpBridge
 import tw.kevinzhang.extension_runtime.data.AccountData
-import tw.kevinzhang.extension_runtime.data.HttpResult
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.session.SessionStore
 import java.io.File
 import javax.inject.Inject
 
 class ExtensionRunnerImpl @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val okHttpClient: OkHttpClient,
     private val sessionStore: SessionStore,
     private val gson: Gson,
@@ -32,7 +34,7 @@ class ExtensionRunnerImpl @Inject constructor(
                 return@withContext SyncResult.Error("session not found — please login first")
             }
 
-            // 2. Load script — validate path stays within filesDir equivalent
+            // 2. Load script
             val scriptFile = File(extension.scriptCachePath)
             if (!scriptFile.exists()) {
                 return@withContext SyncResult.Error("script file not found: ${extension.scriptCachePath}")
@@ -51,109 +53,127 @@ class ExtensionRunnerImpl @Inject constructor(
 
             val bridge = HttpBridge(okHttpClient, sessionStore, extension.id, targetDomains)
 
-            // 4. Run in QuickJS
-            runInQuickJs(script, bridge)
+            // 4. Run in WebView (switches to Main thread internally)
+            runInWebView(script, bridge)
         }
-
-    private fun runInQuickJs(script: String, bridge: HttpBridge): SyncResult {
-        val context = QuickJSContext.create()
-        return try {
-            injectSdk(context, bridge)
-            // Script must call and return from a top-level IIFE
-            // e.g. (function() { ... return { accounts: [...] } })()
-            val result = context.evaluate(script)
-            parseSyncResult(result, context)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            SyncResult.Error("script error: ${e.message}", cause = e)
-        } finally {
-            context.destroy()
-        }
-    }
 
     /**
-     * Injects `sdk.http.get` and `sdk.http.post` into the QuickJS global object.
-     * All calls are synchronous (block the QuickJS thread on Dispatchers.IO).
+     * Runs the user script inside a headless WebView.
+     * Creates the WebView on the Main thread, evaluates the wrapped script,
+     * and suspends (without blocking Main) until the script completes or errors.
      */
-    private fun injectSdk(context: QuickJSContext, bridge: HttpBridge) {
-        val global = context.globalObject
+    private suspend fun runInWebView(script: String, bridge: HttpBridge): SyncResult =
+        withContext(Dispatchers.Main) {
+            val deferred = CompletableDeferred<SyncResult>()
+            val webView = WebView(context)
 
-        val sdk = context.createNewJSObject()
-        val http = context.createNewJSObject()
-
-        http.setProperty("get", JSCallFunction { args ->
-            val url = args.getOrNull(0) as? String ?: return@JSCallFunction null
-            val headers = (args.getOrNull(1) as? JSObject)?.toStringMap() ?: emptyMap()
-            bridge.get(url, headers).toJsObject(context, gson)
-        })
-
-        http.setProperty("post", JSCallFunction { args ->
-            val url = args.getOrNull(0) as? String ?: return@JSCallFunction null
-            val body = args.getOrNull(1) as? String ?: ""
-            val headers = (args.getOrNull(2) as? JSObject)?.toStringMap() ?: emptyMap()
-            bridge.post(url, body, headers).toJsObject(context, gson)
-        })
-
-        sdk.setProperty("http", http)
-        global.setProperty("sdk", sdk)
-
-        http.release()
-        sdk.release()
-        global.release()
-    }
-
-    /**
-     * Parses the JS return value `{ accounts: [{ name, balance, currency }] }` into SyncResult.
-     */
-    private fun parseSyncResult(result: Any?, context: QuickJSContext): SyncResult {
-        if (result == null) return SyncResult.Error("script returned null")
-        if (result !is JSObject) {
-            return SyncResult.Error("script must return an object")
-        }
-
-        val accountsArray = result.getJSArray("accounts")
-            ?: run {
-                result.release()
-                return SyncResult.Error("script result missing 'accounts' array")
+            @Suppress("SetJavaScriptEnabled")
+            webView.settings.javaScriptEnabled = true
+            webView.addJavascriptInterface(SdkHttpBridge(bridge, gson), "sdk_http")
+            webView.addJavascriptInterface(ScriptResultBridge(deferred, gson), "__bridge__")
+            webView.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String) {
+                    view.evaluateJavascript(buildWrappedScript(script), null)
+                }
             }
+            // Load a blank page; onPageFinished triggers script evaluation
+            webView.loadData("<html><body></body></html>", "text/html", "utf-8")
 
-        return try {
-            val accounts = mutableListOf<AccountData>()
-            for (i in 0 until accountsArray.length()) {
-                val item = accountsArray.get(i)
-                if (item is JSObject) {
-                    val name = item.getString("name") ?: continue
-                    val balance = item.getDouble("balance") ?: continue
-                    val currency = item.getString("currency") ?: "TWD"
-                    accounts.add(AccountData(name, balance, currency))
-                    item.release()
+            try {
+                deferred.await()
+            } finally {
+                webView.destroy()
+            }
+        }
+
+    /**
+     * Wraps the user IIFE script with sdk injection and result capture.
+     * The user script is expected to be an IIFE: (function() { ... return {...} })()
+     */
+    private fun buildWrappedScript(userScript: String): String = """
+        (function() {
+            try {
+                var sdk = {
+                    http: {
+                        get: function(url, headers) {
+                            return JSON.parse(sdk_http.get(url, JSON.stringify(headers || {})));
+                        },
+                        post: function(url, body, headers) {
+                            return JSON.parse(sdk_http.post(url, body || '', JSON.stringify(headers || {})));
+                        }
+                    }
+                };
+                var result = $userScript;
+                __bridge__.onResult(JSON.stringify(result));
+            } catch(e) {
+                __bridge__.onError(e.message || String(e));
+            }
+        })();
+    """.trimIndent()
+}
+
+/**
+ * JavascriptInterface that exposes synchronous HTTP calls to the script.
+ * Methods are called on a WebView background thread — OkHttp blocking is safe here.
+ */
+private class SdkHttpBridge(
+    private val bridge: HttpBridge,
+    private val gson: Gson,
+) {
+    @JavascriptInterface
+    fun get(url: String, headersJson: String): String {
+        val headers = parseHeaders(headersJson)
+        return gson.toJson(bridge.get(url, headers))
+    }
+
+    @JavascriptInterface
+    fun post(url: String, body: String, headersJson: String): String {
+        val headers = parseHeaders(headersJson)
+        return gson.toJson(bridge.post(url, body, headers))
+    }
+
+    private fun parseHeaders(json: String): Map<String, String> = try {
+        val type = object : TypeToken<Map<String, String>>() {}.type
+        gson.fromJson(json, type) ?: emptyMap()
+    } catch (e: Exception) {
+        emptyMap()
+    }
+}
+
+/**
+ * JavascriptInterface that receives the script result or error and completes the deferred.
+ * Methods are called on a WebView background thread.
+ */
+private class ScriptResultBridge(
+    private val deferred: CompletableDeferred<SyncResult>,
+    private val gson: Gson,
+) {
+    @JavascriptInterface
+    fun onResult(json: String) {
+        val result = try {
+            val type = object : TypeToken<Map<String, Any>>() {}.type
+            val map: Map<String, Any> = gson.fromJson(json, type)
+            val rawList = map["accounts"] as? List<*> ?: run {
+                deferred.complete(SyncResult.Error("script result missing 'accounts'"))
+                return
+            }
+            val accounts = rawList.mapNotNull { item ->
+                (item as? Map<*, *>)?.let {
+                    val name = it["name"] as? String ?: return@mapNotNull null
+                    val balance = (it["balance"] as? Number)?.toDouble() ?: return@mapNotNull null
+                    val currency = it["currency"] as? String ?: "TWD"
+                    AccountData(name, balance, currency)
                 }
             }
             SyncResult.Success(accounts)
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Exception) {
             SyncResult.Error("failed to parse script result: ${e.message}", cause = e)
-        } finally {
-            accountsArray.release()
-            result.release()
         }
+        deferred.complete(result)
     }
-}
 
-// Helper: converts JSObject to Map<String, String>
-private fun JSObject.toStringMap(): Map<String, String> {
-    return toMap()
-        .filterValues { it is String }
-        .mapValues { it.value as String }
-}
-
-// Helper: converts HttpResult to a JSObject for return to JS
-private fun HttpResult.toJsObject(context: QuickJSContext, gson: Gson): JSObject {
-    val obj = context.createNewJSObject()
-    obj.setProperty("status", status)
-    obj.setProperty("body", body)
-    obj.setProperty("headers", gson.toJson(headers))
-    return obj
+    @JavascriptInterface
+    fun onError(message: String) {
+        deferred.complete(SyncResult.Error("script error: $message"))
+    }
 }
