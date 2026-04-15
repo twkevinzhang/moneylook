@@ -7,7 +7,7 @@ import tw.kevinzhang.core.data.model.InstalledExtension
 
 @Database(
     entities = [Account::class, InstalledExtension::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class MoneylookDatabase : RoomDatabase() {
