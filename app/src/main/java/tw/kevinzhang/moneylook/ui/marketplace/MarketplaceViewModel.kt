@@ -56,7 +56,7 @@ class MarketplaceViewModel @Inject constructor(
 
     private val workManager = WorkManager.getInstance(context)
     private val cronParser = CronParser(
-        CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX)
+        CronDefinitionBuilder.instanceDefinitionFor(CronType.SPRING)
     )
 
     val repoUrls = repoUrlRepository.observeRepoUrls()
