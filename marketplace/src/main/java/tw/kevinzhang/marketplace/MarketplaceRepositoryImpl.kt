@@ -1,5 +1,6 @@
 package tw.kevinzhang.marketplace
 
+import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -12,7 +13,6 @@ import tw.kevinzhang.marketplace.data.ExtensionIndexEntryDto
 import tw.kevinzhang.marketplace.data.ExtensionManifest
 import java.io.File
 import java.io.IOException
-import android.content.Context
 import javax.inject.Inject
 
 class MarketplaceRepositoryImpl @Inject constructor(
@@ -37,23 +37,48 @@ class MarketplaceRepositoryImpl @Inject constructor(
             gson.fromJson(json, ExtensionManifest::class.java)
         }
 
-    override suspend fun downloadScript(repoUrl: String, path: String, extensionId: String): String =
-        withContext(Dispatchers.IO) {
-            val rawBase = toRawBase(repoUrl)
-            val manifest = gson.fromJson(
-                fetchString("$rawBase/$path/manifest.json"),
-                ExtensionManifest::class.java
-            )
-            val scriptUrl = "$rawBase/$path/${manifest.syncTrigger.scriptPath}"
-            val bytes = fetchBytes(scriptUrl)
-            val scriptFile = File(context.filesDir, "extensions/$extensionId/script.js")
-            check(scriptFile.canonicalPath.startsWith(context.filesDir.canonicalPath)) {
-                "Script path escapes filesDir: ${scriptFile.canonicalPath}"
-            }
-            scriptFile.parentFile?.mkdirs()
-            scriptFile.writeBytes(bytes)
-            scriptFile.absolutePath
+    override suspend fun downloadSyncTriggerScript(
+        repoUrl: String,
+        path: String,
+        extensionId: String,
+    ): String = withContext(Dispatchers.IO) {
+        val rawBase = toRawBase(repoUrl)
+        val manifest = gson.fromJson(
+            fetchString("$rawBase/$path/manifest.json"),
+            ExtensionManifest::class.java,
+        )
+        val scriptUrl = "$rawBase/$path/${manifest.syncTrigger.scriptPath}"
+        val bytes = fetchBytes(scriptUrl)
+        val scriptFile = File(context.filesDir, "extensions/$extensionId/sync-trigger.js")
+        check(scriptFile.canonicalPath.startsWith(context.filesDir.canonicalPath)) {
+            "Script path escapes filesDir: ${scriptFile.canonicalPath}"
         }
+        scriptFile.parentFile?.mkdirs()
+        scriptFile.writeBytes(bytes)
+        scriptFile.absolutePath
+    }
+
+    override suspend fun downloadScheduleScript(
+        repoUrl: String,
+        path: String,
+        extensionId: String,
+    ): String? = withContext(Dispatchers.IO) {
+        val rawBase = toRawBase(repoUrl)
+        val manifest = gson.fromJson(
+            fetchString("$rawBase/$path/manifest.json"),
+            ExtensionManifest::class.java,
+        )
+        val scheduleConfig = manifest.schedule ?: return@withContext null
+        val scriptUrl = "$rawBase/$path/${scheduleConfig.scriptPath}"
+        val bytes = fetchBytes(scriptUrl)
+        val scriptFile = File(context.filesDir, "extensions/$extensionId/schedule.js")
+        check(scriptFile.canonicalPath.startsWith(context.filesDir.canonicalPath)) {
+            "Script path escapes filesDir: ${scriptFile.canonicalPath}"
+        }
+        scriptFile.parentFile?.mkdirs()
+        scriptFile.writeBytes(bytes)
+        scriptFile.absolutePath
+    }
 
     // Converts https://github.com/owner/repo → https://raw.githubusercontent.com/owner/repo/main
     internal fun toRawBase(repoUrl: String): String {
@@ -63,7 +88,7 @@ class MarketplaceRepositoryImpl @Inject constructor(
         } else {
             require(
                 normalized.startsWith("https://github.com/") ||
-                normalized.startsWith("http://github.com/")
+                    normalized.startsWith("http://github.com/"),
             ) { "Unsupported repo URL (only GitHub is supported): $repoUrl" }
             normalized
                 .replace("https://github.com/", "https://raw.githubusercontent.com/")
