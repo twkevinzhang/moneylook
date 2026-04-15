@@ -32,18 +32,24 @@ class HttpBridge(
         extraHeaders: Map<String, String>,
         body: okhttp3.RequestBody?,
     ): Request {
+        val urlHost = runCatching { java.net.URL(url).host }.getOrNull()
+            ?: throw IllegalArgumentException("invalid URL: $url")
+
+        // Allowlist: only permit requests to declared targetDomains
+        val allowed = targetDomains.any { domain ->
+            urlHost == domain || urlHost.endsWith(".$domain")
+        }
+        if (!allowed) throw SecurityException("domain not allowed: $urlHost")
+
         val builder = if (body != null) {
             Request.Builder().url(url).post(body)
         } else {
             Request.Builder().url(url).get()
         }
 
-        // Inject session only for targetDomains — use host-segment match to prevent exfiltration
+        // Inject session — host-segment match prevents exfiltration
         // via crafted URLs like "https://evil-example.com.attacker.com/"
-        val urlHost = runCatching { java.net.URL(url).host }.getOrNull()
-        if (urlHost != null && targetDomains.any { domain ->
-                urlHost == domain || urlHost.endsWith(".$domain")
-            }) {
+        if (allowed) {
             sessionStore.getCookies(extensionId)?.let { builder.header("Cookie", it) }
             sessionStore.getTokens(extensionId).forEach { (k, v) -> builder.header(k, v) }
         }

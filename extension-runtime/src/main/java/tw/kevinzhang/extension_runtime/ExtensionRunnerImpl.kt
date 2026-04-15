@@ -107,6 +107,9 @@ class ExtensionRunnerImpl @Inject constructor(
         return """
             (function() {
                 try {
+                    // Block native HTTP APIs — all requests must go through sdk_http bridge
+                    fetch = undefined;
+                    XMLHttpRequest = undefined;
                     var sdk = {
                         http: {
                             get: function(url, headers) {
