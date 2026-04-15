@@ -29,44 +29,45 @@ class ExtensionRunnerImpl @Inject constructor(
 
     override suspend fun run(extension: InstalledExtension): SyncResult =
         withContext(Dispatchers.IO) {
-            // 1. Check session exists
             if (!sessionStore.hasSession(extension.id)) {
                 return@withContext SyncResult.Error("session not found — please login first")
             }
-
-            // 2. Load script
-            val scriptFile = File(extension.scriptCachePath)
+            val scriptFile = File(extension.syncTriggerCachePath)
             if (!scriptFile.exists()) {
-                return@withContext SyncResult.Error("script file not found: ${extension.scriptCachePath}")
+                return@withContext SyncResult.Error("script file not found: ${extension.syncTriggerCachePath}")
             }
             val script = scriptFile.readText()
-
-            // 3. Parse targetDomains
-            val targetDomains: List<String> = try {
-                val type = object : TypeToken<List<String>>() {}.type
-                gson.fromJson(extension.targetDomainsJson, type)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                return@withContext SyncResult.Error("invalid targetDomains JSON: ${e.message}")
-            }
-
+            val targetDomains: List<String> = parseTargetDomains(extension.targetDomainsJson)
+                ?: return@withContext SyncResult.Error("invalid targetDomains JSON")
             val bridge = HttpBridge(okHttpClient, sessionStore, extension.id, targetDomains)
-
-            // 4. Run in WebView (switches to Main thread internally)
             runInWebView(script, bridge)
         }
 
-    /**
-     * Runs the user script inside a headless WebView.
-     * Creates the WebView on the Main thread, evaluates the wrapped script,
-     * and suspends (without blocking Main) until the script completes or errors.
-     */
+    override suspend fun runSchedule(extension: InstalledExtension): SyncResult? =
+        withContext(Dispatchers.IO) {
+            val cachePath = extension.scheduleCachePath ?: return@withContext null
+            val scriptFile = File(cachePath)
+            if (!scriptFile.exists()) return@withContext null
+            val script = scriptFile.readText()
+            val targetDomains: List<String> = parseTargetDomains(extension.targetDomainsJson)
+                ?: return@withContext SyncResult.Error("invalid targetDomains JSON")
+            val bridge = HttpBridge(okHttpClient, sessionStore, extension.id, targetDomains)
+            runScheduleInWebView(script, bridge)
+        }
+
+    private fun parseTargetDomains(json: String): List<String>? = try {
+        val type = object : TypeToken<List<String>>() {}.type
+        gson.fromJson(json, type)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
     private suspend fun runInWebView(script: String, bridge: HttpBridge): SyncResult =
         withContext(Dispatchers.Main) {
             val deferred = CompletableDeferred<SyncResult>()
             val webView = WebView(context)
-
             @Suppress("SetJavaScriptEnabled")
             webView.settings.javaScriptEnabled = true
             webView.addJavascriptInterface(SdkHttpBridge(bridge, gson), "sdk_http")
@@ -76,9 +77,7 @@ class ExtensionRunnerImpl @Inject constructor(
                     view.evaluateJavascript(buildWrappedScript(script), null)
                 }
             }
-            // Load a blank page; onPageFinished triggers script evaluation
             webView.loadData("<html><body></body></html>", "text/html", "utf-8")
-
             try {
                 deferred.await()
             } finally {
@@ -86,28 +85,37 @@ class ExtensionRunnerImpl @Inject constructor(
             }
         }
 
-    /**
-     * Wraps the user script with sdk injection and result capture.
-     *
-     * The script is embedded via eval() so that top-level function declarations
-     * (e.g. `function r(t){...}`) are hoisted inside the eval scope and don't
-     * interfere with the `var result = ...` assignment — a bare interpolation
-     * would cause JS to parse `function r(t){...}(IIFE_result)`, calling `r`
-     * as a function instead of the IIFE.
-     */
+    private suspend fun runScheduleInWebView(script: String, bridge: HttpBridge): SyncResult? =
+        withContext(Dispatchers.Main) {
+            val deferred = CompletableDeferred<SyncResult?>()
+            val webView = WebView(context)
+            @Suppress("SetJavaScriptEnabled")
+            webView.settings.javaScriptEnabled = true
+            webView.addJavascriptInterface(SdkHttpBridge(bridge, gson), "sdk_http")
+            webView.addJavascriptInterface(ScriptScheduleResultBridge(deferred, gson), "__bridge__")
+            webView.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String) {
+                    view.evaluateJavascript(buildWrappedScript(script), null)
+                }
+            }
+            webView.loadData("<html><body></body></html>", "text/html", "utf-8")
+            try {
+                deferred.await()
+            } finally {
+                webView.destroy()
+            }
+        }
+
     private fun buildWrappedScript(userScript: String): String {
-        // Escape the script for embedding inside a JS double-quoted string literal.
         val escaped = userScript
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
             .replace("\r\n", "\\n")
             .replace("\n", "\\n")
             .replace("\r", "\\n")
-
         return """
             (function() {
                 try {
-                    // Block native HTTP APIs — all requests must go through sdk_http bridge
                     fetch = undefined;
                     XMLHttpRequest = undefined;
                     var sdk = {
@@ -120,7 +128,7 @@ class ExtensionRunnerImpl @Inject constructor(
                             }
                         }
                     };
-                    var result = eval("$escaped");
+                    var result = eval("${'$'}escaped");
                     __bridge__.onResult(JSON.stringify(result));
                 } catch(e) {
                     __bridge__.onError(e.message || String(e));
@@ -130,10 +138,6 @@ class ExtensionRunnerImpl @Inject constructor(
     }
 }
 
-/**
- * JavascriptInterface that exposes synchronous HTTP calls to the script.
- * Methods are called on a WebView background thread — OkHttp blocking is safe here.
- */
 private class SdkHttpBridge(
     private val bridge: HttpBridge,
     private val gson: Gson,
@@ -158,40 +162,55 @@ private class SdkHttpBridge(
     }
 }
 
-/**
- * JavascriptInterface that receives the script result or error and completes the deferred.
- * Methods are called on a WebView background thread.
- */
+/** Bridge for sync-trigger: result must be non-null ExtensionResult. */
 private class ScriptResultBridge(
     private val deferred: CompletableDeferred<SyncResult>,
     private val gson: Gson,
 ) {
     @JavascriptInterface
     fun onResult(json: String) {
-        val result = try {
-            val type = object : TypeToken<Map<String, Any>>() {}.type
-            val map: Map<String, Any> = gson.fromJson(json, type)
-            val rawList = map["accounts"] as? List<*> ?: run {
-                deferred.complete(SyncResult.Error("script result missing 'accounts'"))
-                return
-            }
-            val accounts = rawList.mapNotNull { item ->
-                (item as? Map<*, *>)?.let {
-                    val name = it["name"] as? String ?: return@mapNotNull null
-                    val balance = (it["balance"] as? Number)?.toDouble() ?: return@mapNotNull null
-                    val currency = it["currency"] as? String ?: "TWD"
-                    AccountData(name, balance, currency)
-                }
-            }
-            SyncResult.Success(accounts)
-        } catch (e: Exception) {
-            SyncResult.Error("failed to parse script result: ${e.message}", cause = e)
-        }
-        deferred.complete(result)
+        deferred.complete(parseAccounts(json, gson) ?: SyncResult.Error("script result missing 'accounts'"))
     }
 
     @JavascriptInterface
     fun onError(message: String) {
         deferred.complete(SyncResult.Error("script error: $message"))
     }
+}
+
+/** Bridge for schedule: result may be undefined (returns null → no cache update). */
+private class ScriptScheduleResultBridge(
+    private val deferred: CompletableDeferred<SyncResult?>,
+    private val gson: Gson,
+) {
+    @JavascriptInterface
+    fun onResult(json: String) {
+        if (json == "undefined" || json == "null") {
+            deferred.complete(null)
+            return
+        }
+        deferred.complete(parseAccounts(json, gson))
+    }
+
+    @JavascriptInterface
+    fun onError(message: String) {
+        deferred.complete(SyncResult.Error("script error: $message"))
+    }
+}
+
+private fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
+    val type = object : TypeToken<Map<String, Any>>() {}.type
+    val map: Map<String, Any> = gson.fromJson(json, type)
+    val rawList = map["accounts"] as? List<*> ?: return null
+    val accounts = rawList.mapNotNull { item ->
+        (item as? Map<*, *>)?.let {
+            val name = it["name"] as? String ?: return@mapNotNull null
+            val balance = (it["balance"] as? Number)?.toDouble() ?: return@mapNotNull null
+            val currency = it["currency"] as? String ?: "TWD"
+            AccountData(name, balance, currency)
+        }
+    }
+    SyncResult.Success(accounts)
+} catch (e: Exception) {
+    SyncResult.Error("failed to parse script result: ${e.message}", cause = e)
 }
