@@ -70,7 +70,7 @@ class ScheduleWorker @AssistedInject constructor(
         const val TAG_PREFIX = "schedule:"
 
         private val cronParser = CronParser(
-            CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX)
+            CronDefinitionBuilder.instanceDefinitionFor(CronType.SPRING)
         )
 
         fun tag(extensionId: String) = "$TAG_PREFIX$extensionId"
