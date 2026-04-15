@@ -26,12 +26,18 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import tw.kevinzhang.moneylook.schedule.ScheduleStatus
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -41,6 +47,7 @@ fun MarketplaceScreen(
     viewModel: MarketplaceViewModel = hiltViewModel(),
 ) {
     val extensionsByRepo by viewModel.extensionsByRepo.collectAsStateWithLifecycle()
+    val scheduleStatuses by viewModel.scheduleStatuses.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -77,6 +84,7 @@ fun MarketplaceScreen(
                 items(extensions, key = { "${repoUrl}_${it.entry.id}" }) { ext ->
                     ExtensionItem(
                         extensionWithState = ext,
+                        scheduleStatus = scheduleStatuses[ext.entry.id] ?: ScheduleStatus.None,
                         onInstall = { viewModel.install(repoUrl, ext.entry) },
                         onUninstall = { viewModel.uninstall(repoUrl, ext.entry.id) },
                     )
@@ -90,6 +98,7 @@ fun MarketplaceScreen(
 @Composable
 private fun ExtensionItem(
     extensionWithState: ExtensionWithState,
+    scheduleStatus: ScheduleStatus,
     onInstall: () -> Unit,
     onUninstall: () -> Unit,
 ) {
@@ -106,6 +115,7 @@ private fun ExtensionItem(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            ScheduleStatusBadge(scheduleStatus)
         }
         when {
             ext.isLoading -> CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
@@ -113,5 +123,50 @@ private fun ExtensionItem(
             ext.isInstalled -> OutlinedButton(onClick = onUninstall) { Text("移除") }
             else -> Button(onClick = onInstall) { Text("安裝") }
         }
+    }
+}
+
+@Composable
+private fun ScheduleStatusBadge(status: ScheduleStatus) {
+    when (status) {
+        is ScheduleStatus.None -> Unit
+
+        is ScheduleStatus.Disabled -> Text(
+            text = "排程 未啟用",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+
+        is ScheduleStatus.Active -> {
+            val nextExecMs = status.nextExecMs
+            var remainingMs by remember(nextExecMs) {
+                mutableLongStateOf((nextExecMs - System.currentTimeMillis()).coerceAtLeast(0L))
+            }
+            LaunchedEffect(nextExecMs) {
+                while (remainingMs > 0L) {
+                    delay(1_000L)
+                    remainingMs = (nextExecMs - System.currentTimeMillis()).coerceAtLeast(0L)
+                }
+            }
+            Text(
+                text = "排程 下次執行：${formatCountdown(remainingMs)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    }
+}
+
+private fun formatCountdown(ms: Long): String {
+    val totalSeconds = ms / 1_000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
     }
 }
