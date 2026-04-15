@@ -53,6 +53,10 @@ dependencies {
     implementation(libs.compose.navigation)
     implementation(libs.coil.compose)
     implementation(libs.gson)
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.hilt.work)
+    ksp(libs.hilt.work.compiler)
+    implementation(libs.cron.utils)
 
     testImplementation(libs.junit4)
 

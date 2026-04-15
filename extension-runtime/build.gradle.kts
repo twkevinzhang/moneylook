@@ -21,6 +21,7 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(libs.gson)
     implementation(libs.coroutines.android)
+    implementation(libs.cron.utils)
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)
 }

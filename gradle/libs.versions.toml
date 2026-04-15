@@ -33,6 +33,13 @@ coil = "2.7.0"
 # QuickJS
 quickjs = "3.2.3"
 
+# WorkManager
+workmanager = "2.10.1"
+androidxHiltWork = "1.2.0"
+
+# Cron
+cronutils = "9.2.1"
+
 # Testing
 junit4 = "4.13.2"
 robolectric = "4.13"
@@ -82,6 +89,16 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 
 # QuickJS
 quickjs-android = { group = "wang.harlon.quickjs", name = "wrapper-android", version.ref = "quickjs" }
+
+# WorkManager
+work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workmanager" }
+
+# Hilt WorkManager integration
+hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "androidxHiltWork" }
+hilt-work-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "androidxHiltWork" }
+
+# Cron
+cron-utils = { group = "com.cronutils", name = "cron-utils", version.ref = "cronutils" }
 
 # Testing
 junit4 = { group = "junit", name = "junit", version.ref = "junit4" }
