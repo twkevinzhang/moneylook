@@ -1,16 +1,17 @@
 package tw.kevinzhang.moneylook.ui.marketplace
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
@@ -40,43 +41,25 @@ class MarketplaceViewModel @Inject constructor(
     val repoUrls = repoUrlRepository.observeRepoUrls()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
-    private val _extensions = MutableStateFlow<List<ExtensionWithState>>(emptyList())
-    val extensions = _extensions.asStateFlow()
-
-    private val _addRepoUrl = MutableStateFlow("")
-    val addRepoUrl = _addRepoUrl.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading = _isLoading.asStateFlow()
+    // Map from repoUrl → extensions from that repo
+    private val _extensionsByRepo = MutableStateFlow<Map<String, List<ExtensionWithState>>>(emptyMap())
+    val extensionsByRepo = _extensionsByRepo.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
 
-    fun onAddRepoUrlChanged(url: String) { _addRepoUrl.value = url }
-
-    fun addRepo() {
-        val url = _addRepoUrl.value.trim()
-        if (url.isBlank()) return
+    init {
         viewModelScope.launch {
-            _isLoading.value = true
-            try {
-                marketplaceRepository.fetchIndex(url) // validate URL works
-                repoUrlRepository.addRepoUrl(url)
-                _addRepoUrl.value = ""
-                loadExtensionsSuspend(url)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _error.value = "無法載入 ${url}: ${e.message}"
-            } finally {
-                _isLoading.value = false
+            repoUrlRepository.observeRepoUrls().collect { urls ->
+                // Load any repos not yet in the map
+                val current = _extensionsByRepo.value
+                val newUrls = urls - current.keys
+                for (url in newUrls) {
+                    launch { loadExtensionsSuspend(url) }
+                }
+                // Prune repos that were removed
+                _extensionsByRepo.update { it.filterKeys { k -> k in urls } }
             }
-        }
-    }
-
-    fun loadExtensions(repoUrl: String) {
-        viewModelScope.launch {
-            loadExtensionsSuspend(repoUrl)
         }
     }
 
@@ -85,7 +68,7 @@ class MarketplaceViewModel @Inject constructor(
             val index = marketplaceRepository.fetchIndex(repoUrl)
             val installed = installedExtensionDao.getAll()
             val installedMap = installed.associateBy { it.id }
-            _extensions.value = index.map { entry ->
+            val extensions = index.map { entry ->
                 val installedExt = installedMap[entry.id]
                 ExtensionWithState(
                     entry = entry,
@@ -93,6 +76,7 @@ class MarketplaceViewModel @Inject constructor(
                     hasUpdate = installedExt != null && installedExt.version < entry.version,
                 )
             }
+            _extensionsByRepo.update { it + (repoUrl to extensions) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -102,7 +86,7 @@ class MarketplaceViewModel @Inject constructor(
 
     fun install(repoUrl: String, entry: ExtensionIndexEntry) {
         viewModelScope.launch {
-            setLoading(entry.id, true)
+            setLoading(repoUrl, entry.id, true)
             try {
                 val manifest = marketplaceRepository.fetchManifest(repoUrl, entry.path)
                 val scriptPath = marketplaceRepository.downloadScript(repoUrl, entry.path, entry.id)
@@ -124,27 +108,33 @@ class MarketplaceViewModel @Inject constructor(
             } catch (e: Exception) {
                 _error.value = "安裝失敗: ${e.message}"
             } finally {
-                setLoading(entry.id, false)
+                setLoading(repoUrl, entry.id, false)
             }
         }
     }
 
-    fun uninstall(extensionId: String) {
+    fun uninstall(repoUrl: String, extensionId: String) {
         viewModelScope.launch {
             installedExtensionDao.deleteById(extensionId)
             accountDao.deleteByExtensionId(extensionId)
-            _extensions.value = _extensions.value.map { ext ->
-                if (ext.entry.id == extensionId) ext.copy(isInstalled = false, hasUpdate = false)
-                else ext
+            _extensionsByRepo.update { map ->
+                val updated = map[repoUrl]?.map { ext ->
+                    if (ext.entry.id == extensionId) ext.copy(isInstalled = false, hasUpdate = false)
+                    else ext
+                }
+                if (updated != null) map + (repoUrl to updated) else map
             }
         }
     }
 
     fun clearError() { _error.value = null }
 
-    private fun setLoading(extensionId: String, loading: Boolean) {
-        _extensions.value = _extensions.value.map { ext ->
-            if (ext.entry.id == extensionId) ext.copy(isLoading = loading) else ext
+    private fun setLoading(repoUrl: String, extensionId: String, loading: Boolean) {
+        _extensionsByRepo.update { map ->
+            val updated = map[repoUrl]?.map { ext ->
+                if (ext.entry.id == extensionId) ext.copy(isLoading = loading) else ext
+            }
+            if (updated != null) map + (repoUrl to updated) else map
         }
     }
 }

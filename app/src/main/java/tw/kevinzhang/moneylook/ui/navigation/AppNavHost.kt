@@ -5,6 +5,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import tw.kevinzhang.moneylook.ui.home.HomeScreen
+import tw.kevinzhang.moneylook.ui.marketplace.ManageReposScreen
 import tw.kevinzhang.moneylook.ui.marketplace.MarketplaceScreen
 
 @Composable
@@ -14,7 +15,13 @@ fun AppNavHost(navController: NavHostController) {
             HomeScreen(onNavigateToMarketplace = { navController.navigate(Screen.Marketplace.route) })
         }
         composable(Screen.Marketplace.route) {
-            MarketplaceScreen(onNavigateUp = { navController.popBackStack() })
+            MarketplaceScreen(
+                onNavigateUp = { navController.popBackStack() },
+                onNavigateToManageRepos = { navController.navigate(Screen.ManageRepos.route) },
+            )
+        }
+        composable(Screen.ManageRepos.route) {
+            ManageReposScreen(onNavigateUp = { navController.popBackStack() })
         }
     }
 }
