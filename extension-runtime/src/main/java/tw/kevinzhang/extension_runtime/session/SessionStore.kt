@@ -43,4 +43,6 @@ class SessionStore @Inject constructor() {
     fun hasSession(extensionId: String): Boolean = sessions.containsKey(extensionId)
 
     fun clearSession(extensionId: String) { sessions.remove(extensionId) }
+
+    fun clearAll() { sessions.clear() }
 }
