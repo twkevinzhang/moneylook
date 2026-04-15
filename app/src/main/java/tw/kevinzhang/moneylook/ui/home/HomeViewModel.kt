@@ -2,11 +2,13 @@ package tw.kevinzhang.moneylook.ui.home
 
 import android.content.Context
 import android.content.Intent
+import android.webkit.CookieManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.model.Account
@@ -110,6 +113,17 @@ class HomeViewModel @Inject constructor(
                     }
                 }
             }.awaitAll()
+        }
+    }
+
+    fun clearAllSessions() {
+        viewModelScope.launch {
+            sessionStore.clearAll()
+            withContext(Dispatchers.Main) {
+                CookieManager.getInstance().removeAllCookies(null)
+                CookieManager.getInstance().flush()
+            }
+            refreshSessionStates()
         }
     }
 
