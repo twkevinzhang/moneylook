@@ -128,7 +128,7 @@ class ExtensionRunnerImpl @Inject constructor(
                             }
                         }
                     };
-                    var result = eval("${'$'}escaped");
+                    var result = eval("${escaped}");
                     __bridge__.onResult(JSON.stringify(result));
                 } catch(e) {
                     __bridge__.onError(e.message || String(e));
