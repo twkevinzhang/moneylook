@@ -17,8 +17,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -55,6 +55,7 @@ import tw.kevinzhang.moneylook.schedule.ScheduleStatus
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
+    bottomBar: @Composable () -> Unit = {},
     onNavigateToMarketplace: () -> Unit,
     onNavigateToLedger: (accountId: String) -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
@@ -65,6 +66,7 @@ fun HomeScreen(
     val scheduleStatuses by viewModel.scheduleStatuses.collectAsStateWithLifecycle()
     val countdownMs by viewModel.countdownMs.collectAsStateWithLifecycle()
     var showClearDialog by remember { mutableStateOf(false) }
+    var showSyncDialog by remember { mutableStateOf(false) }
 
     if (showClearDialog) {
         AlertDialog(
@@ -83,6 +85,23 @@ fun HomeScreen(
         )
     }
 
+    if (showSyncDialog) {
+        AlertDialog(
+            onDismissRequest = { showSyncDialog = false },
+            title = { Text("全部同步") },
+            text = { Text("將同步所有已登入的銀行帳戶，確定要繼續？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.syncAll()
+                    showSyncDialog = false
+                }) { Text("同步") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSyncDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -91,15 +110,13 @@ fun HomeScreen(
                     IconButton(onClick = { showClearDialog = true }) {
                         Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "清除所有 Session")
                     }
-                    IconButton(onClick = viewModel::syncAll) {
-                        Icon(Icons.Default.Refresh, contentDescription = "全部同步")
-                    }
                 },
             )
         },
+        bottomBar = bottomBar,
         floatingActionButton = {
-            FloatingActionButton(onClick = onNavigateToMarketplace) {
-                Icon(Icons.Default.Add, contentDescription = "新增銀行")
+            FloatingActionButton(onClick = { showSyncDialog = true }) {
+                Icon(Icons.Default.Sync, contentDescription = "全部同步")
             }
         },
     ) { innerPadding ->
