@@ -19,12 +19,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -33,8 +34,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
+import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.InstalledExtension
+import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.extension_runtime.ExtensionRunner
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.session.SessionStore
@@ -58,6 +61,7 @@ class HomeViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val installedExtensionDao: InstalledExtensionDao,
     private val accountDao: AccountDao,
+    private val transferDao: TransferDao,
     private val extensionRunner: ExtensionRunner,
     private val sessionStore: SessionStore,
     private val gson: Gson,
@@ -75,7 +79,31 @@ class HomeViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _syncStatuses = MutableStateFlow<Map<String, ExtensionSyncStatus>>(emptyMap())
-    val syncStatuses = _syncStatuses.asStateFlow()
+
+    val syncStatuses: StateFlow<Map<String, ExtensionSyncStatus>> =
+        combine(
+            _syncStatuses,
+            sessionStore.sessionIds,
+            installedExtensionDao.observeAll(),
+        ) { mutable, sessionIds, exts ->
+            exts.associate { ext ->
+                val current = mutable[ext.id]
+                ext.id to ExtensionSyncStatus(
+                    extension = ext,
+                    syncState = current?.syncState ?: SyncState.IDLE,
+                    errorMessage = current?.errorMessage,
+                    hasSession = ext.id in sessionIds,
+                )
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    private fun tickerFlow(intervalMs: Long) = flow {
+        while (true) {
+            emit(Unit)
+            delay(intervalMs)
+        }
+    }
 
     /** Per-extension WorkManager schedule status, keyed by extensionId. */
     val scheduleStatuses: StateFlow<Map<String, ScheduleStatus>> =
@@ -101,14 +129,16 @@ class HomeViewModel @Inject constructor(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-    fun refreshSessionStates() {
-        _syncStatuses.update { current ->
-            extensions.value.associate { ext ->
-                ext.id to (current[ext.id]?.copy(hasSession = sessionStore.hasSession(ext.id))
-                    ?: ExtensionSyncStatus(ext, hasSession = sessionStore.hasSession(ext.id)))
+    /** Per-extension countdown in ms, keyed by extensionId. Only meaningful when scheduleStatus is Active. */
+    val countdownMs: StateFlow<Map<String, Long>> =
+        combine(scheduleStatuses, tickerFlow(1_000L)) { statuses, _ ->
+            statuses.mapValues { (_, status) ->
+                when (status) {
+                    is ScheduleStatus.Active -> (status.nextExecMs - System.currentTimeMillis()).coerceAtLeast(0L)
+                    else -> 0L
+                }
             }
-        }
-    }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     fun sync(extension: InstalledExtension) {
         viewModelScope.launch {
@@ -131,8 +161,11 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             _syncStatuses.update { current ->
                 exts.associate { ext ->
-                    ext.id to (current[ext.id]?.copy(syncState = SyncState.SYNCING)
-                        ?: ExtensionSyncStatus(ext, SyncState.SYNCING))
+                    ext.id to ExtensionSyncStatus(
+                        extension = ext,
+                        syncState = SyncState.SYNCING,
+                        errorMessage = null,
+                    )
                 }
             }
             exts.map { ext ->
@@ -157,7 +190,6 @@ class HomeViewModel @Inject constructor(
                 CookieManager.getInstance().removeAllCookies(null)
                 CookieManager.getInstance().flush()
             }
-            refreshSessionStates()
         }
     }
 
@@ -189,9 +221,28 @@ class HomeViewModel @Inject constructor(
                         balance = data.balance,
                         currency = data.currency,
                         lastSyncAt = now,
+                        accountNo = data.no,
                     )
                 }
                 accountDao.upsertAll(accountEntities)
+                val transferEntities = result.accounts.flatMap { data ->
+                    val accountId = "${extension.id}_${data.name}"
+                    data.transfers.map { t ->
+                        Transfer(
+                            id = "${accountId}_${t.txnDateTime}",
+                            accountId = accountId,
+                            extensionId = extension.id,
+                            txnDateTime = t.txnDateTime,
+                            description = t.description,
+                            amount = t.amount,
+                            balance = t.balance,
+                            memo = t.memo,
+                        )
+                    }
+                }
+                if (transferEntities.isNotEmpty()) {
+                    transferDao.upsertAll(transferEntities)
+                }
                 updateStatus(extension.id) { it.copy(syncState = SyncState.SUCCESS, errorMessage = null) }
             }
             is SyncResult.Error -> {
@@ -200,10 +251,13 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun transfersForAccount(accountId: String) = transferDao.observeByAccount(accountId)
+
     private fun updateStatus(id: String, update: (ExtensionSyncStatus) -> ExtensionSyncStatus) {
+        val ext = extensions.value.find { it.id == id } ?: return
         _syncStatuses.update { current ->
             current.toMutableMap().also { map ->
-                map[id]?.let { map[id] = update(it) }
+                map[id] = update(map[id] ?: ExtensionSyncStatus(ext))
             }
         }
     }

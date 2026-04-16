@@ -1,6 +1,7 @@
 package tw.kevinzhang.moneylook.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,9 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -49,7 +48,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
-import kotlinx.coroutines.delay
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.moneylook.schedule.ScheduleStatus
@@ -58,15 +56,15 @@ import tw.kevinzhang.moneylook.schedule.ScheduleStatus
 @Composable
 fun HomeScreen(
     onNavigateToMarketplace: () -> Unit,
+    onNavigateToLedger: (accountId: String) -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val extensions by viewModel.extensions.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val syncStatuses by viewModel.syncStatuses.collectAsStateWithLifecycle()
     val scheduleStatuses by viewModel.scheduleStatuses.collectAsStateWithLifecycle()
+    val countdownMs by viewModel.countdownMs.collectAsStateWithLifecycle()
     var showClearDialog by remember { mutableStateOf(false) }
-
-    LaunchedEffect(extensions) { viewModel.refreshSessionStates() }
 
     if (showClearDialog) {
         AlertDialog(
@@ -126,8 +124,10 @@ fun HomeScreen(
                         hasSession = status?.hasSession ?: false,
                         errorMessage = status?.errorMessage,
                         scheduleStatus = scheduleStatuses[ext.id] ?: ScheduleStatus.None,
+                        scheduleRemainingMs = countdownMs[ext.id] ?: 0L,
                         onSync = { viewModel.sync(ext) },
                         onLogin = { viewModel.openLogin(ext) },
+                        onViewLedger = onNavigateToLedger,
                     )
                 }
             }
@@ -143,8 +143,10 @@ private fun ExtensionCard(
     hasSession: Boolean,
     errorMessage: String?,
     scheduleStatus: ScheduleStatus,
+    scheduleRemainingMs: Long,
     onSync: () -> Unit,
     onLogin: () -> Unit,
+    onViewLedger: (accountId: String) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -166,14 +168,15 @@ private fun ExtensionCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    ScheduleStatusLabel(scheduleStatus)
+                    if (hasSession) ScheduleStatusLabel(scheduleStatus, scheduleRemainingMs)
                 }
-                when (syncState) {
-                    SyncState.SYNCING -> CircularProgressIndicator(
+                when {
+                    syncState == SyncState.SYNCING -> CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.dp,
                     )
-                    SyncState.ERROR -> IconButton(onClick = onSync) {
+                    !hasSession -> Unit
+                    syncState == SyncState.ERROR -> IconButton(onClick = onSync) {
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = "重試同步",
@@ -216,7 +219,7 @@ private fun ExtensionCard(
             if (hasSession && accounts.isNotEmpty()) {
                 accounts.forEach { account ->
                     HorizontalDivider()
-                    AccountRow(account)
+                    AccountRow(account, onClick = { onViewLedger(account.id) })
                 }
             }
         }
@@ -251,10 +254,11 @@ private fun ExtensionIcon(extension: InstalledExtension) {
 }
 
 @Composable
-private fun AccountRow(account: Account) {
+private fun AccountRow(account: Account, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -280,7 +284,7 @@ private fun AccountRow(account: Account) {
 }
 
 @Composable
-private fun ScheduleStatusLabel(status: ScheduleStatus) {
+private fun ScheduleStatusLabel(status: ScheduleStatus, remainingMs: Long) {
     when (status) {
         is ScheduleStatus.None -> Unit
         is ScheduleStatus.Disabled -> Text(
@@ -288,23 +292,11 @@ private fun ScheduleStatusLabel(status: ScheduleStatus) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.error,
         )
-        is ScheduleStatus.Active -> {
-            val nextExecMs = status.nextExecMs
-            var remainingMs by remember(nextExecMs) {
-                mutableLongStateOf((nextExecMs - System.currentTimeMillis()).coerceAtLeast(0L))
-            }
-            LaunchedEffect(nextExecMs) {
-                while (remainingMs > 0L) {
-                    delay(1_000L)
-                    remainingMs = (nextExecMs - System.currentTimeMillis()).coerceAtLeast(0L)
-                }
-            }
-            Text(
-                text = "排程 ${formatCountdown(remainingMs)} 後執行",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
+        is ScheduleStatus.Active -> Text(
+            text = "排程 ${formatCountdown(remainingMs)} 後執行",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 
