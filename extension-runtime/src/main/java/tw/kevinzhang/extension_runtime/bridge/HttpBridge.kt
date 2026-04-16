@@ -7,6 +7,13 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import tw.kevinzhang.extension_runtime.data.HttpResult
 import tw.kevinzhang.extension_runtime.session.SessionStore
 
+data class HttpRequest(
+    val method: String,
+    val url: String,
+    val body: String = "",
+    val headers: Map<String, String> = emptyMap(),
+)
+
 /**
  * Synchronous HTTP bridge exposed to JS scripts via SDK.
  * Automatically injects session (cookies + tokens) for targetDomains.
@@ -25,6 +32,11 @@ class HttpBridge(
     fun post(url: String, body: String, extraHeaders: Map<String, String> = emptyMap()): HttpResult {
         val requestBody = body.toRequestBody("application/json".toMediaType())
         return execute(buildRequest(url, extraHeaders, body = requestBody))
+    }
+
+    fun execute(request: HttpRequest): HttpResult = when (request.method.lowercase()) {
+        "post" -> post(request.url, request.body, request.headers)
+        else   -> get(request.url, request.headers)
     }
 
     private fun buildRequest(
