@@ -5,7 +5,8 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "installed_extensions")
 data class InstalledExtension(
-    @PrimaryKey val id: String,
+    @PrimaryKey val id: String,           // "${manifestId}::${repoUrl}" — unique per (bank, repo)
+    val manifestId: String,               // original manifest id, e.g. "tw.com.cathaybk"
     val name: String,
     val version: Int,
     val repoUrl: String,
