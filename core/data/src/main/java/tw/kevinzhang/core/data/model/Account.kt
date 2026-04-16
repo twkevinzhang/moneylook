@@ -12,4 +12,5 @@ data class Account(
     val balance: Double,
     val currency: String,
     val lastSyncAt: Long,                 // epoch millis
+    val accountNo: String? = null,
 )

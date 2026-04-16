@@ -20,6 +20,7 @@ import tw.kevinzhang.extension_runtime.bridge.HttpBridge
 import tw.kevinzhang.extension_runtime.bridge.HttpRequest
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.SyncResult
+import tw.kevinzhang.extension_runtime.data.TransferData
 import tw.kevinzhang.extension_runtime.session.SessionStore
 import java.io.File
 import javax.inject.Inject
@@ -259,7 +260,18 @@ private fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             val name = it["name"] as? String ?: return@mapNotNull null
             val balance = (it["balance"] as? Number)?.toDouble() ?: return@mapNotNull null
             val currency = it["currency"] as? String ?: "TWD"
-            AccountData(name, balance, currency)
+            val no = it["no"] as? String
+            val transfers = (it["transfers"] as? List<*>)?.mapNotNull { t ->
+                (t as? Map<*, *>)?.let { tm ->
+                    val txnDateTime = tm["txnDateTime"] as? String ?: return@mapNotNull null
+                    val description = tm["description"] as? String ?: ""
+                    val amount = (tm["amount"] as? Number)?.toDouble() ?: 0.0
+                    val bal = (tm["balance"] as? Number)?.toDouble() ?: 0.0
+                    val memo = tm["memo"] as? String ?: ""
+                    TransferData(txnDateTime, description, amount, bal, memo)
+                }
+            } ?: emptyList()
+            AccountData(name, balance, currency, no, transfers)
         }
     }
     SyncResult.Success(accounts)
