@@ -113,9 +113,10 @@ class MarketplaceViewModel @Inject constructor(
         try {
             val index = marketplaceRepository.fetchIndex(repoUrl)
             val installed = installedExtensionDao.getAll()
-            val installedMap = installed.associateBy { it.id }
+            val installedMap = installed.associateBy { it.id }  // keyed by composite id
             val extensions = index.map { entry ->
-                val installedExt = installedMap[entry.id]
+                val compositeId = compositeId(entry.id, repoUrl)
+                val installedExt = installedMap[compositeId]
                 ExtensionWithState(
                     entry = entry,
                     isInstalled = installedExt != null,
@@ -135,10 +136,12 @@ class MarketplaceViewModel @Inject constructor(
             setLoading(repoUrl, entry.id, true)
             try {
                 val manifest = marketplaceRepository.fetchManifest(repoUrl, entry.path)
-                val syncTriggerCachePath = marketplaceRepository.downloadSyncTriggerScript(repoUrl, entry.path, entry.id)
-                val scheduleCachePath = marketplaceRepository.downloadScheduleScript(repoUrl, entry.path, entry.id)
+                val compositeId = compositeId(manifest.id, repoUrl)
+                val syncTriggerCachePath = marketplaceRepository.downloadSyncTriggerScript(repoUrl, entry.path, compositeId)
+                val scheduleCachePath = marketplaceRepository.downloadScheduleScript(repoUrl, entry.path, compositeId)
                 val installed = InstalledExtension(
-                    id = manifest.id,
+                    id = compositeId,
+                    manifestId = manifest.id,
                     name = manifest.name,
                     version = manifest.version,
                     repoUrl = repoUrl,
@@ -163,10 +166,11 @@ class MarketplaceViewModel @Inject constructor(
     }
 
     fun uninstall(repoUrl: String, extensionId: String) {
+        val compositeId = compositeId(extensionId, repoUrl)
         viewModelScope.launch {
-            schedulerManager.cancelExtension(extensionId)
-            installedExtensionDao.deleteById(extensionId)
-            accountDao.deleteByExtensionId(extensionId)
+            schedulerManager.cancelExtension(compositeId)
+            installedExtensionDao.deleteById(compositeId)
+            accountDao.deleteByExtensionId(compositeId)
             _extensionsByRepo.update { map ->
                 val updated = map[repoUrl]?.map { ext ->
                     if (ext.entry.id == extensionId) ext.copy(isInstalled = false, hasUpdate = false)
@@ -176,6 +180,8 @@ class MarketplaceViewModel @Inject constructor(
             }
         }
     }
+
+    private fun compositeId(manifestId: String, repoUrl: String) = "$manifestId::$repoUrl"
 
     fun clearError() { _error.value = null }
 
