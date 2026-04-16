@@ -4,6 +4,9 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,6 +41,10 @@ class SessionStore @Inject constructor(
     // Write-through in-memory cache for synchronous reads (required by HttpBridge on IO thread)
     private val sessions = ConcurrentHashMap<String, SessionData>()
 
+    private val _sessionIds = MutableStateFlow<Set<String>>(emptySet())
+    /** Emits the current set of extensionIds that have an active session. */
+    val sessionIds: StateFlow<Set<String>> = _sessionIds.asStateFlow()
+
     init {
         // Restore all persisted sessions into the in-memory cache at startup
         val extensionIds = prefs.all.keys
@@ -64,12 +71,14 @@ class SessionStore @Inject constructor(
                 sessions[extensionId] = SessionData(cookies, tokens)
             }
         }
+        _sessionIds.value = sessions.keys.toSet()
     }
 
     fun putCookies(extensionId: String, cookies: String) {
         sessions.compute(extensionId) { _, existing ->
             (existing ?: SessionData(null, emptyMap())).copy(cookies = cookies)
         }
+        _sessionIds.value = sessions.keys.toSet()
         persist(extensionId)
     }
 
@@ -78,6 +87,7 @@ class SessionStore @Inject constructor(
             val base = existing ?: SessionData(null, emptyMap())
             base.copy(tokens = base.tokens + (headerName to value))
         }
+        _sessionIds.value = sessions.keys.toSet()
         persist(extensionId)
     }
 
@@ -90,11 +100,13 @@ class SessionStore @Inject constructor(
 
     fun clearSession(extensionId: String) {
         sessions.remove(extensionId)
+        _sessionIds.value = sessions.keys.toSet()
         prefs.edit().remove("$extensionId.cookies").remove("$extensionId.tokens").apply()
     }
 
     fun clearAll() {
         sessions.clear()
+        _sessionIds.value = emptySet()
         prefs.edit().clear().apply()
     }
 

@@ -18,6 +18,7 @@ import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.extension_runtime.ExtensionRunner
 import tw.kevinzhang.extension_runtime.data.SyncResult
+import tw.kevinzhang.extension_runtime.session.SessionStore
 import java.time.Duration
 import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
@@ -29,6 +30,7 @@ class ScheduleWorker @AssistedInject constructor(
     private val extensionRunner: ExtensionRunner,
     private val installedExtensionDao: InstalledExtensionDao,
     private val accountDao: AccountDao,
+    private val sessionStore: SessionStore,
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -40,6 +42,12 @@ class ScheduleWorker @AssistedInject constructor(
 
         val cronExpr = extension.scheduleCron
             ?: return Result.failure()   // no cron configured
+
+        if (!sessionStore.hasSession(extensionId)) {
+            // No session — silently skip and re-enqueue for next tick
+            enqueueNext(applicationContext, extensionId, cronExpr)
+            return Result.success()
+        }
 
         val result = extensionRunner.runSchedule(extension)
 
