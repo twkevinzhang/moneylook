@@ -10,6 +10,7 @@ import dagger.hilt.components.SingletonComponent
 import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.MoneylookDatabase
+import tw.kevinzhang.core.data.db.TransferDao
 import javax.inject.Singleton
 
 @Module
@@ -29,4 +30,7 @@ object DataModule {
     @Provides
     fun provideInstalledExtensionDao(db: MoneylookDatabase): InstalledExtensionDao =
         db.installedExtensionDao()
+
+    @Provides
+    fun provideTransferDao(db: MoneylookDatabase): TransferDao = db.transferDao()
 }
