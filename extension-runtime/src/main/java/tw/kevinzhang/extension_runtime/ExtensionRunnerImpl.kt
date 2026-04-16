@@ -6,6 +6,9 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -14,6 +17,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.extension_runtime.bridge.HttpBridge
+import tw.kevinzhang.extension_runtime.bridge.HttpRequest
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.session.SessionStore
@@ -125,6 +129,12 @@ class ExtensionRunnerImpl @Inject constructor(
                             },
                             post: function(url, body, headers) {
                                 return JSON.parse(sdk_http.post(url, body || '', JSON.stringify(headers || {})));
+                            },
+                            all: function(requests) {
+                                return JSON.parse(sdk_http.all(JSON.stringify(requests)));
+                            },
+                            allSettled: function(requests) {
+                                return JSON.parse(sdk_http.allSettled(JSON.stringify(requests)));
                             }
                         }
                     };
@@ -137,6 +147,12 @@ class ExtensionRunnerImpl @Inject constructor(
         """.trimIndent()
     }
 }
+
+private data class BatchSettledResult(
+    val ok: Boolean,
+    val status: Int,
+    val body: String,
+)
 
 private class SdkHttpBridge(
     private val bridge: HttpBridge,
@@ -154,11 +170,47 @@ private class SdkHttpBridge(
         return gson.toJson(bridge.post(url, body, headers))
     }
 
+    @JavascriptInterface
+    fun all(requestsJson: String): String {
+        val requests = parseRequests(requestsJson)
+        val results = runBlocking {
+            requests.map { req ->
+                async(Dispatchers.IO) { bridge.execute(req) }
+            }.awaitAll()
+        }
+        val failed = results.firstOrNull { it.status >= 400 }
+        if (failed != null) throw RuntimeException("HTTP ${failed.status}: ${failed.body}")
+        return gson.toJson(results)
+    }
+
+    @JavascriptInterface
+    fun allSettled(requestsJson: String): String {
+        val requests = parseRequests(requestsJson)
+        val results = runBlocking {
+            requests.map { req ->
+                async(Dispatchers.IO) { runCatching { bridge.execute(req) } }
+            }.awaitAll()
+        }
+        return gson.toJson(results.map { r ->
+            r.fold(
+                onSuccess = { BatchSettledResult(ok = it.status < 400, status = it.status, body = it.body) },
+                onFailure = { BatchSettledResult(ok = false, status = 0, body = it.message ?: "error") },
+            )
+        })
+    }
+
     private fun parseHeaders(json: String): Map<String, String> = try {
         val type = object : TypeToken<Map<String, String>>() {}.type
         gson.fromJson(json, type) ?: emptyMap()
     } catch (e: Exception) {
         emptyMap()
+    }
+
+    private fun parseRequests(json: String): List<HttpRequest> = try {
+        val type = object : TypeToken<List<HttpRequest>>() {}.type
+        gson.fromJson(json, type) ?: emptyList()
+    } catch (e: Exception) {
+        emptyList()
     }
 }
 
