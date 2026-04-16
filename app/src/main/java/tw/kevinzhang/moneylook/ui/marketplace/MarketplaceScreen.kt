@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,7 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MarketplaceScreen(
-    onNavigateUp: () -> Unit,
+    bottomBar: @Composable () -> Unit = {},
     onNavigateToManageRepos: () -> Unit,
     viewModel: MarketplaceViewModel = hiltViewModel(),
 ) {
@@ -46,18 +45,14 @@ fun MarketplaceScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Marketplace") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateUp) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
                 actions = {
                     IconButton(onClick = onNavigateToManageRepos) {
                         Icon(Icons.Filled.Settings, contentDescription = "管理 Repos")
                     }
                 },
             )
-        }
+        },
+        bottomBar = bottomBar,
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(innerPadding),
