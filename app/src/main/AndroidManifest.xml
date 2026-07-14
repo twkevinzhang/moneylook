@@ -24,11 +24,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".ui.login.LoginWebViewActivity"
-            android:exported="false"
-            android:theme="@style/Theme.Moneylook" />
-
         <!-- Disable default WorkManager initializer so HiltWorkerFactory can be used -->
         <provider
             android:name="androidx.startup.InitializationProvider"

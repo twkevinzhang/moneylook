@@ -8,6 +8,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import tw.kevinzhang.core.data.db.AccountDao
+import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferDao
@@ -26,6 +27,10 @@ object DataModule {
 
     @Provides
     fun provideAccountDao(db: MoneylookDatabase): AccountDao = db.accountDao()
+
+    @Provides
+    fun provideCredentialProfileDao(db: MoneylookDatabase): CredentialProfileDao =
+        db.credentialProfileDao()
 
     @Provides
     fun provideInstalledExtensionDao(db: MoneylookDatabase): InstalledExtensionDao =

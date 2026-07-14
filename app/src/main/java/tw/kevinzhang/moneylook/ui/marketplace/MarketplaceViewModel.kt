@@ -1,26 +1,13 @@
 package tw.kevinzhang.moneylook.ui.marketplace
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
-import com.cronutils.model.CronType
-import com.cronutils.model.definition.CronDefinitionBuilder
-import com.cronutils.model.time.ExecutionTime
-import com.cronutils.parser.CronParser
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -30,10 +17,7 @@ import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.marketplace.MarketplaceRepository
 import tw.kevinzhang.marketplace.RepoUrlRepository
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntry
-import tw.kevinzhang.moneylook.schedule.ScheduleStatus
-import tw.kevinzhang.moneylook.schedule.ScheduleWorker
 import tw.kevinzhang.moneylook.schedule.SchedulerManager
-import java.time.ZonedDateTime
 import javax.inject.Inject
 
 data class ExtensionWithState(
@@ -45,7 +29,6 @@ data class ExtensionWithState(
 
 @HiltViewModel
 class MarketplaceViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val marketplaceRepository: MarketplaceRepository,
     private val repoUrlRepository: RepoUrlRepository,
     private val installedExtensionDao: InstalledExtensionDao,
@@ -53,11 +36,6 @@ class MarketplaceViewModel @Inject constructor(
     private val gson: Gson,
     private val schedulerManager: SchedulerManager,
 ) : ViewModel() {
-
-    private val workManager = WorkManager.getInstance(context)
-    private val cronParser = CronParser(
-        CronDefinitionBuilder.instanceDefinitionFor(CronType.SPRING)
-    )
 
     val repoUrls = repoUrlRepository.observeRepoUrls()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
@@ -67,34 +45,6 @@ class MarketplaceViewModel @Inject constructor(
 
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
-
-    /**
-     * Per-extension schedule status, keyed by extensionId.
-     * Only contains entries for installed extensions that provide a schedule script.
-     */
-    val scheduleStatuses: StateFlow<Map<String, ScheduleStatus>> =
-        installedExtensionDao.observeAll()
-            .flatMapLatest { extensions ->
-                val withSchedule = extensions.filter { it.scheduleCachePath != null }
-                if (withSchedule.isEmpty()) return@flatMapLatest flowOf(emptyMap())
-
-                val perExtFlows = withSchedule.map { ext ->
-                    workManager.getWorkInfosByTagFlow(ScheduleWorker.tag(ext.id))
-                        .map { workInfos ->
-                            val isActive = workInfos.any {
-                                it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING
-                            }
-                            val status: ScheduleStatus = if (isActive) {
-                                ScheduleStatus.Active(nextExecMs(ext.scheduleCron!!))
-                            } else {
-                                ScheduleStatus.Disabled
-                            }
-                            ext.id to status
-                        }
-                }
-                combine(perExtFlows) { pairs -> pairs.associate { it } }
-            }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     init {
         viewModelScope.launch {
@@ -138,7 +88,6 @@ class MarketplaceViewModel @Inject constructor(
                 val manifest = marketplaceRepository.fetchManifest(repoUrl, entry.path)
                 val compositeId = compositeId(manifest.id, repoUrl)
                 val syncTriggerCachePath = marketplaceRepository.downloadSyncTriggerScript(repoUrl, entry.path, compositeId)
-                val scheduleCachePath = marketplaceRepository.downloadScheduleScript(repoUrl, entry.path, compositeId)
                 val installed = InstalledExtension(
                     id = compositeId,
                     manifestId = manifest.id,
@@ -149,11 +98,12 @@ class MarketplaceViewModel @Inject constructor(
                     loginUrl = manifest.loginUrl,
                     targetDomainsJson = gson.toJson(manifest.targetDomains),
                     iconUrl = manifest.iconUrl,
-                    scheduleCachePath = scheduleCachePath,
-                    scheduleCron = manifest.schedule?.cron,
+                    loginAutomationJson = gson.toJson(manifest.loginAutomation),
+                    suggestedScheduleCron = manifest.schedule?.suggestedCron,
+                    suggestedScheduleTimezone = manifest.schedule?.suggestedTimezone ?: "Asia/Taipei",
+                    suggestedScheduleEnabled = manifest.schedule != null,
                 )
                 installedExtensionDao.insert(installed)
-                schedulerManager.scheduleExtension(installed)
                 loadExtensionsSuspend(repoUrl)
             } catch (e: CancellationException) {
                 throw e
@@ -192,12 +142,5 @@ class MarketplaceViewModel @Inject constructor(
             }
             if (updated != null) map + (repoUrl to updated) else map
         }
-    }
-
-    private fun nextExecMs(cron: String): Long {
-        val next = ExecutionTime.forCron(cronParser.parse(cron))
-            .nextExecution(ZonedDateTime.now())
-            .orElse(null) ?: return System.currentTimeMillis()
-        return next.toInstant().toEpochMilli()
     }
 }

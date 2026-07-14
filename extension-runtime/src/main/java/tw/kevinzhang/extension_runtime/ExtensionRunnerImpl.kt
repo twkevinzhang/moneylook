@@ -2,6 +2,8 @@ package tw.kevinzhang.extension_runtime
 
 import android.content.Context
 import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.google.gson.Gson
@@ -13,7 +15,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.extension_runtime.bridge.HttpBridge
@@ -21,43 +25,36 @@ import tw.kevinzhang.extension_runtime.bridge.HttpRequest
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
-import tw.kevinzhang.extension_runtime.session.SessionStore
+import tw.kevinzhang.extension_runtime.session.EphemeralSession
 import java.io.File
 import javax.inject.Inject
 
 class ExtensionRunnerImpl @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val okHttpClient: OkHttpClient,
-    private val sessionStore: SessionStore,
     private val gson: Gson,
 ) : ExtensionRunner {
 
-    override suspend fun run(extension: InstalledExtension): SyncResult =
+    override suspend fun run(
+        extension: InstalledExtension,
+        session: EphemeralSession,
+    ): SyncResult =
         withContext(Dispatchers.IO) {
-            if (!sessionStore.hasSession(extension.id)) {
-                return@withContext SyncResult.Error("session not found — please login first")
+            if (session.isEmpty) {
+                return@withContext SyncResult.Error("fresh login session not found")
             }
             val scriptFile = File(extension.syncTriggerCachePath)
             if (!scriptFile.exists()) {
                 return@withContext SyncResult.Error("script file not found: ${extension.syncTriggerCachePath}")
             }
+            if (scriptFile.length() > MAX_SCRIPT_BYTES) {
+                return@withContext SyncResult.Error("script file exceeds size limit")
+            }
             val script = scriptFile.readText()
             val targetDomains: List<String> = parseTargetDomains(extension.targetDomainsJson)
                 ?: return@withContext SyncResult.Error("invalid targetDomains JSON")
-            val bridge = HttpBridge(okHttpClient, sessionStore, extension.id, targetDomains)
+            val bridge = HttpBridge(okHttpClient, session, targetDomains)
             runInWebView(script, bridge)
-        }
-
-    override suspend fun runSchedule(extension: InstalledExtension): SyncResult? =
-        withContext(Dispatchers.IO) {
-            val cachePath = extension.scheduleCachePath ?: return@withContext null
-            val scriptFile = File(cachePath)
-            if (!scriptFile.exists()) return@withContext null
-            val script = scriptFile.readText()
-            val targetDomains: List<String> = parseTargetDomains(extension.targetDomainsJson)
-                ?: return@withContext SyncResult.Error("invalid targetDomains JSON")
-            val bridge = HttpBridge(okHttpClient, sessionStore, extension.id, targetDomains)
-            runScheduleInWebView(script, bridge)
         }
 
     private fun parseTargetDomains(json: String): List<String>? = try {
@@ -74,38 +71,32 @@ class ExtensionRunnerImpl @Inject constructor(
             val deferred = CompletableDeferred<SyncResult>()
             val webView = WebView(context)
             @Suppress("SetJavaScriptEnabled")
-            webView.settings.javaScriptEnabled = true
+            webView.settings.apply {
+                javaScriptEnabled = true
+                blockNetworkLoads = true
+                allowFileAccess = false
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            }
             webView.addJavascriptInterface(SdkHttpBridge(bridge, gson), "sdk_http")
             webView.addJavascriptInterface(ScriptResultBridge(deferred, gson), "__bridge__")
             webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String) {
-                    view.evaluateJavascript(buildWrappedScript(script), null)
-                }
-            }
-            webView.loadData("<html><body></body></html>", "text/html", "utf-8")
-            try {
-                deferred.await()
-            } finally {
-                webView.destroy()
-            }
-        }
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
 
-    private suspend fun runScheduleInWebView(script: String, bridge: HttpBridge): SyncResult? =
-        withContext(Dispatchers.Main) {
-            val deferred = CompletableDeferred<SyncResult?>()
-            val webView = WebView(context)
-            @Suppress("SetJavaScriptEnabled")
-            webView.settings.javaScriptEnabled = true
-            webView.addJavascriptInterface(SdkHttpBridge(bridge, gson), "sdk_http")
-            webView.addJavascriptInterface(ScriptScheduleResultBridge(deferred, gson), "__bridge__")
-            webView.webViewClient = object : WebViewClient() {
+                @Deprecated("Deprecated in Android")
+                override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean = true
+
                 override fun onPageFinished(view: WebView, url: String) {
                     view.evaluateJavascript(buildWrappedScript(script), null)
                 }
             }
             webView.loadData("<html><body></body></html>", "text/html", "utf-8")
             try {
-                deferred.await()
+                withTimeout(SCRIPT_TIMEOUT_MS) { deferred.await() }
+            } catch (e: TimeoutCancellationException) {
+                SyncResult.Error("extension script timed out")
             } finally {
                 webView.destroy()
             }
@@ -146,6 +137,11 @@ class ExtensionRunnerImpl @Inject constructor(
                 }
             })();
         """.trimIndent()
+    }
+
+    private companion object {
+        const val MAX_SCRIPT_BYTES = 2L * 1024 * 1024
+        const val SCRIPT_TIMEOUT_MS = 60_000L
     }
 }
 
@@ -231,26 +227,6 @@ private class ScriptResultBridge(
     }
 }
 
-/** Bridge for schedule: result may be undefined (returns null → no cache update). */
-private class ScriptScheduleResultBridge(
-    private val deferred: CompletableDeferred<SyncResult?>,
-    private val gson: Gson,
-) {
-    @JavascriptInterface
-    fun onResult(json: String) {
-        if (json == "undefined" || json == "null") {
-            deferred.complete(null)
-            return
-        }
-        deferred.complete(parseAccounts(json, gson))
-    }
-
-    @JavascriptInterface
-    fun onError(message: String) {
-        deferred.complete(SyncResult.Error("script error: $message"))
-    }
-}
-
 private fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
     val type = object : TypeToken<Map<String, Any>>() {}.type
     val map: Map<String, Any> = gson.fromJson(json, type)
@@ -275,6 +251,8 @@ private fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
         }
     }
     SyncResult.Success(accounts)
+} catch (e: CancellationException) {
+    throw e
 } catch (e: Exception) {
     SyncResult.Error("failed to parse script result: ${e.message}", cause = e)
 }

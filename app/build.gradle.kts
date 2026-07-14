@@ -1,9 +1,23 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
 }
+
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+val ocrBaseUrl = (
+    providers.gradleProperty("MONEYLOOK_OCR_BASE_URL").orNull
+        ?: providers.environmentVariable("MONEYLOOK_OCR_BASE_URL").orNull
+        ?: localProperties.getProperty("MONEYLOOK_OCR_BASE_URL")
+        ?: ""
+    )
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
 
 android {
     namespace = "tw.kevinzhang.moneylook"
@@ -15,6 +29,7 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "OCR_BASE_URL", "\"$ocrBaseUrl\"")
     }
     buildTypes {
         release {
@@ -26,7 +41,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 }
 
 dependencies {

@@ -1,10 +1,10 @@
 package tw.kevinzhang.moneylook.schedule
 
 sealed class ScheduleStatus {
-    /** Extension does not provide a schedule script. */
+    /** No credential profile has been configured for the extension. */
     object None : ScheduleStatus()
 
-    /** Schedule script exists but no WorkManager job is queued. */
+    /** A credential profile exists but its user schedule is disabled or not queued. */
     object Disabled : ScheduleStatus()
 
     /**

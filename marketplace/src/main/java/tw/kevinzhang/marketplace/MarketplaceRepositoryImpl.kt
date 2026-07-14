@@ -11,12 +11,15 @@ import okhttp3.Request
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntry
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntryDto
 import tw.kevinzhang.marketplace.data.ExtensionManifest
+import tw.kevinzhang.marketplace.data.validateAndNormalize
 import java.io.File
 import java.io.IOException
+import java.net.URI
+import java.util.Locale
 import javax.inject.Inject
 
 class MarketplaceRepositoryImpl @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val okHttpClient: OkHttpClient,
     private val gson: Gson,
 ) : MarketplaceRepository {
@@ -34,7 +37,7 @@ class MarketplaceRepositoryImpl @Inject constructor(
         withContext(Dispatchers.IO) {
             val rawBase = toRawBase(repoUrl)
             val json = fetchString("$rawBase/$path/manifest.json")
-            gson.fromJson(json, ExtensionManifest::class.java)
+            gson.fromJson(json, ExtensionManifest::class.java).validateAndNormalize()
         }
 
     override suspend fun downloadSyncTriggerScript(
@@ -46,7 +49,7 @@ class MarketplaceRepositoryImpl @Inject constructor(
         val manifest = gson.fromJson(
             fetchString("$rawBase/$path/manifest.json"),
             ExtensionManifest::class.java,
-        )
+        ).validateAndNormalize()
         val scriptUrl = "$rawBase/$path/${manifest.syncTrigger.scriptPath}"
         val bytes = fetchBytes(scriptUrl)
         val scriptFile = File(context.filesDir, "extensions/$extensionId/sync-trigger.js")
@@ -58,55 +61,54 @@ class MarketplaceRepositoryImpl @Inject constructor(
         scriptFile.absolutePath
     }
 
-    override suspend fun downloadScheduleScript(
-        repoUrl: String,
-        path: String,
-        extensionId: String,
-    ): String? = withContext(Dispatchers.IO) {
-        val rawBase = toRawBase(repoUrl)
-        val manifest = gson.fromJson(
-            fetchString("$rawBase/$path/manifest.json"),
-            ExtensionManifest::class.java,
-        )
-        val scheduleConfig = manifest.schedule ?: return@withContext null
-        val scriptUrl = "$rawBase/$path/${scheduleConfig.scriptPath}"
-        val bytes = fetchBytes(scriptUrl)
-        val scriptFile = File(context.filesDir, "extensions/$extensionId/schedule.js")
-        check(scriptFile.canonicalPath.startsWith(context.filesDir.canonicalPath)) {
-            "Script path escapes filesDir: ${scriptFile.canonicalPath}"
-        }
-        scriptFile.parentFile?.mkdirs()
-        scriptFile.writeBytes(bytes)
-        scriptFile.absolutePath
-    }
-
     // Converts https://github.com/owner/repo → https://raw.githubusercontent.com/owner/repo/main
     internal fun toRawBase(repoUrl: String): String {
         val normalized = repoUrl.trimEnd('/')
-        return if (normalized.contains("raw.githubusercontent.com")) {
-            normalized
-        } else {
-            require(
-                normalized.startsWith("https://github.com/") ||
-                    normalized.startsWith("http://github.com/"),
-            ) { "Unsupported repo URL (only GitHub is supported): $repoUrl" }
-            normalized
-                .replace("https://github.com/", "https://raw.githubusercontent.com/")
-                .replace("http://github.com/", "https://raw.githubusercontent.com/") + "/main"
+        val uri = try {
+            URI(normalized)
+        } catch (exception: Exception) {
+            throw IllegalArgumentException("Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl", exception)
+        }
+        require(uri.scheme == "https" && uri.rawUserInfo == null) {
+            "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl"
+        }
+        return when (uri.host?.lowercase(Locale.US)) {
+            "raw.githubusercontent.com" -> normalized
+            "github.com" -> normalized.replaceFirst(
+                "https://github.com/",
+                "https://raw.githubusercontent.com/",
+            ) + "/main"
+            else -> throw IllegalArgumentException(
+                "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl",
+            )
         }
     }
 
     private fun fetchString(url: String): String {
         okHttpClient.newCall(Request.Builder().url(url).build()).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code} for $url")
-            return response.body?.string() ?: throw IOException("Empty response for $url")
+            return readBoundedBytes(response.body, MAX_METADATA_BYTES, url).toString(Charsets.UTF_8)
         }
     }
 
     private fun fetchBytes(url: String): ByteArray {
         okHttpClient.newCall(Request.Builder().url(url).build()).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code} for $url")
-            return response.body?.bytes() ?: throw IOException("Empty response for $url")
+            return readBoundedBytes(response.body, MAX_SCRIPT_BYTES, url)
         }
+    }
+
+    private fun readBoundedBytes(body: okhttp3.ResponseBody?, limit: Long, url: String): ByteArray {
+        body ?: throw IOException("Empty response for $url")
+        if (body.contentLength() > limit) throw IOException("Response too large for $url")
+        val source = body.source()
+        source.request(limit + 1L)
+        if (source.buffer.size > limit) throw IOException("Response too large for $url")
+        return source.buffer.clone().readByteArray()
+    }
+
+    private companion object {
+        const val MAX_METADATA_BYTES = 1024L * 1024
+        const val MAX_SCRIPT_BYTES = 2L * 1024 * 1024
     }
 }

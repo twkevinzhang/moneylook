@@ -13,7 +13,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import tw.kevinzhang.core.data.db.InstalledExtensionDao
+import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.moneylook.schedule.SchedulerManager
 import tw.kevinzhang.moneylook.ui.navigation.AppNavHost
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
@@ -23,15 +23,14 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var schedulerManager: SchedulerManager
-    @Inject lateinit var installedExtensionDao: InstalledExtensionDao
+    @Inject lateinit var credentialProfileDao: CredentialProfileDao
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         CoroutineScope(Dispatchers.IO).launch {
-            val extensions = installedExtensionDao.getAll()
-            schedulerManager.rescheduleAll(extensions)
+            schedulerManager.rescheduleAll(credentialProfileDao.getRunnableSchedules())
         }
 
         setContent {

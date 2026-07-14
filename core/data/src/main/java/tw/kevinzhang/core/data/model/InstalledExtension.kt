@@ -14,6 +14,8 @@ data class InstalledExtension(
     val loginUrl: String,
     val targetDomainsJson: String,        // JSON array string e.g. ["mybank.com"]
     val iconUrl: String?,
-    val scheduleCachePath: String?,       // absolute path of schedule script; null if no schedule
-    val scheduleCron: String?,            // cron expression; null if no schedule
+    val loginAutomationJson: String = "{}", // declarative native login configuration from manifest
+    val suggestedScheduleCron: String? = null,
+    val suggestedScheduleTimezone: String = "Asia/Taipei",
+    val suggestedScheduleEnabled: Boolean = true,
 )
