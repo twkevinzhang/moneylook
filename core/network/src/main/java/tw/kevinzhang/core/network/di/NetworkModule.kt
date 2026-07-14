@@ -21,7 +21,9 @@ object NetworkModule {
         .run {
             if (BuildConfig.DEBUG) {
                 val logging = HttpLoggingInterceptor()
-                addInterceptor(logging.setLevel(HttpLoggingInterceptor.Level.BODY))
+                // Never log request/response bodies: login payloads may contain
+                // banking credentials and OCR requests contain captcha images.
+                addInterceptor(logging.setLevel(HttpLoggingInterceptor.Level.BASIC))
             }
             readTimeout(10, TimeUnit.SECONDS)
             writeTimeout(10, TimeUnit.SECONDS)

@@ -6,18 +6,21 @@
 
 - **Dashboard**：一覽所有已安裝銀行的帳戶餘額，支援同時同步多家銀行
 - **Marketplace**：從 GitHub repo 安裝銀行 extension，支援更新與移除
-- **安全登入**：內建 WebView 登入流程，自動擷取 Cookie/OAuth Token，不儲存明文密碼
+- **自動登入**：App 原生保存網銀帳密，依使用者排程登入、辨識圖片驗證碼並同步
+- **暫態 Session**：Cookie 只存在單次同步記憶體中，由 HTTP 代理注入，不持久化也不暴露給擴充腳本
 - **沙盒執行**：銀行爬蟲腳本在 Webview 沙盒內執行，無法存取裝置本地資源
 
 ## 運作原理
 
-每家銀行對應一個 **Extension**，由社群開發者維護。Extension 是一段 TypeScript 腳本，透過 `sdk.http.get/post` 呼叫銀行 API，App 在執行時自動注入登入 session，最終回傳帳戶名稱、餘額、幣別。
+每家銀行對應一個 **Extension**，由社群開發者維護。App 依 manifest 中的宣告式 selector 在原生 WebView 完成登入，再將當次 Cookie 交給受控 HTTP 代理。Extension 腳本只能透過 `sdk.http.get/post` 呼叫允許的 HTTPS 網域，無法取得帳密或 Cookie 值。
 
 ```
-Extension script (JS)
+Native login + captcha OCR
+  └─ ephemeral cookies (memory only)
+       └─ Extension script (JS)
   └─ sdk.http.get(url)
        └─ HttpBridge (Kotlin, Dispatchers.IO)
-            ├─ 自動注入 Cookie / Token
+            ├─ 驗證 HTTPS／網域／Header 後注入 Cookie
             └─ OkHttp → 銀行 API
 ```
 
@@ -28,7 +31,9 @@ Extension script (JS)
 3. 點選「新增」，成功後即可看到可安裝的 Extension 清單
 4. 點選「安裝」
 
-安裝後回到首頁，點選對應銀行的「登入」按鈕完成登入，之後即可點選右上角同步按鈕更新餘額。
+安裝後回到首頁，檢查登入／代理網域並設定網銀帳密與排程。儲存時會記錄使用者核准的網域；擴充更新若變更網域，必須重新確認。每次手動或排程同步都會重新登入，不會復用上次 Cookie。
+
+> 擴充為未受官方背書的外部程式。它無法讀取帳密或 Cookie，但取得暫態登入能力後仍可對銀行允許網域發出請求；請只安裝你信任且已檢視來源的擴充。
 
 ## 開發 Extension
 
@@ -63,7 +68,21 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
   "version": 1,
   "versionName": "1.0.0",
   "loginUrl": "https://mybank.com/login",
+  "loginAutomation": {
+    "usernameSelector": "#username",
+    "passwordSelector": "#password",
+    "captchaImageSelector": "#captcha-image",
+    "captchaInputSelector": "#captcha",
+    "submitSelector": "button[type=submit]",
+    "successUrlContains": "/accounts",
+    "postSubmitDelayMs": 500
+  },
   "targetDomains": ["mybank.com"], // 腳本只能呼叫這些網域。
+  "syncTrigger": { "scriptPath": "sync-trigger.min.js" },
+  "schedule": {
+    "suggestedCron": "0 8 * * *",
+    "suggestedTimezone": "Asia/Taipei"
+  },
   "iconUrl": null
 }
 ```
@@ -73,6 +92,9 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
 需要 Android Studio Meerkat 或以上，Android SDK 36。
 
 ```bash
+# 放在被 Git 忽略的 local.properties，或由 CI 環境變數提供；請勿提交實際網址。
+MONEYLOOK_OCR_BASE_URL=https://your-ocr-service.example
+
 ./gradlew assembleDebug
 ```
 
@@ -81,7 +103,7 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
 ```
 :app                  — UI 層（Compose、ViewModel、Navigation）
 :marketplace          — Extension 清單、下載、repo URL 管理
-:extension-runtime    — Webview 執行器、HttpBridge、SessionStore
+:extension-runtime    — 原生登入、CaptchaSolver、WebView 執行器、暫態 HttpBridge
 :core:data            — Room 資料庫（Account、InstalledExtension）
 :core:network         — OkHttp、Gson DI 模組
 ```

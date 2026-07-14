@@ -1,5 +1,6 @@
 package tw.kevinzhang.moneylook.ui.home
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,7 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
@@ -30,9 +32,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,24 +68,24 @@ fun HomeScreen(
     val extensions by viewModel.extensions.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val syncStatuses by viewModel.syncStatuses.collectAsStateWithLifecycle()
+    val credentialSummaries by viewModel.credentialSummaries.collectAsStateWithLifecycle()
     val scheduleStatuses by viewModel.scheduleStatuses.collectAsStateWithLifecycle()
     val countdownMs by viewModel.countdownMs.collectAsStateWithLifecycle()
-    var showClearDialog by remember { mutableStateOf(false) }
     var showSyncDialog by remember { mutableStateOf(false) }
+    var editingExtension by remember { mutableStateOf<InstalledExtension?>(null) }
 
-    if (showClearDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDialog = false },
-            title = { Text("清除所有 Session") },
-            text = { Text("這將清除所有銀行的登入狀態與 Cookies，需要重新登入。確定要繼續？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.clearAllSessions()
-                    showClearDialog = false
-                }) { Text("清除", color = MaterialTheme.colorScheme.error) }
+    editingExtension?.let { extension ->
+        CredentialEditDialog(
+            extension = extension,
+            summary = credentialSummaries[extension.id],
+            onDismiss = { editingExtension = null },
+            onSave = { username, password, enabled, cron, timezone ->
+                viewModel.saveCredentials(extension, username, password, enabled, cron, timezone)
+                editingExtension = null
             },
-            dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) { Text("取消") }
+            onDelete = {
+                viewModel.deleteCredentials(extension.id)
+                editingExtension = null
             },
         )
     }
@@ -89,7 +94,7 @@ fun HomeScreen(
         AlertDialog(
             onDismissRequest = { showSyncDialog = false },
             title = { Text("全部同步") },
-            text = { Text("將同步所有已登入的銀行帳戶，確定要繼續？") },
+            text = { Text("將依序重新登入並同步所有已設定帳密的銀行，確定要繼續？") },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.syncAll()
@@ -104,14 +109,7 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Moneylook") },
-                actions = {
-                    IconButton(onClick = { showClearDialog = true }) {
-                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "清除所有 Session")
-                    }
-                },
-            )
+            TopAppBar(title = { Text("Moneylook") })
         },
         bottomBar = bottomBar,
         floatingActionButton = {
@@ -138,12 +136,13 @@ fun HomeScreen(
                         extension = ext,
                         accounts = extAccounts,
                         syncState = status?.syncState ?: SyncState.IDLE,
-                        hasSession = status?.hasSession ?: false,
+                        hasCredentials = status?.hasCredentials ?: false,
+                        credentialSummary = credentialSummaries[ext.id],
                         errorMessage = status?.errorMessage,
                         scheduleStatus = scheduleStatuses[ext.id] ?: ScheduleStatus.None,
                         scheduleRemainingMs = countdownMs[ext.id] ?: 0L,
                         onSync = { viewModel.sync(ext) },
-                        onLogin = { viewModel.openLogin(ext) },
+                        onEditCredentials = { editingExtension = ext },
                         onViewLedger = onNavigateToLedger,
                     )
                 }
@@ -157,12 +156,13 @@ private fun ExtensionCard(
     extension: InstalledExtension,
     accounts: List<Account>,
     syncState: SyncState,
-    hasSession: Boolean,
+    hasCredentials: Boolean,
+    credentialSummary: CredentialSummary?,
     errorMessage: String?,
     scheduleStatus: ScheduleStatus,
     scheduleRemainingMs: Long,
     onSync: () -> Unit,
-    onLogin: () -> Unit,
+    onEditCredentials: () -> Unit,
     onViewLedger: (accountId: String) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -185,14 +185,14 @@ private fun ExtensionCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    if (hasSession) ScheduleStatusLabel(scheduleStatus, scheduleRemainingMs)
+                    if (hasCredentials) ScheduleStatusLabel(scheduleStatus, scheduleRemainingMs)
                 }
                 when {
                     syncState == SyncState.SYNCING -> CircularProgressIndicator(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.dp,
                     )
-                    !hasSession -> Unit
+                    !hasCredentials -> Unit
                     syncState == SyncState.ERROR -> IconButton(onClick = onSync) {
                         Icon(
                             Icons.Default.Refresh,
@@ -210,15 +210,30 @@ private fun ExtensionCard(
                 }
             }
 
-            // ── Login prompt ─────────────────────────────────────────────
-            if (!hasSession) {
+            if (!hasCredentials) {
                 HorizontalDivider()
                 OutlinedButton(
-                    onClick = onLogin,
+                    onClick = onEditCredentials,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 10.dp),
-                ) { Text("登入") }
+                ) { Text("設定網銀帳號密碼") }
+            } else {
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = credentialSummary?.username.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onEditCredentials) {
+                        Icon(Icons.Default.Edit, contentDescription = "編輯帳密與排程")
+                    }
+                }
             }
 
             // ── Error message ─────────────────────────────────────────────
@@ -233,7 +248,7 @@ private fun ExtensionCard(
             }
 
             // ── Account rows ──────────────────────────────────────────────
-            if (hasSession && accounts.isNotEmpty()) {
+            if (accounts.isNotEmpty()) {
                 accounts.forEach { account ->
                     HorizontalDivider()
                     AccountRow(account, onClick = { onViewLedger(account.id) })
@@ -241,6 +256,104 @@ private fun ExtensionCard(
             }
         }
     }
+}
+
+@Composable
+private fun CredentialEditDialog(
+    extension: InstalledExtension,
+    summary: CredentialSummary?,
+    onDismiss: () -> Unit,
+    onSave: (String, String, Boolean, String, String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var username by remember(extension.id, summary?.username) {
+        mutableStateOf(summary?.username.orEmpty())
+    }
+    var password by remember(extension.id) { mutableStateOf("") }
+    var scheduleEnabled by remember(extension.id, summary?.scheduleEnabled) {
+        mutableStateOf(summary?.scheduleEnabled ?: extension.suggestedScheduleEnabled)
+    }
+    var cron by remember(extension.id, summary?.scheduleCron) {
+        mutableStateOf(summary?.scheduleCron ?: extension.suggestedScheduleCron ?: "0 8 * * *")
+    }
+    var timezone by remember(extension.id, summary?.timezoneId) {
+        mutableStateOf(summary?.timezoneId ?: extension.suggestedScheduleTimezone)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${extension.name} 帳密與排程") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "帳密會以明碼保存在此裝置的 App 私有資料庫；不會提供給擴充腳本。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    text = "儲存即同意登入 ${Uri.parse(extension.loginUrl).host.orEmpty()}，並允許擴充透過代理存取：${extension.targetDomainsJson}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("網銀帳號") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text(if (summary == null) "網銀密碼" else "新密碼（留空保留原密碼）") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("啟用建議排程", modifier = Modifier.weight(1f))
+                    Switch(checked = scheduleEnabled, onCheckedChange = { scheduleEnabled = it })
+                }
+                OutlinedTextField(
+                    value = cron,
+                    onValueChange = { cron = it },
+                    enabled = scheduleEnabled,
+                    label = { Text("Cron（UNIX 五欄）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = timezone,
+                    onValueChange = { timezone = it },
+                    enabled = scheduleEnabled,
+                    label = { Text("時區") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(username, password, scheduleEnabled, cron, timezone)
+                },
+            ) { Text("儲存") }
+        },
+        dismissButton = {
+            Row {
+                if (summary != null) {
+                    TextButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = null)
+                        Text("刪除帳密")
+                    }
+                }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        },
+    )
 }
 
 @Composable
