@@ -1,6 +1,5 @@
 package tw.kevinzhang.moneylook.ui.home
 
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -286,12 +285,12 @@ private fun CredentialEditDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "帳密會以明碼保存在此裝置的 App 私有資料庫；不會提供給擴充腳本。",
+                    "帳密會以明碼保存在此裝置的 App 私有資料庫，並完整提供給擴充腳本。擴充可向任意網址送出帳密與其他資料；請只安裝並更新你完全信任的擴充。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
                 Text(
-                    text = "儲存即同意登入 ${Uri.parse(extension.loginUrl).host.orEmpty()}，並允許擴充透過代理存取：${extension.targetDomainsJson}",
+                    text = "儲存即同意目前及之後由你自主下載的擴充版本，繼續取得這組帳密並自由發出網路請求。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

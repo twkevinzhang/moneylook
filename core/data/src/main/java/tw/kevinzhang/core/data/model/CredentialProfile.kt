@@ -19,9 +19,6 @@ data class CredentialProfile(
     val extensionId: String,
     val username: String,
     val password: String,
-    /** Permission snapshot explicitly accepted when the user saves credentials. */
-    val approvedLoginHost: String,
-    val approvedDomainsJson: String,
     val scheduleEnabled: Boolean = true,
     val scheduleCron: String,
     val timezoneId: String,

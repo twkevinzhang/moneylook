@@ -8,25 +8,28 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.runBlocking
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import tw.kevinzhang.core.data.model.InstalledExtension
-import tw.kevinzhang.extension_runtime.bridge.HttpBridge
-import tw.kevinzhang.extension_runtime.bridge.HttpRequest
+import tw.kevinzhang.extension_runtime.bridge.HttpRequestJsonParser
+import tw.kevinzhang.extension_runtime.bridge.NativeHttpTransport
+import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
-import tw.kevinzhang.extension_runtime.session.EphemeralSession
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
 class ExtensionRunnerImpl @Inject constructor(
@@ -37,103 +40,119 @@ class ExtensionRunnerImpl @Inject constructor(
 
     override suspend fun run(
         extension: InstalledExtension,
-        session: EphemeralSession,
-    ): SyncResult =
-        withContext(Dispatchers.IO) {
-            if (session.isEmpty) {
-                return@withContext SyncResult.Error("fresh login session not found")
-            }
-            val scriptFile = File(extension.syncTriggerCachePath)
-            if (!scriptFile.exists()) {
-                return@withContext SyncResult.Error("script file not found: ${extension.syncTriggerCachePath}")
-            }
-            if (scriptFile.length() > MAX_SCRIPT_BYTES) {
-                return@withContext SyncResult.Error("script file exceeds size limit")
-            }
-            val script = scriptFile.readText()
-            val targetDomains: List<String> = parseTargetDomains(extension.targetDomainsJson)
-                ?: return@withContext SyncResult.Error("invalid targetDomains JSON")
-            val bridge = HttpBridge(okHttpClient, session, targetDomains)
-            runInWebView(script, bridge)
+        credentials: ExtensionCredentials,
+    ): SyncResult = withContext(Dispatchers.IO) {
+        val scriptFile = File(extension.syncTriggerCachePath)
+        if (!scriptFile.isFile) return@withContext SyncResult.Error("extension script file not found")
+        if (scriptFile.length() > MAX_SCRIPT_BYTES) {
+            return@withContext SyncResult.Error("extension script exceeds size limit")
         }
-
-    private fun parseTargetDomains(json: String): List<String>? = try {
-        val type = object : TypeToken<List<String>>() {}.type
-        gson.fromJson(json, type)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        null
+        val script = try {
+            scriptFile.readText()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return@withContext SyncResult.Error("extension script could not be read")
+        }
+        runInWebView(script, credentials)
     }
 
-    private suspend fun runInWebView(script: String, bridge: HttpBridge): SyncResult =
-        withContext(Dispatchers.Main) {
-            val deferred = CompletableDeferred<SyncResult>()
-            val webView = WebView(context)
-            @Suppress("SetJavaScriptEnabled")
-            webView.settings.apply {
-                javaScriptEnabled = true
-                blockNetworkLoads = true
-                allowFileAccess = false
-                allowContentAccess = false
-                javaScriptCanOpenWindowsAutomatically = false
-                setSupportMultipleWindows(false)
-                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            }
-            webView.addJavascriptInterface(SdkHttpBridge(bridge, gson), "sdk_http")
-            webView.addJavascriptInterface(ScriptResultBridge(deferred, gson), "__bridge__")
-            webView.webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
+    private suspend fun runInWebView(
+        script: String,
+        credentials: ExtensionCredentials,
+    ): SyncResult = withContext(Dispatchers.Main) {
+        val deferred = CompletableDeferred<SyncResult>()
+        val webView = WebView(context)
+        val httpBridge = NativeSdkHttpBridge(webView, NativeHttpTransport(okHttpClient), gson)
+        @Suppress("SetJavaScriptEnabled")
+        webView.settings.apply {
+            javaScriptEnabled = true
+            blockNetworkLoads = true
+            allowFileAccess = false
+            allowContentAccess = false
+            javaScriptCanOpenWindowsAutomatically = false
+            setSupportMultipleWindows(false)
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        }
+        webView.addJavascriptInterface(httpBridge, "__native_http__")
+        webView.addJavascriptInterface(ScriptResultBridge(deferred, gson), "__result_bridge__")
+        val evaluated = AtomicBoolean(false)
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
 
-                @Deprecated("Deprecated in Android")
-                override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean = true
+            @Deprecated("Deprecated in Android")
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean = true
 
-                override fun onPageFinished(view: WebView, url: String) {
-                    view.evaluateJavascript(buildWrappedScript(script), null)
+            override fun onPageFinished(view: WebView, url: String) {
+                if (evaluated.compareAndSet(false, true)) {
+                    view.evaluateJavascript(buildWrappedScript(script, credentials), null)
                 }
             }
-            webView.loadData("<html><body></body></html>", "text/html", "utf-8")
-            try {
-                withTimeout(SCRIPT_TIMEOUT_MS) { deferred.await() }
-            } catch (e: TimeoutCancellationException) {
-                SyncResult.Error("extension script timed out")
-            } finally {
-                webView.destroy()
-            }
         }
+        webView.loadData("<html><body></body></html>", "text/html", "utf-8")
+        try {
+            withTimeout(SCRIPT_TIMEOUT_MS) { deferred.await() }
+        } catch (e: TimeoutCancellationException) {
+            SyncResult.Error("extension script timed out")
+        } finally {
+            httpBridge.cancel()
+            webView.removeJavascriptInterface("__native_http__")
+            webView.removeJavascriptInterface("__result_bridge__")
+            webView.stopLoading()
+            webView.destroy()
+        }
+    }
 
-    private fun buildWrappedScript(userScript: String): String {
-        val escaped = userScript
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\r\n", "\\n")
-            .replace("\n", "\\n")
-            .replace("\r", "\\n")
+    internal fun buildWrappedScript(script: String, credentials: ExtensionCredentials): String {
+        val scriptLiteral = gson.toJson(script)
+        val credentialsLiteral = gson.toJson(credentials)
         return """
-            (function() {
-                try {
-                    fetch = undefined;
-                    XMLHttpRequest = undefined;
-                    var sdk = {
-                        http: {
-                            get: function(url, headers) {
-                                return JSON.parse(sdk_http.get(url, JSON.stringify(headers || {})));
-                            },
-                            post: function(url, body, headers) {
-                                return JSON.parse(sdk_http.post(url, body || '', JSON.stringify(headers || {})));
-                            },
-                            all: function(requests) {
-                                return JSON.parse(sdk_http.all(JSON.stringify(requests)));
-                            },
-                            allSettled: function(requests) {
-                                return JSON.parse(sdk_http.allSettled(JSON.stringify(requests)));
-                            }
+            (async function() {
+                'use strict';
+                window.fetch = undefined;
+                window.XMLHttpRequest = undefined;
+                const __pending = new Map();
+                let __nextRequestId = 1;
+                window.__sdkResolve = function(id, payloadJson, errorJson) {
+                    const pending = __pending.get(id);
+                    if (!pending) return;
+                    __pending.delete(id);
+                    if (errorJson !== null) pending.reject(JSON.parse(errorJson));
+                    else pending.resolve(JSON.parse(payloadJson));
+                };
+                const request = function(options) {
+                    return new Promise(function(resolve, reject) {
+                        const id = String(__nextRequestId++);
+                        __pending.set(id, { resolve: resolve, reject: reject });
+                        try {
+                            __native_http__.request(id, JSON.stringify(options || {}));
+                        } catch (_) {
+                            __pending.delete(id);
+                            reject({ code: 'BRIDGE_ERROR', message: 'native HTTP bridge failed' });
                         }
-                    };
-                    var result = eval("${escaped}");
-                    __bridge__.onResult(JSON.stringify(result));
-                } catch(e) {
-                    __bridge__.onError(e.message || String(e));
+                    });
+                };
+                const http = Object.freeze({
+                    request: request,
+                    all: function(requests) { return Promise.all(requests.map(request)); },
+                    allSettled: function(requests) {
+                        return Promise.all(requests.map(function(item) {
+                            return request(item).then(
+                                function(value) { return { status: 'fulfilled', value: value }; },
+                                function(reason) { return { status: 'rejected', reason: reason }; }
+                            );
+                        }));
+                    }
+                });
+                const sdk = Object.freeze({
+                    credentials: Object.freeze($credentialsLiteral),
+                    http: http
+                });
+                try {
+                    const result = await eval($scriptLiteral);
+                    __result_bridge__.onResult(JSON.stringify(result));
+                } catch (_) {
+                    __result_bridge__.onError();
                 }
             })();
         """.trimIndent()
@@ -145,73 +164,68 @@ class ExtensionRunnerImpl @Inject constructor(
     }
 }
 
-private data class BatchSettledResult(
-    val ok: Boolean,
-    val status: Int,
-    val body: String,
-)
-
-private class SdkHttpBridge(
-    private val bridge: HttpBridge,
+private class NativeSdkHttpBridge(
+    private val webView: WebView,
+    private val transport: NativeHttpTransport,
     private val gson: Gson,
 ) {
-    @JavascriptInterface
-    fun get(url: String, headersJson: String): String {
-        val headers = parseHeaders(headersJson)
-        return gson.toJson(bridge.get(url, headers))
-    }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val active = AtomicBoolean(true)
+    private val requestCount = AtomicInteger(0)
 
     @JavascriptInterface
-    fun post(url: String, body: String, headersJson: String): String {
-        val headers = parseHeaders(headersJson)
-        return gson.toJson(bridge.post(url, body, headers))
-    }
-
-    @JavascriptInterface
-    fun all(requestsJson: String): String {
-        val requests = parseRequests(requestsJson)
-        val results = runBlocking {
-            requests.map { req ->
-                async(Dispatchers.IO) { bridge.execute(req) }
-            }.awaitAll()
+    fun request(id: String, requestJson: String) {
+        if (!active.get()) return
+        if (requestCount.incrementAndGet() > MAX_REQUESTS_PER_RUN) {
+            postResult(id, null, gson.toJson(SafeBridgeError("REQUEST_LIMIT", "HTTP request rejected")))
+            return
         }
-        val failed = results.firstOrNull { it.status >= 400 }
-        if (failed != null) throw RuntimeException("HTTP ${failed.status}: ${failed.body}")
-        return gson.toJson(results)
-    }
-
-    @JavascriptInterface
-    fun allSettled(requestsJson: String): String {
-        val requests = parseRequests(requestsJson)
-        val results = runBlocking {
-            requests.map { req ->
-                async(Dispatchers.IO) { runCatching { bridge.execute(req) } }
-            }.awaitAll()
+        if (requestJson.length > MAX_REQUEST_JSON_CHARS) {
+            postResult(id, null, gson.toJson(SafeBridgeError("REQUEST_TOO_LARGE", "HTTP request rejected")))
+            return
         }
-        return gson.toJson(results.map { r ->
-            r.fold(
-                onSuccess = { BatchSettledResult(ok = it.status < 400, status = it.status, body = it.body) },
-                onFailure = { BatchSettledResult(ok = false, status = 0, body = it.message ?: "error") },
-            )
-        })
+        scope.launch {
+            try {
+                val request = HttpRequestJsonParser.parse(requestJson, gson)
+                val response = transport.execute(request)
+                postResult(id, gson.toJson(response), null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                postResult(id, null, gson.toJson(safeBridgeError(e)))
+            }
+        }
     }
 
-    private fun parseHeaders(json: String): Map<String, String> = try {
-        val type = object : TypeToken<Map<String, String>>() {}.type
-        gson.fromJson(json, type) ?: emptyMap()
-    } catch (e: Exception) {
-        emptyMap()
+    fun cancel() {
+        active.set(false)
+        scope.cancel()
     }
 
-    private fun parseRequests(json: String): List<HttpRequest> = try {
-        val type = object : TypeToken<List<HttpRequest>>() {}.type
-        gson.fromJson(json, type) ?: emptyList()
-    } catch (e: Exception) {
-        emptyList()
+    private fun postResult(id: String, resultJson: String?, errorJson: String?) {
+        val idLiteral = gson.toJson(id)
+        val resultLiteral = resultJson?.let(gson::toJson) ?: "null"
+        val errorLiteral = errorJson?.let(gson::toJson) ?: "null"
+        webView.post {
+            if (active.get()) {
+                webView.evaluateJavascript("window.__sdkResolve($idLiteral,$resultLiteral,$errorLiteral);", null)
+            }
+        }
+    }
+
+    private companion object {
+        const val MAX_REQUESTS_PER_RUN = 100
+        const val MAX_REQUEST_JSON_CHARS = 4 * 1024 * 1024
     }
 }
 
-/** Bridge for sync-trigger: result must be non-null ExtensionResult. */
+internal data class SafeBridgeError(val code: String, val message: String)
+
+internal fun safeBridgeError(error: Exception): SafeBridgeError = when (error) {
+    is SafeHttpException -> SafeBridgeError(error.code, "HTTP request rejected")
+    else -> SafeBridgeError("HTTP_ERROR", "HTTP request failed")
+}
+
 private class ScriptResultBridge(
     private val deferred: CompletableDeferred<SyncResult>,
     private val gson: Gson,
@@ -222,12 +236,13 @@ private class ScriptResultBridge(
     }
 
     @JavascriptInterface
-    fun onError(message: String) {
-        deferred.complete(SyncResult.Error("script error: $message"))
+    fun onError() {
+        // Extension exceptions may embed credentials, request headers, or response bodies.
+        deferred.complete(SyncResult.Error("extension script failed"))
     }
 }
 
-private fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
+internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
     val type = object : TypeToken<Map<String, Any>>() {}.type
     val map: Map<String, Any> = gson.fromJson(json, type)
     val rawList = map["accounts"] as? List<*> ?: return null
@@ -237,14 +252,14 @@ private fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             val balance = (it["balance"] as? Number)?.toDouble() ?: return@mapNotNull null
             val currency = it["currency"] as? String ?: "TWD"
             val no = it["no"] as? String
-            val transfers = (it["transfers"] as? List<*>)?.mapNotNull { t ->
-                (t as? Map<*, *>)?.let { tm ->
-                    val txnDateTime = tm["txnDateTime"] as? String ?: return@mapNotNull null
-                    val description = tm["description"] as? String ?: ""
-                    val amount = (tm["amount"] as? Number)?.toDouble() ?: 0.0
-                    val bal = (tm["balance"] as? Number)?.toDouble() ?: 0.0
-                    val memo = tm["memo"] as? String ?: ""
-                    TransferData(txnDateTime, description, amount, bal, memo)
+            val transfers = (it["transfers"] as? List<*>)?.mapNotNull { transfer ->
+                (transfer as? Map<*, *>)?.let { transferMap ->
+                    val txnDateTime = transferMap["txnDateTime"] as? String ?: return@mapNotNull null
+                    val description = transferMap["description"] as? String ?: ""
+                    val amount = (transferMap["amount"] as? Number)?.toDouble() ?: 0.0
+                    val balanceAtTransfer = (transferMap["balance"] as? Number)?.toDouble() ?: 0.0
+                    val memo = transferMap["memo"] as? String ?: ""
+                    TransferData(txnDateTime, description, amount, balanceAtTransfer, memo)
                 }
             } ?: emptyList()
             AccountData(name, balance, currency, no, transfers)
@@ -254,5 +269,5 @@ private fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
 } catch (e: CancellationException) {
     throw e
 } catch (e: Exception) {
-    SyncResult.Error("failed to parse script result: ${e.message}", cause = e)
+    SyncResult.Error("failed to parse script result")
 }

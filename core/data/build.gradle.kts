@@ -23,4 +23,5 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.gson)
     testImplementation(libs.junit4)
+    testImplementation(libs.robolectric)
 }

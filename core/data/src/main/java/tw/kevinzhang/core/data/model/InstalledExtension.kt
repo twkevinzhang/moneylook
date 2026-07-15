@@ -11,10 +11,7 @@ data class InstalledExtension(
     val version: Int,
     val repoUrl: String,
     val syncTriggerCachePath: String,     // absolute path of sync-trigger script on device
-    val loginUrl: String,
-    val targetDomainsJson: String,        // JSON array string e.g. ["mybank.com"]
     val iconUrl: String?,
-    val loginAutomationJson: String = "{}", // declarative native login configuration from manifest
     val suggestedScheduleCron: String? = null,
     val suggestedScheduleTimezone: String = "Asia/Taipei",
     val suggestedScheduleEnabled: Boolean = true,

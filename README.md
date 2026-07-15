@@ -5,61 +5,75 @@
 ## 功能
 
 - **Dashboard**：一覽所有已安裝銀行的帳戶餘額，支援同時同步多家銀行
-- **Marketplace**：從 GitHub repo 安裝銀行 extension，支援更新與移除
-- **自動登入**：App 原生保存網銀帳密，依使用者排程登入、辨識圖片驗證碼並同步
-- **暫態 Session**：Cookie 只存在單次同步記憶體中，由 HTTP 代理注入，不持久化也不暴露給擴充腳本
-- **沙盒執行**：銀行爬蟲腳本在 Webview 沙盒內執行，無法存取裝置本地資源
+- **Marketplace**：從 GitHub repo 安裝銀行 extension，支援使用者自主更新與移除
+- **帳密與排程**：App 在私有 Room 資料庫明碼保存網銀帳密，並以 WorkManager 啟動同步
+- **Extension 執行環境**：Extension 自行負責登入、驗證碼、Cookie/session 與資料爬取
+- **Native HTTP bridge**：提供不受 WebView CORS 限制的任意 HTTP request 能力
 
-## 運作原理
+## 信任模型與運作原理
 
-每家銀行對應一個 **Extension**，由社群開發者維護。App 依 manifest 中的宣告式 selector 在原生 WebView 完成登入，再將當次 Cookie 交給受控 HTTP 代理。Extension 腳本只能透過 `sdk.http.get/post` 呼叫允許的 HTTPS 網域，無法取得帳密或 Cookie 值。
+每家銀行對應一個由社群開發者維護的 **Extension**。Extension 是完全受信任程式碼；每次執行都可透過 `sdk.credentials` 讀取使用者帳號與密碼明碼，並可透過 `sdk.http.request` 向任意網址發出 request。Bridge 不限制 domain、method、header 或 redirect，也不阻止 extension 將帳密外傳。
 
+Kotlin App 在登入與爬蟲 domain 僅負責持久化帳密；登入流程、驗證碼辨識、Cookie/session 管理與銀行資料解析都由 extension 實作。同步完成後，App 仍負責保存 extension 回傳的 accounts、transfers 與執行狀態。
+
+```text
+Room plaintext credentials
+  └─ Extension script
+       ├─ frozen sdk.credentials { username, password }
+       ├─ await sdk.http.request(...) → native bridge → any destination
+       └─ { accounts: [...] }
+            └─ Kotlin persists accounts / transfers / last-run status
 ```
-Native login + captcha OCR
-  └─ ephemeral cookies (memory only)
-       └─ Extension script (JS)
-  └─ sdk.http.get(url)
-       └─ HttpBridge (Kotlin, Dispatchers.IO)
-            ├─ 驗證 HTTPS／網域／Header 後注入 Cookie
-            └─ OkHttp → 銀行 API
-```
+
+> **重要風險：** Extension 能讀取並向任意第三方傳送你的網銀帳密與其他資料。請只安裝、執行及更新你已檢視且完全信任的程式碼。Moneylook 不會替 extension 限制網路目的地或判斷 request 的業務意圖。
 
 ## 安裝 Extension
 
 1. 開啟 App，點選右下角 **+** 進入 Marketplace
 2. 貼上 Extension 來源的 GitHub repo URL（例如 `https://github.com/twkevinzhang/moneylook-extensions`）
 3. 點選「新增」，成功後即可看到可安裝的 Extension 清單
-4. 點選「安裝」
+4. 檢視並信任來源後點選「安裝」
+5. 回到首頁設定網銀帳密與排程
 
-安裝後回到首頁，檢查登入／代理網域並設定網銀帳密與排程。儲存時會記錄使用者核准的網域；擴充更新若變更網域，必須重新確認。每次手動或排程同步都會重新登入，不會復用上次 Cookie。
-
-> 擴充為未受官方背書的外部程式。它無法讀取帳密或 Cookie，但取得暫態登入能力後仍可對銀行允許網域發出請求；請只安裝你信任且已檢視來源的擴充。
+使用者自主下載 extension 更新，即代表同意更新後的程式碼繼續取得既有帳密；更新不會要求重新輸入或再次核准帳密。
 
 ## 開發 Extension
 
-請參考 [moneylook-extensions-source](https://github.com/twkevinzhang/moneylook-extensions-source)。
+請參考 [moneylook-extensions-source](https://github.com/twkevinzhang/moneylook-extensions-source)。Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild 打包後部署至 distribution repo。
 
-Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild 打包後部署至 distribution repo。
+同步腳本是 async top-level IIFE。`sdk.credentials` 是唯讀且 frozen 的執行期物件；`sdk.http.request` 是 async API，透過 Kotlin native bridge 執行，不受 CORS 限制。
 
 ```typescript
 // extensions/my-bank/src/index.ts
-(function(): ExtensionResult {
-    
-  // 腳本中一切的 http request 只能使用 sdk.http 呼叫，無法使用其他第三方 request lib，例如 axios/fetch 等。
-  const res = sdk.http.get('https://mybank.com/api/accounts') 
-  
-  const data = JSON.parse(res.body)
+(async (): Promise<ExtensionResult> => {
+  const login = await sdk.http.request({
+    method: 'POST',
+    url: 'https://mybank.com/api/login',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: sdk.credentials.username,
+      password: sdk.credentials.password,
+    }),
+  })
+
+  const accounts = await sdk.http.request({
+    method: 'GET',
+    url: 'https://mybank.com/api/accounts',
+    headers: { Authorization: `Bearer ${JSON.parse(login.body).token}` },
+  })
+  const data = JSON.parse(accounts.body)
+
   return {
-    accounts: data.accounts.map((a: any) => ({
-      name: a.accountName,
-      balance: a.balance,
+    accounts: data.accounts.map((account: any) => ({
+      name: account.accountName,
+      balance: account.balance,
       currency: 'TWD',
-    }))
+    })),
   }
 })()
 ```
 
-`manifest.json` 範例：
+`manifest.json` 不宣告 login URL、selector 或允許網域；這些責任全部在腳本中：
 
 ```json5
 {
@@ -67,17 +81,6 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
   "name": "My Bank",
   "version": 1,
   "versionName": "1.0.0",
-  "loginUrl": "https://mybank.com/login",
-  "loginAutomation": {
-    "usernameSelector": "#username",
-    "passwordSelector": "#password",
-    "captchaImageSelector": "#captcha-image",
-    "captchaInputSelector": "#captcha",
-    "submitSelector": "button[type=submit]",
-    "successUrlContains": "/accounts",
-    "postSubmitDelayMs": 500
-  },
-  "targetDomains": ["mybank.com"], // 腳本只能呼叫這些網域。
   "syncTrigger": { "scriptPath": "sync-trigger.min.js" },
   "schedule": {
     "suggestedCron": "0 8 * * *",
@@ -92,19 +95,17 @@ Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild �
 需要 Android Studio Meerkat 或以上，Android SDK 36。
 
 ```bash
-# 放在被 Git 忽略的 local.properties，或由 CI 環境變數提供；請勿提交實際網址。
-MONEYLOOK_OCR_BASE_URL=https://your-ocr-service.example
-
 ./gradlew assembleDebug
+./gradlew testDebugUnitTest
 ```
 
 ## 模組結構
 
-```
-:app                  — UI 層（Compose、ViewModel、Navigation）
-:marketplace          — Extension 清單、下載、repo URL 管理
-:extension-runtime    — 原生登入、CaptchaSolver、WebView 執行器、暫態 HttpBridge
-:core:data            — Room 資料庫（Account、InstalledExtension）
+```text
+:app                  — Compose UI、帳密／同步結果持久化與 WorkManager 排程
+:marketplace          — Extension 清單、下載與 repo URL 管理
+:extension-runtime    — WebView 執行器與 unrestricted native HTTP bridge
+:core:data            — Room 資料庫（Account、Transfer、InstalledExtension、CredentialProfile）
 :core:network         — OkHttp、Gson DI 模組
 ```
 

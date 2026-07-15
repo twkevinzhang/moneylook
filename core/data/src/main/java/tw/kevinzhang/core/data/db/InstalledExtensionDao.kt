@@ -1,9 +1,8 @@
 package tw.kevinzhang.core.data.db
 
 import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 import tw.kevinzhang.core.data.model.InstalledExtension
 
@@ -18,7 +17,7 @@ interface InstalledExtensionDao {
     @Query("SELECT * FROM installed_extensions WHERE id = :id")
     suspend fun getById(id: String): InstalledExtension?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insert(extension: InstalledExtension)
 
     @Query("DELETE FROM installed_extensions WHERE id = :id")

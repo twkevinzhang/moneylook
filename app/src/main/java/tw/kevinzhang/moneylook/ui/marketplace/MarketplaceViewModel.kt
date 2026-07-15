@@ -2,7 +2,6 @@ package tw.kevinzhang.moneylook.ui.marketplace
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,7 +32,6 @@ class MarketplaceViewModel @Inject constructor(
     private val repoUrlRepository: RepoUrlRepository,
     private val installedExtensionDao: InstalledExtensionDao,
     private val accountDao: AccountDao,
-    private val gson: Gson,
     private val schedulerManager: SchedulerManager,
 ) : ViewModel() {
 
@@ -95,10 +93,7 @@ class MarketplaceViewModel @Inject constructor(
                     version = manifest.version,
                     repoUrl = repoUrl,
                     syncTriggerCachePath = syncTriggerCachePath,
-                    loginUrl = manifest.loginUrl,
-                    targetDomainsJson = gson.toJson(manifest.targetDomains),
                     iconUrl = manifest.iconUrl,
-                    loginAutomationJson = gson.toJson(manifest.loginAutomation),
                     suggestedScheduleCron = manifest.schedule?.suggestedCron,
                     suggestedScheduleTimezone = manifest.schedule?.suggestedTimezone ?: "Asia/Taipei",
                     suggestedScheduleEnabled = manifest.schedule != null,
