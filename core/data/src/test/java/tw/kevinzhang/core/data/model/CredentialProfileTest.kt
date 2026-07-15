@@ -12,8 +12,6 @@ class CredentialProfileTest {
             extensionId = "tw.bot::https://github.com/example/extensions",
             username = "user123",
             password = "plain-text-password",
-            approvedLoginHost = "bank.example",
-            approvedDomainsJson = "[\"bank.example\"]",
             scheduleCron = "0 8 * * *",
             timezoneId = "Asia/Taipei",
         )

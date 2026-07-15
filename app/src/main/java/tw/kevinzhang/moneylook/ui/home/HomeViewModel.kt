@@ -1,7 +1,6 @@
 package tw.kevinzhang.moneylook.ui.home
 
 import android.content.Context
-import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
@@ -226,8 +225,6 @@ class HomeViewModel @Inject constructor(
                 extensionId = extension.id,
                 username = username.trim(),
                 password = resolvedPassword,
-                approvedLoginHost = Uri.parse(extension.loginUrl).host.orEmpty().lowercase(),
-                approvedDomainsJson = extension.targetDomainsJson,
                 scheduleEnabled = scheduleEnabled,
                 scheduleCron = scheduleCron.trim(),
                 timezoneId = timezoneId.trim(),

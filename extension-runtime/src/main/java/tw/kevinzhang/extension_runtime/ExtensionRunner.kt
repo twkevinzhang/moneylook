@@ -2,13 +2,18 @@ package tw.kevinzhang.extension_runtime
 
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.extension_runtime.data.SyncResult
-import tw.kevinzhang.extension_runtime.session.EphemeralSession
+
+data class ExtensionCredentials(
+    val username: String,
+    val password: String,
+) {
+    override fun toString(): String = "ExtensionCredentials([REDACTED])"
+}
 
 interface ExtensionRunner {
     /**
      * Runs the sync-trigger script for the given extension.
-     * The native login flow must supply a fresh, in-memory session for this invocation.
-     * Session contents are injected by the HTTP proxy and are never exposed to JavaScript.
+     * Credentials are exposed only to this invocation as the frozen `sdk.credentials` object.
      */
-    suspend fun run(extension: InstalledExtension, session: EphemeralSession): SyncResult
+    suspend fun run(extension: InstalledExtension, credentials: ExtensionCredentials): SyncResult
 }

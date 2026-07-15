@@ -1,10 +1,10 @@
-# Moneylook — Claude Code Context
+# Moneylook — Claude Context
 
-Android passbook aggregator. Users install untrusted JS extension scripts from GitHub repos. The app owns banking credentials, performs native WebView login with captcha OCR, and gives extensions only a short-lived authenticated HTTP capability through a policy-enforcing bridge.
+Android passbook aggregator. Users install fully trusted JS extension scripts from GitHub repositories. The app persists plaintext banking credentials and passes them to extensions; extensions own login, captcha, session, and scraping behavior and have unrestricted native HTTP request capability.
 
 ## Module Graph
 
-```
+```text
 :app → :extension-runtime, :marketplace, :core:data, :core:network
 :marketplace → :core:network
 :extension-runtime → :core:network, :core:data
@@ -27,74 +27,72 @@ Android passbook aggregator. Users install untrusted JS extension scripts from G
 
 ## Key Architecture Decisions
 
+### Trust model
+
+- Extensions are fully trusted code, not sandboxed capability clients.
+- Every invocation exposes plaintext username and password through frozen `sdk.credentials`.
+- Extensions may send credentials and other data to any destination. The app does not enforce domain, method, header, redirect, or business-intent policy.
+- UI must clearly disclose this capability. Never claim that credentials, cookies, or network destinations are isolated from extensions.
+- Installing or manually downloading an update is user consent for that version to continue using the saved credentials; no version-change re-approval is required.
+
 ### CredentialProfile (`core:data`)
+
 - Exactly one credential profile per installed extension; `extensionId` is the primary/foreign key.
 - Username and password are intentionally stored as plaintext in the app-private Room database.
-- Saving credentials records the login host and target-domain permission snapshot; manifest domain changes require explicit re-approval.
-- Never include credentials in logs, exceptions, extension JS, HTTP bridge headers, backups, or UI summaries.
+- Profiles do not store login hosts or domain-permission snapshots.
+- Never include credentials in logs, exceptions, backups, or Compose summaries. Passing the minimal `ExtensionCredentials` object to `ExtensionRunner` is the intended exception.
 - User schedule is stored on the profile. Manifest schedule values are suggestions copied when credentials are first saved.
+- A blank password while editing means retain the existing password.
 
-### Native login (`extension-runtime`)
-- `WebViewNativeLoginRunner` receives credentials only from native app code.
-- Extension scripts never run inside the login WebView and never receive credential values.
-- Login URL must be HTTPS and match an approved target domain by host segment.
-- Only normal image captchas are supported. OTP, SMS, FIDO, sliders, and dynamic keyboards are out of scope.
-- Every run starts with an empty WebView cookie jar and clears/destroys it in `finally`.
+### Extension runtime
 
-### EphemeralSession / HttpBridge (`extension-runtime`)
-- Cookies are held only in an immutable `EphemeralSession` for one sync run; never persist them.
-- JavaScript cannot read Cookie, Authorization, or Set-Cookie values.
-- Domain matching: `urlHost == domain || urlHost.endsWith(".$domain")`.
-- HTTPS only; GET/POST only; redirects disabled; credential-bearing and hop-by-hop extension headers rejected.
-- Extensions are dangerous external code and are not endorsed. The proxy limits capabilities but cannot prove that an authenticated POST is semantically read-only.
+- `ExtensionRunner` receives only the installed extension and minimal `ExtensionCredentials`.
+- Scripts are async top-level IIFEs and receive frozen `sdk.credentials.{username,password}` plus async `sdk.http.request`.
+- The Kotlin bridge exists only to bypass WebView CORS and execute arbitrary HTTP(S) requests. It has no domain allowlist and permits arbitrary HTTP methods, headers (including credentials), bodies, and extension-controlled redirect behavior.
+- Size, timeout, and per-run request-count bounds remain operational safeguards; they are not a security boundary between the extension and banking credentials.
+- Native login, native captcha OCR, `EphemeralSession`, declarative login selectors, and the policy-enforcing `HttpBridge` are removed.
+- Each invocation gets a fresh runtime; destroy the WebView in `finally` and do not persist runtime cookies or bridge state.
+- Script returns `{ accounts: [{ name, balance, currency, no?, transfers? }] }`.
 
-### ExtensionRunner (`extension-runtime`)
-- Scripts currently run in a blank Android WebView and receive only `sdk.http.{get,post,all,allSettled}`.
-- A fresh non-empty `EphemeralSession` is required for each invocation.
-- Script returns `{ accounts: [{ name, balance, currency }] }` from a top-level IIFE.
-- Destroy the WebView in `finally`.
+### Kotlin app responsibilities
 
-### Captcha OCR
-- `CaptchaSolver` owns OCR calls and must never log images or response bodies.
-- The real service base URL comes from `MONEYLOOK_OCR_BASE_URL` in ignored `local.properties` or CI environment.
-- Never commit the real OCR URL or a fallback value.
-- Only HTTPS, bounded image/response sizes, bounded timeout, and no redirects.
+- In the login/scraping domain, Kotlin persists credentials and starts the extension only; extensions perform login, captcha handling, Cookie/session management, requests, and parsing.
+- Kotlin continues to persist returned accounts, transfers, schedules, and last-run status.
+- Home exposes only credential summaries; it never publishes password values to Compose state.
+- WorkManager uses unique work per extension, network constraints, bounded retry/backoff, and UNIX five-field cron in the user's timezone.
 
 ### CancellationException Rule
+
 Every `catch (e: Exception)` in a coroutine context **must** be preceded by:
+
 ```kotlin
 catch (e: CancellationException) { throw e }
 ```
 
-### Home / scheduling
-- Home exposes only credential summaries; it never publishes password values to Compose state.
-- A blank password while editing means retain the existing password.
-- WorkManager uses unique work per extension, network constraints, bounded retry/backoff, and UNIX five-field cron in the user's timezone.
-- Each manual or scheduled sync always performs login → OCR → ephemeral session → extension scrape.
-
 ### Gson / DI
+
 - `provideGson()` lives only in `:core:network`'s `NetworkModule`.
 - Do not add another Gson binding.
 
 ### OkHttp logging
+
 - Global debug logging is BASIC only; never BODY/HEADERS.
-- Captcha/OCR client must remove inherited logging interceptors.
 - Never log in release.
 
-## Marketplace defenses
+## Marketplace Defenses
 
 - GitHub repository URLs must use HTTPS and approved GitHub hosts.
-- Manifest is untrusted and must be validated/normalized before use.
-- `loginUrl` host must match normalized `targetDomains`.
-- Reject localhost, IP literals, blank selectors, invalid timezones, and unsafe script paths.
+- Manifest is untrusted input and must be validated/normalized before use, even though installed code is fully trusted at execution time.
+- Reject invalid timezones and unsafe script paths.
 - Downloaded script canonical path must stay inside `filesDir`.
+- Manifest no longer contains `loginUrl`, `loginAutomation`, or `targetDomains`.
 
 ## Test Modules
 
-- `:extension-runtime` — ephemeral session, HTTP bridge policy, captcha client, native login validation
+- `:extension-runtime` — credential injection, async unrestricted request bridge, async result handling, and runtime cleanup
 - `:marketplace` — manifest parsing/validation and repository download defenses
-- `:core:data` — account and credential profile models
-- `:app` — scheduling/orchestration tests should cover unique work, retry, and no credential exposure
+- `:core:data` — account, transfer, credential profile, and installed extension models
+- `:app` — credential handoff, result persistence, unique work, and retry behavior
 
 ## GitHub Repos
 
@@ -105,8 +103,7 @@ catch (e: CancellationException) { throw e }
 
 ## Known Limitations
 
+- A malicious or compromised extension can exfiltrate banking credentials and all data available to it.
 - WorkManager is best-effort; scheduled bank login is not guaranteed to run at an exact wall-clock time.
-- Only normal image captchas are automated.
-- Declarative DOM selectors can break whenever a bank changes its login page.
-- An authenticated extension can make requests within its approved bank domains; domain/header checks cannot infer business intent.
+- Bank login, captcha, and DOM/API changes are entirely the extension author's responsibility.
 - Hardcoded UI strings are not localized yet.

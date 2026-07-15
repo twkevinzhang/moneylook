@@ -8,30 +8,12 @@ data class ExtensionManifest(
     val version: Int,
     val versionName: String,
     val description: String,
-    val loginUrl: String,
-    val targetDomains: List<String>,
-    val loginAutomation: LoginAutomationConfig,
     val syncTrigger: SyncTriggerConfig,
     val schedule: ScheduleConfig?,
     val iconUrl: String?,
 ) {
     data class SyncTriggerConfig(
         val scriptPath: String = "sync-trigger.min.js",
-    )
-
-    /**
-     * Declarative selectors used by the app-owned login flow.
-     *
-     * Credentials are filled by native code and are never exposed to extension scripts.
-     */
-    data class LoginAutomationConfig(
-        val usernameSelector: String,
-        val passwordSelector: String,
-        val captchaImageSelector: String,
-        val captchaInputSelector: String,
-        val submitSelector: String,
-        val successUrlContains: String,
-        val postSubmitDelayMs: Long? = null,
     )
 
     data class ScheduleConfig(

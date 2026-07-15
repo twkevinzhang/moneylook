@@ -24,4 +24,5 @@ dependencies {
     implementation(libs.cron.utils)
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
