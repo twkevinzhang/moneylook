@@ -9,6 +9,7 @@
 - **登入資料與排程**：App 依各 Extension 宣告的欄位顯示表單，在私有 Room 資料庫以明碼 JSON 保存，並以 WorkManager 啟動同步
 - **Extension 執行環境**：Extension 自行負責登入、驗證碼、Cookie/session 與資料爬取
 - **Native HTTP bridge**：提供不受 WebView CORS 限制的任意 HTTP request 能力
+- **Ephemeral browser bridge**：需要真實瀏覽器 anti-bot stack 時，可在 fresh WebView profile 的銀行 origin 執行 XHR
 
 ## 信任模型與運作原理
 
@@ -21,6 +22,8 @@ Room plaintext credential JSON
   └─ Extension script
        ├─ deeply frozen sdk.credential { extension-defined string fields }
        ├─ await sdk.http.request(...) → native bridge → any destination
+       ├─ await sdk.browser.open(...) → isolated WebView profile → bank origin
+       ├─ await sdk.browser.request(...) → page XMLHttpRequest / browser anti-bot stack
        └─ { accounts: [...] }
             └─ Kotlin persists accounts / transfers / last-run status
 ```
@@ -42,6 +45,8 @@ Room plaintext credential JSON
 請參考 [moneylook-extensions-source](https://github.com/twkevinzhang/moneylook-extensions-source)。Extension 以 TypeScript 撰寫，型別定義於 `sdk.d.ts`，使用 esbuild 打包後部署至 distribution repo。
 
 同步腳本是 async top-level IIFE。`sdk.credential` 是依 manifest 欄位保存、遞迴 frozen 的執行期物件；v1 credential schema 是 flat JSON object，所有 value 都必須是 string。`sdk.http.request` 是 async API，透過 Kotlin native bridge 執行，不受 CORS 限制。
+
+若銀行的 WAF／anti-bot token 必須由真實瀏覽器環境產生，extension 可使用 `sdk.browser`。每次 extension invocation 都會使用新的 WebView profile，並在結束時銷毀；銀行頁面不會取得 Moneylook 的 native bridges 或完整 credential，只有 extension 明確放入 XHR 的資料會送入該頁面。`sdk.browser.request` 固定使用銀行頁 main world 的 `XMLHttpRequest`，讓頁面既有的 WAF patch、Cookie 與瀏覽器 network stack 生效。
 
 ```typescript
 // extensions/my-bank/src/index.ts
@@ -73,6 +78,38 @@ Room plaintext credential JSON
   }
 })()
 ```
+
+Browser bridge 範例：
+
+```typescript
+await sdk.browser.open({
+  url: 'https://mybank.com/login',
+  timeoutMs: 30_000,
+  settleMs: 1_000,
+})
+
+const response = await sdk.browser.request({
+  method: 'POST',
+  url: 'https://mybank.com/api/pre-login',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ customerId: sdk.credential.customerId }),
+  withCredentials: true,
+})
+
+sdk.browser.close()
+```
+
+`sdk.browser` contract：
+
+- `open({ url, timeoutMs?, settleMs? }) → Promise<{ url, origin }>`
+- `request({ url, method?, headers?, body?, bodyEncoding?, responseEncoding?, timeoutMs?, withCredentials? }) → Promise<HttpResponse & { url }>`
+- `close() → void`
+- `open` 與 `request` 的 URL 都必須是 absolute HTTP(S) URL；不接受 `file:`、`data:`、`javascript:` 或 relative URL。
+- Browser XHR 遵守正常 same-origin/CORS、forbidden-header 與 automatic redirect 規則。跨 origin endpoint 若未開放 CORS，extension 必須先 `open` 該 origin；真正不受 CORS 限制的 request 請使用 `sdk.http.request`。
+- XHR response 不會公開 `Set-Cookie`，但 Cookie 會由該 invocation 的 WebView profile 自動保存並供後續同 session request 使用。
+- `sdk.http.request`、`sdk.browser.open` 與 `sdk.browser.request` 每次 invocation 共用 100 次 operation 上限。整個 script 最長 60 秒；單次 request 最長 30 秒；request body 上限 2 MiB、response body 上限 10 MiB。
+- Browser XHR 會在 progress 已知總長或已下載量超過 10 MiB 時提早 abort，並在 onload 再做精確 byte-size 驗證。若 WebView/provider 不回報 progress，未知長度 response 仍可能先由 renderer 載入後才被拒絕。
+- 若裝置的 Android System WebView 不支援 isolated multi-profile，browser API 會回 `BROWSER_PROFILE_UNSUPPORTED`；不會降級成可能與其他同步工作共享 Cookie 的全域 profile。
 
 `manifest.json` 不宣告 login URL、selector 或允許網域；這些責任全部在腳本中：
 
@@ -115,7 +152,7 @@ Room plaintext credential JSON
 ```text
 :app                  — Compose 泛用 credential UI、同步結果持久化與 WorkManager 排程
 :marketplace          — Extension 清單、下載與 repo URL 管理
-:extension-runtime    — WebView 執行器與 unrestricted native HTTP bridge
+:extension-runtime    — WebView 執行器、unrestricted native HTTP 與 ephemeral browser-XHR bridge
 :core:data            — Room 資料庫（Account、Transfer、InstalledExtension、CredentialProfile）
 :core:network         — OkHttp、Gson DI 模組
 ```

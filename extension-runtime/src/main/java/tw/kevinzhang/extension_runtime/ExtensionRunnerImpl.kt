@@ -24,15 +24,17 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import tw.kevinzhang.core.data.model.InstalledExtension
+import tw.kevinzhang.extension_runtime.browser.BrowserWebViewSession
+import tw.kevinzhang.extension_runtime.browser.NativeSdkBrowserBridge
 import tw.kevinzhang.extension_runtime.bridge.HttpRequestJsonParser
 import tw.kevinzhang.extension_runtime.bridge.NativeHttpTransport
+import tw.kevinzhang.extension_runtime.bridge.RunRequestBudget
 import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
 class ExtensionRunnerImpl @Inject constructor(
@@ -68,7 +70,19 @@ class ExtensionRunnerImpl @Inject constructor(
     ): SyncResult = withContext(Dispatchers.Main) {
         val deferred = CompletableDeferred<SyncResult>()
         val webView = WebView(context)
-        val httpBridge = NativeSdkHttpBridge(webView, NativeHttpTransport(okHttpClient), gson)
+        val requestBudget = RunRequestBudget()
+        val httpBridge = NativeSdkHttpBridge(
+            webView = webView,
+            transport = NativeHttpTransport(okHttpClient),
+            requestBudget = requestBudget,
+            gson = gson,
+        )
+        val browserBridge = NativeSdkBrowserBridge(
+            controllerWebView = webView,
+            session = BrowserWebViewSession(context, gson),
+            requestBudget = requestBudget,
+            gson = gson,
+        )
         @Suppress("SetJavaScriptEnabled")
         webView.settings.apply {
             javaScriptEnabled = true
@@ -80,6 +94,7 @@ class ExtensionRunnerImpl @Inject constructor(
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
         webView.addJavascriptInterface(httpBridge, "__native_http__")
+        webView.addJavascriptInterface(browserBridge, "__native_browser__")
         webView.addJavascriptInterface(ScriptResultBridge(deferred, gson), "__result_bridge__")
         val evaluated = AtomicBoolean(false)
         webView.webViewClient = object : WebViewClient() {
@@ -100,8 +115,10 @@ class ExtensionRunnerImpl @Inject constructor(
         } catch (e: TimeoutCancellationException) {
             SyncResult.Error("extension script timed out")
         } finally {
+            browserBridge.cancel()
             httpBridge.cancel()
             webView.removeJavascriptInterface("__native_http__")
+            webView.removeJavascriptInterface("__native_browser__")
             webView.removeJavascriptInterface("__result_bridge__")
             webView.stopLoading()
             webView.destroy()
@@ -151,6 +168,42 @@ class ExtensionRunnerImpl @Inject constructor(
                         }));
                     }
                 });
+                const __browserPending = new Map();
+                let __nextBrowserRequestId = 1;
+                window.__sdkBrowserResolve = function(id, payloadJson, errorJson) {
+                    const pending = __browserPending.get(id);
+                    if (!pending) return;
+                    __browserPending.delete(id);
+                    if (errorJson !== null) pending.reject(JSON.parse(errorJson));
+                    else pending.resolve(JSON.parse(payloadJson));
+                };
+                const browserCall = function(method, options) {
+                    return new Promise(function(resolve, reject) {
+                        const id = String(__nextBrowserRequestId++);
+                        __browserPending.set(id, { resolve: resolve, reject: reject });
+                        try {
+                            if (method === 'open') {
+                                __native_browser__.open(id, JSON.stringify(options || {}));
+                            } else {
+                                __native_browser__.request(id, JSON.stringify(options || {}));
+                            }
+                        } catch (_) {
+                            __browserPending.delete(id);
+                            reject({ code: 'BRIDGE_ERROR', message: 'native browser bridge failed' });
+                        }
+                    });
+                };
+                const browser = Object.freeze({
+                    open: function(options) { return browserCall('open', options); },
+                    request: function(options) { return browserCall('request', options); },
+                    close: function() {
+                        __browserPending.forEach(function(pending) {
+                            pending.reject({ code: 'BROWSER_CLOSED', message: 'browser session closed' });
+                        });
+                        __browserPending.clear();
+                        __native_browser__.close();
+                    }
+                });
                 const deepFreeze = function(value) {
                     if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
                     Object.getOwnPropertyNames(value).forEach(function(name) {
@@ -160,13 +213,16 @@ class ExtensionRunnerImpl @Inject constructor(
                 };
                 const sdk = Object.freeze({
                     credential: deepFreeze($credentialLiteral),
-                    http: http
+                    http: http,
+                    browser: browser
                 });
                 try {
                     const result = await eval($scriptLiteral);
                     __result_bridge__.onResult(JSON.stringify(result));
                 } catch (_) {
                     __result_bridge__.onError();
+                } finally {
+                    browser.close();
                 }
             })();
         """.trimIndent()
@@ -195,22 +251,23 @@ class ExtensionRunnerImpl @Inject constructor(
 private class NativeSdkHttpBridge(
     private val webView: WebView,
     private val transport: NativeHttpTransport,
+    private val requestBudget: RunRequestBudget,
     private val gson: Gson,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val active = AtomicBoolean(true)
-    private val requestCount = AtomicInteger(0)
 
     @JavascriptInterface
     fun request(id: String, requestJson: String) {
         if (!active.get()) return
-        if (requestCount.incrementAndGet() > MAX_REQUESTS_PER_RUN) {
-            postResult(id, null, gson.toJson(SafeBridgeError("REQUEST_LIMIT", "HTTP request rejected")))
-            return
-        }
-        if (requestJson.length > MAX_REQUEST_JSON_CHARS) {
-            postResult(id, null, gson.toJson(SafeBridgeError("REQUEST_TOO_LARGE", "HTTP request rejected")))
+        try {
+            requestBudget.acquire()
+            if (requestJson.length > MAX_REQUEST_JSON_CHARS) {
+                throw SafeHttpException("REQUEST_TOO_LARGE", "HTTP request rejected")
+            }
+        } catch (e: Exception) {
+            postResult(id, null, gson.toJson(safeBridgeError(e)))
             return
         }
         scope.launch {
@@ -246,7 +303,6 @@ private class NativeSdkHttpBridge(
     }
 
     private companion object {
-        const val MAX_REQUESTS_PER_RUN = 100
         const val MAX_REQUEST_JSON_CHARS = 4 * 1024 * 1024
     }
 }

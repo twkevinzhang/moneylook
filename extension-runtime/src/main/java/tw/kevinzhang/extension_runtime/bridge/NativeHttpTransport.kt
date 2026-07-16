@@ -18,7 +18,6 @@ import okio.ByteString.Companion.toByteString
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -153,12 +152,7 @@ internal class NativeHttpTransport(okHttpClient: OkHttpClient) {
             networkInterceptors().clear()
         }
         .build()
-    private val requestCount = AtomicInteger(0)
-
     suspend fun execute(request: NativeHttpRequest): NativeHttpResponse {
-        if (requestCount.incrementAndGet() > MAX_REQUESTS_PER_RUN) {
-            throw SafeHttpException("REQUEST_LIMIT", "extension request limit exceeded")
-        }
         val okRequest = buildRequest(request)
         val client = baseClient.newBuilder()
             .followRedirects(request.followRedirects)
@@ -254,7 +248,6 @@ internal class NativeHttpTransport(okHttpClient: OkHttpClient) {
         const val MAX_URL_CHARS = 16_384
         const val MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
         const val MAX_RESPONSE_BODY_BYTES = 10L * 1024 * 1024
-        const val MAX_REQUESTS_PER_RUN = 100
         val METHODS_REQUIRING_BODY = setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
     }
 }
