@@ -9,6 +9,7 @@ import com.cronutils.model.CronType
 import com.cronutils.model.definition.CronDefinitionBuilder
 import com.cronutils.model.time.ExecutionTime
 import com.cronutils.parser.CronParser
+import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -54,7 +55,11 @@ data class ExtensionSyncStatus(
 
 data class CredentialSummary(
     val extensionId: String,
-    val username: String,
+    val fields: List<CredentialFieldDefinition>,
+    val visibleValues: Map<String, String>,
+    val storedPasswordKeys: Set<String>,
+    val summaryText: String,
+    val isConfigured: Boolean,
     val scheduleEnabled: Boolean,
     val scheduleCron: String,
     val timezoneId: String,
@@ -72,9 +77,11 @@ class HomeViewModel @Inject constructor(
     private val syncCoordinator: BankSyncCoordinator,
     private val syncResultPersister: SyncResultPersister,
     private val schedulerManager: SchedulerManager,
+    gson: Gson,
 ) : ViewModel() {
 
     private val workManager = WorkManager.getInstance(context)
+    private val credentialJsonCodec = CredentialJsonCodec(gson)
     private val cronParser = CronParser(
         CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX),
     )
@@ -88,17 +95,41 @@ class HomeViewModel @Inject constructor(
     private val credentialProfiles = credentialProfileDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    val credentialSummaries: StateFlow<Map<String, CredentialSummary>> = credentialProfiles
-        .map { profiles ->
-            profiles.associate { profile ->
-                profile.extensionId to CredentialSummary(
-                    extensionId = profile.extensionId,
-                    username = profile.username,
-                    scheduleEnabled = profile.scheduleEnabled,
-                    scheduleCron = profile.scheduleCron,
-                    timezoneId = profile.timezoneId,
-                    lastRunAt = profile.lastRunAt,
-                    lastRunStatus = profile.lastRunStatus,
+    val credentialSummaries: StateFlow<Map<String, CredentialSummary>> =
+        combine(credentialProfiles, installedExtensionDao.observeAll()) { profiles, exts ->
+            val profilesById = profiles.associateBy { it.extensionId }
+            exts.associate { extension ->
+                val profile = profilesById[extension.id]
+                val fields = credentialJsonCodec.parseFields(extension.credentialFieldsJson)
+                val storedValues = profile?.credential
+                    ?.let(credentialJsonCodec::parseCredential)
+                    .orEmpty()
+                val visibleValues = fields
+                    .filterNot { it.isPassword }
+                    .associate { it.key to storedValues[it.key].orEmpty() }
+                val storedPasswordKeys = fields
+                    .filter { it.isPassword && storedValues[it.key].orEmpty().isNotEmpty() }
+                    .mapTo(mutableSetOf()) { it.key }
+                val summaryText = fields
+                    .filter { it.summary && !it.isPassword }
+                    .mapNotNull { field ->
+                        visibleValues[field.key]
+                            ?.takeIf(String::isNotBlank)
+                            ?.let { value -> "${field.label}: $value" }
+                    }
+                    .joinToString(" · ")
+                extension.id to CredentialSummary(
+                    extensionId = extension.id,
+                    fields = fields,
+                    visibleValues = visibleValues,
+                    storedPasswordKeys = storedPasswordKeys,
+                    summaryText = summaryText,
+                    isConfigured = profile?.let(::hasStoredCredential) == true,
+                    scheduleEnabled = profile?.scheduleEnabled ?: extension.suggestedScheduleEnabled,
+                    scheduleCron = profile?.scheduleCron ?: extension.suggestedScheduleCron.orEmpty(),
+                    timezoneId = profile?.timezoneId ?: extension.suggestedScheduleTimezone,
+                    lastRunAt = profile?.lastRunAt,
+                    lastRunStatus = profile?.lastRunStatus,
                 )
             }
         }
@@ -109,7 +140,7 @@ class HomeViewModel @Inject constructor(
     val syncStatuses: StateFlow<Map<String, ExtensionSyncStatus>> =
         combine(_syncStatuses, credentialProfiles, installedExtensionDao.observeAll()) { mutable, profiles, exts ->
             val configuredIds = profiles
-                .filter { it.username.isNotBlank() && it.password.isNotEmpty() }
+                .filter(::hasStoredCredential)
                 .mapTo(mutableSetOf()) { it.extensionId }
             exts.associate { ext ->
                 val current = mutable[ext.id]
@@ -162,9 +193,9 @@ class HomeViewModel @Inject constructor(
     fun sync(extension: InstalledExtension) {
         viewModelScope.launch {
             val profile = credentialProfileDao.getByExtensionId(extension.id)
-            if (profile == null || profile.username.isBlank() || profile.password.isEmpty()) {
+            if (profile == null || !hasStoredCredential(profile)) {
                 updateStatus(extension.id) {
-                    it.copy(syncState = SyncState.ERROR, errorMessage = "請先設定網銀帳號密碼")
+                    it.copy(syncState = SyncState.ERROR, errorMessage = "請先設定登入資料")
                 }
                 return@launch
             }
@@ -177,7 +208,7 @@ class HomeViewModel @Inject constructor(
     fun syncAll() {
         val profilesById = credentialProfiles.value.associateBy { it.extensionId }
         val runnable = extensions.value.mapNotNull { ext -> profilesById[ext.id]?.let { ext to it } }
-            .filter { (_, profile) -> profile.username.isNotBlank() && profile.password.isNotEmpty() }
+            .filter { (_, profile) -> hasStoredCredential(profile) }
         if (runnable.isEmpty()) return
 
         viewModelScope.launch {
@@ -200,18 +231,26 @@ class HomeViewModel @Inject constructor(
 
     fun saveCredentials(
         extension: InstalledExtension,
-        username: String,
-        password: String,
+        values: Map<String, String>,
         scheduleEnabled: Boolean,
         scheduleCron: String,
         timezoneId: String,
     ) {
         viewModelScope.launch {
             val existing = credentialProfileDao.getByExtensionId(extension.id)
-            val resolvedPassword = password.ifEmpty { existing?.password.orEmpty() }
-            if (username.isBlank() || resolvedPassword.isEmpty()) {
+            val existingValues = existing?.credential
+                ?.let(credentialJsonCodec::parseCredential)
+                .orEmpty()
+            val fields = credentialJsonCodec.parseFields(extension.credentialFieldsJson)
+            val resolution = credentialJsonCodec.resolveForSave(fields, values, existingValues)
+            val resolvedValues = resolution.values
+            val missingRequiredField = resolution.missingRequiredField
+            if (missingRequiredField != null) {
                 updateStatus(extension.id) {
-                    it.copy(syncState = SyncState.ERROR, errorMessage = "帳號與密碼不可空白")
+                    it.copy(
+                        syncState = SyncState.ERROR,
+                        errorMessage = "${missingRequiredField.label}不可空白",
+                    )
                 }
                 return@launch
             }
@@ -223,8 +262,7 @@ class HomeViewModel @Inject constructor(
             }
             val profile = CredentialProfile(
                 extensionId = extension.id,
-                username = username.trim(),
-                password = resolvedPassword,
+                credential = credentialJsonCodec.encodeCredential(resolvedValues),
                 scheduleEnabled = scheduleEnabled,
                 scheduleCron = scheduleCron.trim(),
                 timezoneId = timezoneId.trim(),
@@ -281,6 +319,9 @@ class HomeViewModel @Inject constructor(
             }
         }
     }
+
+    private fun hasStoredCredential(profile: CredentialProfile): Boolean =
+        credentialJsonCodec.parseCredential(profile.credential)?.isNotEmpty() == true
 
     private fun isValidSchedule(cron: String, timezoneId: String): Boolean = runCatching {
         ZoneId.of(timezoneId)

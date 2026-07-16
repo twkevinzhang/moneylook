@@ -11,6 +11,7 @@ import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.MIGRATION_5_6
+import tw.kevinzhang.core.data.db.MIGRATION_6_7
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferDao
 import javax.inject.Singleton
@@ -23,7 +24,7 @@ object DataModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): MoneylookDatabase =
         Room.databaseBuilder(context, MoneylookDatabase::class.java, "moneylook.db")
-            .addMigrations(MIGRATION_5_6)
+            .addMigrations(MIGRATION_5_6, MIGRATION_6_7)
             .fallbackToDestructiveMigration(dropAllTables = true) // pre-production: replace with real Migration objects before first production release
             .build()
 

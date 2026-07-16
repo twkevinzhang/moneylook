@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.InstalledExtension
-import tw.kevinzhang.extension_runtime.ExtensionCredentials
+import tw.kevinzhang.extension_runtime.ExtensionCredential
 import tw.kevinzhang.extension_runtime.ExtensionRunner
 import tw.kevinzhang.extension_runtime.data.SyncResult
 
@@ -23,25 +23,24 @@ class BankSyncCoordinatorTest {
     )
     private val profile = CredentialProfile(
         extensionId = extension.id,
-        username = "user",
-        password = "password",
+        credential = """{"customerId":"A123","password":"password"}""",
         scheduleCron = "0 8 * * *",
         timezoneId = "Asia/Taipei",
     )
 
     @Test
-    fun passesPlaintextCredentialsDirectlyToExtension() = runBlocking {
+    fun passesPlaintextCredentialJsonDirectlyToExtension() = runBlocking {
         var receivedExtension: InstalledExtension? = null
-        var receivedCredentials: ExtensionCredentials? = null
+        var receivedCredential: ExtensionCredential? = null
         val expected = SyncResult.Success(emptyList())
         val coordinator = BankSyncCoordinator(
             extensionRunner = object : ExtensionRunner {
                 override suspend fun run(
                     extension: InstalledExtension,
-                    credentials: ExtensionCredentials,
+                    credential: ExtensionCredential,
                 ): SyncResult {
                     receivedExtension = extension
-                    receivedCredentials = credentials
+                    receivedCredential = credential
                     return expected
                 }
             },
@@ -51,8 +50,7 @@ class BankSyncCoordinatorTest {
 
         assertSame(expected, result)
         assertSame(extension, receivedExtension)
-        assertEquals(profile.username, receivedCredentials?.username)
-        assertEquals(profile.password, receivedCredentials?.password)
+        assertEquals(profile.credential, receivedCredential?.json)
     }
 
     @Test
@@ -61,7 +59,7 @@ class BankSyncCoordinatorTest {
             extensionRunner = object : ExtensionRunner {
                 override suspend fun run(
                     extension: InstalledExtension,
-                    credentials: ExtensionCredentials,
+                    credential: ExtensionCredential,
                 ): SyncResult = SyncResult.Error("extension login failed")
             },
         )

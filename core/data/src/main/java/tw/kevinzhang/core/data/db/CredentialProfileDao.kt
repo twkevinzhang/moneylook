@@ -20,7 +20,7 @@ interface CredentialProfileDao {
     @Query(
         """
         SELECT * FROM credential_profiles
-        WHERE scheduleEnabled = 1 AND username != '' AND password != ''
+        WHERE scheduleEnabled = 1 AND credential != ''
         ORDER BY extensionId
         """,
     )

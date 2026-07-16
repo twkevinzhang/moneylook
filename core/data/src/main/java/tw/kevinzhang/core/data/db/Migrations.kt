@@ -2,6 +2,8 @@ package tw.kevinzhang.core.data.db
 
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.google.gson.JsonObject
+import tw.kevinzhang.core.data.model.LEGACY_CREDENTIAL_FIELDS_JSON
 
 /** Removes obsolete native-login policy columns without deleting installed extensions or credentials. */
 val MIGRATION_5_6 = object : Migration(5, 6) {
@@ -91,6 +93,127 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
                 `timezoneId`, `lastRunAt`, `lastRunStatus`
             )
             SELECT `extensionId`, `username`, `password`, `scheduleEnabled`, `scheduleCron`,
+                `timezoneId`, `lastRunAt`, `lastRunStatus`
+            FROM `credential_profiles_backup`
+            """.trimIndent(),
+        )
+        db.execSQL("DROP TABLE `credential_profiles_backup`")
+    }
+}
+
+/** Replaces fixed username/password columns with extension-defined credential JSON. */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE `credential_profiles_backup` (
+                `extensionId` TEXT NOT NULL,
+                `credential` TEXT NOT NULL,
+                `scheduleEnabled` INTEGER NOT NULL,
+                `scheduleCron` TEXT NOT NULL,
+                `timezoneId` TEXT NOT NULL,
+                `lastRunAt` INTEGER,
+                `lastRunStatus` TEXT,
+                PRIMARY KEY(`extensionId`)
+            )
+            """.trimIndent(),
+        )
+
+        db.compileStatement(
+            """
+            INSERT INTO `credential_profiles_backup` (
+                `extensionId`, `credential`, `scheduleEnabled`, `scheduleCron`,
+                `timezoneId`, `lastRunAt`, `lastRunStatus`
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            db.query(
+                """
+                SELECT `extensionId`, `username`, `password`, `scheduleEnabled`, `scheduleCron`,
+                    `timezoneId`, `lastRunAt`, `lastRunStatus`
+                FROM `credential_profiles`
+                """.trimIndent(),
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val credential = JsonObject().apply {
+                        addProperty("username", cursor.getString(1))
+                        addProperty("password", cursor.getString(2))
+                    }.toString()
+
+                    statement.clearBindings()
+                    statement.bindString(1, cursor.getString(0))
+                    statement.bindString(2, credential)
+                    statement.bindLong(3, cursor.getLong(3))
+                    statement.bindString(4, cursor.getString(4))
+                    statement.bindString(5, cursor.getString(5))
+                    if (cursor.isNull(6)) statement.bindNull(6) else statement.bindLong(6, cursor.getLong(6))
+                    if (cursor.isNull(7)) statement.bindNull(7) else statement.bindString(7, cursor.getString(7))
+                    statement.executeInsert()
+                }
+            }
+        }
+        db.execSQL("DROP TABLE `credential_profiles`")
+
+        db.execSQL(
+            """
+            CREATE TABLE `installed_extensions_new` (
+                `id` TEXT NOT NULL,
+                `manifestId` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `version` INTEGER NOT NULL,
+                `repoUrl` TEXT NOT NULL,
+                `syncTriggerCachePath` TEXT NOT NULL,
+                `iconUrl` TEXT,
+                `suggestedScheduleCron` TEXT,
+                `suggestedScheduleTimezone` TEXT NOT NULL,
+                `suggestedScheduleEnabled` INTEGER NOT NULL,
+                `credentialFieldsJson` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.compileStatement(
+            """
+            INSERT INTO `installed_extensions_new` (
+                `id`, `manifestId`, `name`, `version`, `repoUrl`, `syncTriggerCachePath`,
+                `iconUrl`, `suggestedScheduleCron`, `suggestedScheduleTimezone`,
+                `suggestedScheduleEnabled`, `credentialFieldsJson`
+            )
+            SELECT `id`, `manifestId`, `name`, `version`, `repoUrl`, `syncTriggerCachePath`,
+                `iconUrl`, `suggestedScheduleCron`, `suggestedScheduleTimezone`,
+                `suggestedScheduleEnabled`, ?
+            FROM `installed_extensions`
+            """.trimIndent(),
+        ).use { statement ->
+            statement.bindString(1, LEGACY_CREDENTIAL_FIELDS_JSON)
+            statement.executeInsert()
+        }
+        db.execSQL("DROP TABLE `installed_extensions`")
+        db.execSQL("ALTER TABLE `installed_extensions_new` RENAME TO `installed_extensions`")
+
+        db.execSQL(
+            """
+            CREATE TABLE `credential_profiles` (
+                `extensionId` TEXT NOT NULL,
+                `credential` TEXT NOT NULL,
+                `scheduleEnabled` INTEGER NOT NULL,
+                `scheduleCron` TEXT NOT NULL,
+                `timezoneId` TEXT NOT NULL,
+                `lastRunAt` INTEGER,
+                `lastRunStatus` TEXT,
+                PRIMARY KEY(`extensionId`),
+                FOREIGN KEY(`extensionId`) REFERENCES `installed_extensions`(`id`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO `credential_profiles` (
+                `extensionId`, `credential`, `scheduleEnabled`, `scheduleCron`,
+                `timezoneId`, `lastRunAt`, `lastRunStatus`
+            )
+            SELECT `extensionId`, `credential`, `scheduleEnabled`, `scheduleCron`,
                 `timezoneId`, `lastRunAt`, `lastRunStatus`
             FROM `credential_profiles_backup`
             """.trimIndent(),

@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -48,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,8 +82,8 @@ fun HomeScreen(
             extension = extension,
             summary = credentialSummaries[extension.id],
             onDismiss = { editingExtension = null },
-            onSave = { username, password, enabled, cron, timezone ->
-                viewModel.saveCredentials(extension, username, password, enabled, cron, timezone)
+            onSave = { values, enabled, cron, timezone ->
+                viewModel.saveCredentials(extension, values, enabled, cron, timezone)
                 editingExtension = null
             },
             onDelete = {
@@ -216,7 +220,7 @@ private fun ExtensionCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 10.dp),
-                ) { Text("設定網銀帳號密碼") }
+                ) { Text("設定登入資料") }
             } else {
                 HorizontalDivider()
                 Row(
@@ -224,13 +228,13 @@ private fun ExtensionCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = credentialSummary?.username.orEmpty(),
+                        text = credentialSummary?.summaryText?.ifBlank { "登入資料已設定" }.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(onClick = onEditCredentials) {
-                        Icon(Icons.Default.Edit, contentDescription = "編輯帳密與排程")
+                        Icon(Icons.Default.Edit, contentDescription = "編輯登入資料與排程")
                     }
                 }
             }
@@ -262,13 +266,17 @@ private fun CredentialEditDialog(
     extension: InstalledExtension,
     summary: CredentialSummary?,
     onDismiss: () -> Unit,
-    onSave: (String, String, Boolean, String, String) -> Unit,
+    onSave: (Map<String, String>, Boolean, String, String) -> Unit,
     onDelete: () -> Unit,
 ) {
-    var username by remember(extension.id, summary?.username) {
-        mutableStateOf(summary?.username.orEmpty())
+    val fields = summary?.fields ?: LEGACY_CREDENTIAL_FIELD_DEFINITIONS
+    var credentialValues by remember(extension.id, summary?.visibleValues, summary?.storedPasswordKeys) {
+        mutableStateOf(
+            fields.associate { field ->
+                field.key to if (field.isPassword) "" else summary?.visibleValues?.get(field.key).orEmpty()
+            },
+        )
     }
-    var password by remember(extension.id) { mutableStateOf("") }
     var scheduleEnabled by remember(extension.id, summary?.scheduleEnabled) {
         mutableStateOf(summary?.scheduleEnabled ?: extension.suggestedScheduleEnabled)
     }
@@ -281,34 +289,42 @@ private fun CredentialEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("${extension.name} 帳密與排程") },
+        title = { Text("${extension.name} 登入資料與排程") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
-                    "帳密會以明碼保存在此裝置的 App 私有資料庫，並完整提供給擴充腳本。擴充可向任意網址送出帳密與其他資料；請只安裝並更新你完全信任的擴充。",
+                    "登入資料會以明碼 JSON 保存在此裝置的 App 私有資料庫，並完整提供給擴充腳本。擴充可向任意網址送出登入資料與其他資料；請只安裝並更新你完全信任的擴充。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
                 Text(
-                    text = "儲存即同意目前及之後由你自主下載的擴充版本，繼續取得這組帳密並自由發出網路請求。",
+                    text = "儲存即同意目前及之後由你自主下載的擴充版本，繼續取得這組登入資料並自由發出網路請求。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text("網銀帳號") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text(if (summary == null) "網銀密碼" else "新密碼（留空保留原密碼）") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                fields.forEach { field ->
+                    val hasStoredPassword = field.key in summary?.storedPasswordKeys.orEmpty()
+                    val label = when {
+                        field.isPassword && hasStoredPassword -> "新${field.label}（留空保留原值）"
+                        field.required -> "${field.label}（必填）"
+                        else -> field.label
+                    }
+                    OutlinedTextField(
+                        value = credentialValues[field.key].orEmpty(),
+                        onValueChange = { credentialValues = credentialValues + (field.key to it) },
+                        label = { Text(label) },
+                        visualTransformation = if (field.isPassword) {
+                            PasswordVisualTransformation()
+                        } else {
+                            VisualTransformation.None
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -337,16 +353,16 @@ private fun CredentialEditDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onSave(username, password, scheduleEnabled, cron, timezone)
+                    onSave(credentialValues, scheduleEnabled, cron, timezone)
                 },
             ) { Text("儲存") }
         },
         dismissButton = {
             Row {
-                if (summary != null) {
+                if (summary?.isConfigured == true) {
                     TextButton(onClick = onDelete) {
                         Icon(Icons.Default.Delete, contentDescription = null)
-                        Text("刪除帳密")
+                        Text("刪除登入資料")
                     }
                 }
                 TextButton(onClick = onDismiss) { Text("取消") }

@@ -9,6 +9,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -42,7 +43,7 @@ class ExtensionRunnerImpl @Inject constructor(
 
     override suspend fun run(
         extension: InstalledExtension,
-        credentials: ExtensionCredentials,
+        credential: ExtensionCredential,
     ): SyncResult = withContext(Dispatchers.IO) {
         val scriptFile = File(extension.syncTriggerCachePath)
         if (!scriptFile.isFile) return@withContext SyncResult.Error("extension script file not found")
@@ -56,12 +57,14 @@ class ExtensionRunnerImpl @Inject constructor(
         } catch (e: Exception) {
             return@withContext SyncResult.Error("extension script could not be read")
         }
-        runInWebView(script, credentials)
+        val canonicalCredentialJson = canonicalCredentialJson(credential.json)
+            ?: return@withContext SyncResult.Error("stored credential JSON is invalid")
+        runInWebView(script, ExtensionCredential(canonicalCredentialJson))
     }
 
     private suspend fun runInWebView(
         script: String,
-        credentials: ExtensionCredentials,
+        credential: ExtensionCredential,
     ): SyncResult = withContext(Dispatchers.Main) {
         val deferred = CompletableDeferred<SyncResult>()
         val webView = WebView(context)
@@ -87,7 +90,7 @@ class ExtensionRunnerImpl @Inject constructor(
 
             override fun onPageFinished(view: WebView, url: String) {
                 if (evaluated.compareAndSet(false, true)) {
-                    view.evaluateJavascript(buildWrappedScript(script, credentials), null)
+                    view.evaluateJavascript(buildWrappedScript(script, credential), null)
                 }
             }
         }
@@ -105,9 +108,11 @@ class ExtensionRunnerImpl @Inject constructor(
         }
     }
 
-    internal fun buildWrappedScript(script: String, credentials: ExtensionCredentials): String {
+    internal fun buildWrappedScript(script: String, credential: ExtensionCredential): String {
         val scriptLiteral = gson.toJson(script)
-        val credentialsLiteral = gson.toJson(credentials)
+        val credentialLiteral = requireNotNull(canonicalCredentialJson(credential.json)) {
+            "stored credential JSON is invalid"
+        }
         return """
             (async function() {
                 'use strict';
@@ -146,8 +151,15 @@ class ExtensionRunnerImpl @Inject constructor(
                         }));
                     }
                 });
+                const deepFreeze = function(value) {
+                    if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value;
+                    Object.getOwnPropertyNames(value).forEach(function(name) {
+                        deepFreeze(value[name]);
+                    });
+                    return Object.freeze(value);
+                };
                 const sdk = Object.freeze({
-                    credentials: Object.freeze($credentialsLiteral),
+                    credential: deepFreeze($credentialLiteral),
                     http: http
                 });
                 try {
@@ -158,6 +170,20 @@ class ExtensionRunnerImpl @Inject constructor(
                 }
             })();
         """.trimIndent()
+    }
+
+    internal fun canonicalCredentialJson(json: String): String? {
+        return try {
+            val element = JsonParser.parseString(json)
+            if (!element.isJsonObject) return null
+            val credential = element.asJsonObject
+            if (credential.entrySet().any { (_, value) -> !value.isJsonPrimitive || !value.asJsonPrimitive.isString }) {
+                return null
+            }
+            gson.toJson(credential)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private companion object {

@@ -30,7 +30,7 @@ Android passbook aggregator. Users install fully trusted JS extension scripts fr
 ### Trust model
 
 - Extensions are fully trusted code, not sandboxed capability clients.
-- Every invocation exposes plaintext username and password through frozen `sdk.credentials`.
+- Every invocation exposes the extension-defined plaintext credential JSON through recursively frozen `sdk.credential`.
 - Extensions may send credentials and other data to any destination. The app does not enforce domain, method, header, redirect, or business-intent policy.
 - UI must clearly disclose this capability. Never claim that credentials, cookies, or network destinations are isolated from extensions.
 - Installing or manually downloading an update is user consent for that version to continue using the saved credentials; no version-change re-approval is required.
@@ -38,16 +38,16 @@ Android passbook aggregator. Users install fully trusted JS extension scripts fr
 ### CredentialProfile (`core:data`)
 
 - Exactly one credential profile per installed extension; `extensionId` is the primary/foreign key.
-- Username and password are intentionally stored as plaintext in the app-private Room database.
+- A single extension-defined credential JSON object is intentionally stored as plaintext in the app-private Room database. The v1 contract is flat and every value is a string.
 - Profiles do not store login hosts or domain-permission snapshots.
-- Never include credentials in logs, exceptions, backups, or Compose summaries. Passing the minimal `ExtensionCredentials` object to `ExtensionRunner` is the intended exception.
+- Never include credentials in logs, exceptions, backups, or Compose summaries. Passing the minimal redacted `ExtensionCredential` wrapper to `ExtensionRunner` is the intended exception.
 - User schedule is stored on the profile. Manifest schedule values are suggestions copied when credentials are first saved.
-- A blank password while editing means retain the existing password.
+- Manifest `credential.fields` owns field keys, labels, types, required flags, and non-secret summaries. A blank password-type field while editing retains the existing value for the same key.
 
 ### Extension runtime
 
-- `ExtensionRunner` receives only the installed extension and minimal `ExtensionCredentials`.
-- Scripts are async top-level IIFEs and receive frozen `sdk.credentials.{username,password}` plus async `sdk.http.request`.
+- `ExtensionRunner` receives only the installed extension and minimal `ExtensionCredential`.
+- Scripts are async top-level IIFEs and receive recursively frozen `sdk.credential` plus async `sdk.http.request`. There is no `sdk.credentials` compatibility alias.
 - The Kotlin bridge exists only to bypass WebView CORS and execute arbitrary HTTP(S) requests. It has no domain allowlist and permits arbitrary HTTP methods, headers (including credentials), bodies, and extension-controlled redirect behavior.
 - Size, timeout, and per-run request-count bounds remain operational safeguards; they are not a security boundary between the extension and banking credentials.
 - Native login, native captcha OCR, `EphemeralSession`, declarative login selectors, and the policy-enforcing `HttpBridge` are removed.

@@ -37,8 +37,7 @@ class InstalledExtensionDaoTest {
         database.credentialProfileDao().upsert(
             CredentialProfile(
                 extensionId = extension.id,
-                username = "user",
-                password = "plain-password",
+                credential = "{\"account\":\"synthetic-user\",\"secret\":\"synthetic-secret\"}",
                 scheduleCron = "0 8 * * *",
                 timezoneId = "Asia/Taipei",
             ),
@@ -49,8 +48,8 @@ class InstalledExtensionDaoTest {
         assertEquals(2, database.installedExtensionDao().getById(extension.id)?.version)
         assertNotNull(database.credentialProfileDao().getByExtensionId(extension.id))
         assertEquals(
-            "plain-password",
-            database.credentialProfileDao().getByExtensionId(extension.id)?.password,
+            "{\"account\":\"synthetic-user\",\"secret\":\"synthetic-secret\"}",
+            database.credentialProfileDao().getByExtensionId(extension.id)?.credential,
         )
     }
 

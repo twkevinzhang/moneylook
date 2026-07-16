@@ -10,8 +10,7 @@ class CredentialProfileTest {
     fun `new profile enables suggested schedule and has no run result`() {
         val profile = CredentialProfile(
             extensionId = "tw.bot::https://github.com/example/extensions",
-            username = "user123",
-            password = "plain-text-password",
+            credential = "{\"account\":\"synthetic-user\",\"secret\":\"synthetic-secret\"}",
             scheduleCron = "0 8 * * *",
             timezoneId = "Asia/Taipei",
         )
@@ -22,7 +21,7 @@ class CredentialProfileTest {
         assertEquals("Asia/Taipei", profile.timezoneId)
         assertNull(profile.lastRunAt)
         assertNull(profile.lastRunStatus)
-        assertTrue(!profile.toString().contains("plain-text-password"))
-        assertTrue(!profile.toString().contains("user123"))
+        assertTrue(!profile.toString().contains("synthetic-secret"))
+        assertTrue(!profile.toString().contains("synthetic-user"))
     }
 }
