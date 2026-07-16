@@ -1,6 +1,8 @@
 package tw.kevinzhang.extension_runtime
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -170,6 +172,7 @@ private class NativeSdkHttpBridge(
     private val gson: Gson,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val active = AtomicBoolean(true)
     private val requestCount = AtomicInteger(0)
 
@@ -206,9 +209,12 @@ private class NativeSdkHttpBridge(
         val idLiteral = gson.toJson(id)
         val resultLiteral = resultJson?.let(gson::toJson) ?: "null"
         val errorLiteral = errorJson?.let(gson::toJson) ?: "null"
-        webView.post {
+        mainHandler.post {
             if (active.get()) {
-                webView.evaluateJavascript("window.__sdkResolve($idLiteral,$resultLiteral,$errorLiteral);", null)
+                webView.evaluateJavascript(
+                    "window.__sdkResolve($idLiteral,$resultLiteral,$errorLiteral);",
+                    null,
+                )
             }
         }
     }
