@@ -41,6 +41,16 @@ class ExtensionRunnerContractTest {
         assertTrue(wrapper.contains("allSettled"))
         assertTrue(wrapper.contains("window.fetch = undefined"))
         assertTrue(wrapper.contains("window.XMLHttpRequest = undefined"))
+        assertTrue(wrapper.contains("browser: browser"))
+        assertTrue(wrapper.contains("open: function(options)"))
+        assertTrue(wrapper.contains("request: function(options)"))
+        assertTrue(wrapper.contains("close: function()"))
+        assertTrue(wrapper.contains("__native_browser__.open"))
+        assertTrue(wrapper.contains("__native_browser__.request"))
+        assertTrue(wrapper.contains("__browserPending.forEach"))
+        assertTrue(wrapper.contains("pending.reject({ code: 'BROWSER_CLOSED'"))
+        assertTrue(wrapper.contains("__native_browser__.close()"))
+        assertTrue(wrapper.contains("finally {\n        browser.close();"))
     }
 
     @Test

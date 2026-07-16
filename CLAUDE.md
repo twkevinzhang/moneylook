@@ -47,11 +47,16 @@ Android passbook aggregator. Users install fully trusted JS extension scripts fr
 ### Extension runtime
 
 - `ExtensionRunner` receives only the installed extension and minimal `ExtensionCredential`.
-- Scripts are async top-level IIFEs and receive recursively frozen `sdk.credential` plus async `sdk.http.request`. There is no `sdk.credentials` compatibility alias.
+- Scripts are async top-level IIFEs and receive recursively frozen `sdk.credential`, async `sdk.http.request`, and ephemeral `sdk.browser`. There is no `sdk.credentials` compatibility alias.
 - The Kotlin bridge exists only to bypass WebView CORS and execute arbitrary HTTP(S) requests. It has no domain allowlist and permits arbitrary HTTP methods, headers (including credentials), bodies, and extension-controlled redirect behavior.
+- `sdk.browser.open` creates a per-invocation AndroidX WebKit multi-profile session. `sdk.browser.request` injects a real main-world `XMLHttpRequest` at the loaded HTTP(S) origin so page WAF patches, cookies, and the Chromium network stack participate. Browser XHR keeps normal CORS, forbidden-header, and automatic-redirect semantics; `sdk.http` remains the no-CORS path.
+- Browser `open` and `request` require absolute HTTP(S) URLs. `close()` is synchronous/void and destroys the session; the runner also closes it in `finally`.
+- The bank WebView never receives `sdk.credential`, `__native_http__`, `__native_browser__`, `__result_bridge__`, or any other native JavaScript interface. Browser results cross back through unpredictable page slots and bounded `evaluateJavascript` polling/chunks.
+- `sdk.http.request`, `sdk.browser.open`, and `sdk.browser.request` share one 100-operation per-run budget. Browser page subresources are not counted as extension-issued SDK operations.
+- Browser XHR aborts oversized responses from progress metadata/downloaded bytes when available and revalidates exact bytes on load. A provider that emits no usable progress may still buffer an unknown-length response in its renderer before the 10 MiB rejection.
 - Size, timeout, and per-run request-count bounds remain operational safeguards; they are not a security boundary between the extension and banking credentials.
 - Native login, native captcha OCR, `EphemeralSession`, declarative login selectors, and the policy-enforcing `HttpBridge` are removed.
-- Each invocation gets a fresh runtime; destroy the WebView in `finally` and do not persist runtime cookies or bridge state.
+- Each invocation gets a fresh runtime and unique browser profile; destroy both WebViews and delete the browser profile in `finally`. Never reuse runtime cookies or bridge state. If `MULTI_PROFILE` is unavailable, fail with `BROWSER_PROFILE_UNSUPPORTED` rather than sharing the default profile.
 - Script returns `{ accounts: [{ name, balance, currency, no?, transfers? }] }`.
 
 ### Kotlin app responsibilities
@@ -89,7 +94,7 @@ catch (e: CancellationException) { throw e }
 
 ## Test Modules
 
-- `:extension-runtime` — credential injection, async unrestricted request bridge, async result handling, and runtime cleanup
+- `:extension-runtime` — credential injection, async unrestricted request bridge, ephemeral main-world browser XHR, shared request budget, async result handling, and runtime/profile cleanup
 - `:marketplace` — manifest parsing/validation and repository download defenses
 - `:core:data` — account, transfer, credential profile, and installed extension models
 - `:app` — credential handoff, result persistence, unique work, and retry behavior

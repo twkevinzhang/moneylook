@@ -22,6 +22,7 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.coroutines.android)
     implementation(libs.cron.utils)
+    implementation(libs.androidx.webkit)
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
