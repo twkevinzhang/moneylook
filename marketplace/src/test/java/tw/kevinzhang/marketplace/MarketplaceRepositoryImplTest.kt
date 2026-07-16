@@ -49,6 +49,7 @@ class MarketplaceRepositoryImplTest {
         val request = repo.buildRequest("https://raw.githubusercontent.com/owner/repo/main/index.min.json")
 
         assertEquals("no-cache", request.header("Cache-Control"))
+        assertTrue(request.url.queryParameter("_moneylook")?.isNotBlank() == true)
     }
 
     @Test(expected = IllegalArgumentException::class)

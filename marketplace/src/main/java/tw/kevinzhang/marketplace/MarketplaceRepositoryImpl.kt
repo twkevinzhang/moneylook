@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.CacheControl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntry
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntryDto
 import tw.kevinzhang.marketplace.data.ExtensionManifest
@@ -100,7 +101,11 @@ class MarketplaceRepositoryImpl @Inject constructor(
     }
 
     internal fun buildRequest(url: String): Request = Request.Builder()
-        .url(url)
+        .url(
+            url.toHttpUrl().newBuilder()
+                .addQueryParameter("_moneylook", System.nanoTime().toString())
+                .build(),
+        )
         .cacheControl(CacheControl.FORCE_NETWORK)
         .build()
 
