@@ -22,10 +22,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -40,6 +44,15 @@ fun MarketplaceScreen(
     viewModel: MarketplaceViewModel = hiltViewModel(),
 ) {
     val extensionsByRepo by viewModel.extensionsByRepo.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(error) {
+        error?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.clearError()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -52,6 +65,7 @@ fun MarketplaceScreen(
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = bottomBar,
     ) { innerPadding ->
         LazyColumn(
@@ -104,8 +118,11 @@ private fun ExtensionItem(
         }
         when {
             ext.isLoading -> CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-            ext.hasUpdate -> Button(onClick = onInstall) { Text("更新") }
-            ext.isInstalled -> OutlinedButton(onClick = onUninstall) { Text("移除") }
+            ext.action == MarketplaceExtensionAction.UPDATE -> Button(onClick = onInstall) { Text("更新") }
+            ext.action == MarketplaceExtensionAction.REMOVE -> OutlinedButton(onClick = onUninstall) { Text("移除") }
+            ext.action == MarketplaceExtensionAction.INSTALLED_FROM_OTHER_SOURCE -> {
+                OutlinedButton(onClick = {}, enabled = false) { Text("已由其他來源安裝") }
+            }
             else -> Button(onClick = onInstall) { Text("安裝") }
         }
     }

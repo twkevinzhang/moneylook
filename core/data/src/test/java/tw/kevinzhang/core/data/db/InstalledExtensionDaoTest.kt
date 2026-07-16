@@ -1,10 +1,14 @@
 package tw.kevinzhang.core.data.db
 
 import androidx.room.Room
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -51,6 +55,53 @@ class InstalledExtensionDaoTest {
             "{\"account\":\"synthetic-user\",\"secret\":\"synthetic-secret\"}",
             database.credentialProfileDao().getByExtensionId(extension.id)?.credential,
         )
+    }
+
+    @Test
+    fun `concurrent installs from different sources keep one manifest owner`() = runBlocking {
+        val dao = database.installedExtensionDao()
+        val installs = listOf(
+            async(Dispatchers.Default) {
+                dao.upsertUnlessInstalledFromOtherSource(extension(version = 1))
+            },
+            async(Dispatchers.Default) {
+                dao.upsertUnlessInstalledFromOtherSource(
+                    extension(version = 1).copy(
+                        id = "ext::other-repo",
+                        repoUrl = "https://github.com/test/other-repo",
+                    ),
+                )
+            },
+        ).map { it.await() }
+
+        assertEquals(1, installs.count { it })
+        assertEquals(1, dao.getAll().count { it.manifestId == "ext" })
+    }
+
+    @Test
+    fun `install from another source is rejected`() = runBlocking {
+        val dao = database.installedExtensionDao()
+        assertTrue(dao.upsertUnlessInstalledFromOtherSource(extension(version = 1)))
+
+        val accepted = dao.upsertUnlessInstalledFromOtherSource(
+            extension(version = 2).copy(
+                id = "ext::other-repo",
+                repoUrl = "https://github.com/test/other-repo",
+            ),
+        )
+
+        assertFalse(accepted)
+        assertEquals(listOf("ext::repo"), dao.getAll().map { it.id })
+    }
+
+    @Test
+    fun `install from same source updates existing extension`() = runBlocking {
+        val dao = database.installedExtensionDao()
+        assertTrue(dao.upsertUnlessInstalledFromOtherSource(extension(version = 1)))
+        assertTrue(dao.upsertUnlessInstalledFromOtherSource(extension(version = 2)))
+
+        assertEquals(2, dao.getById("ext::repo")?.version)
+        assertEquals(1, dao.getAll().size)
     }
 
     private fun extension(version: Int) = InstalledExtension(
