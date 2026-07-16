@@ -9,7 +9,7 @@ import tw.kevinzhang.core.data.model.Transfer
 
 @Database(
     entities = [Account::class, CredentialProfile::class, InstalledExtension::class, Transfer::class],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class MoneylookDatabase : RoomDatabase() {

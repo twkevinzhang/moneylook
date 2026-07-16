@@ -15,30 +15,46 @@ import tw.kevinzhang.extension_runtime.data.SyncResult
 @RunWith(RobolectricTestRunner::class)
 class ExtensionRunnerContractTest {
     @Test
-    fun credentialsToStringIsRedacted() {
-        val credentials = ExtensionCredentials("alice", "p@ssword")
+    fun credentialToStringIsRedacted() {
+        val credential = ExtensionCredential("""{"username":"alice","password":"p@ssword"}""")
 
-        assertEquals("ExtensionCredentials([REDACTED])", credentials.toString())
-        assertFalse(credentials.toString().contains("alice"))
-        assertFalse(credentials.toString().contains("p@ssword"))
+        assertEquals("ExtensionCredential([REDACTED])", credential.toString())
+        assertFalse(credential.toString().contains("alice"))
+        assertFalse(credential.toString().contains("p@ssword"))
     }
 
     @Test
-    fun wrapperExposesFrozenCredentialsAndAsyncPromiseHttpContract() {
+    fun wrapperExposesDeeplyFrozenCredentialAndAsyncPromiseHttpContract() {
         val context = RuntimeEnvironment.getApplication()
         val runner = ExtensionRunnerImpl(context, OkHttpClient(), Gson())
 
         val wrapper = runner.buildWrappedScript(
             "(async () => ({ accounts: [] }))()",
-            ExtensionCredentials("alice", "p@ssword"),
+            ExtensionCredential("""{"username":"alice","password":"p@ssword"}"""),
         )
 
-        assertTrue(wrapper.contains("credentials: Object.freeze({\"username\":\"alice\",\"password\":\"p@ssword\"})"))
+        assertTrue(wrapper.contains("credential: deepFreeze({\"username\":\"alice\",\"password\":\"p@ssword\"})"))
+        assertTrue(wrapper.contains("Object.getOwnPropertyNames(value)"))
+        assertFalse(wrapper.contains("credentials:"))
         assertTrue(wrapper.contains("return new Promise"))
         assertTrue(wrapper.contains("const result = await eval"))
         assertTrue(wrapper.contains("allSettled"))
         assertTrue(wrapper.contains("window.fetch = undefined"))
         assertTrue(wrapper.contains("window.XMLHttpRequest = undefined"))
+    }
+
+    @Test
+    fun credentialJsonMustBeAFlatStringObject() {
+        val runner = ExtensionRunnerImpl(RuntimeEnvironment.getApplication(), OkHttpClient(), Gson())
+
+        assertEquals(
+            "{\"customerId\":\"A123\",\"password\":\"secret\"}",
+            runner.canonicalCredentialJson("""{"customerId":"A123","password":"secret"}"""),
+        )
+        assertEquals(null, runner.canonicalCredentialJson("[]"))
+        assertEquals(null, runner.canonicalCredentialJson("""{"remember":true}"""))
+        assertEquals(null, runner.canonicalCredentialJson("""{"nested":{"value":"x"}}"""))
+        assertEquals(null, runner.canonicalCredentialJson("not-json"))
     }
 
     @Test

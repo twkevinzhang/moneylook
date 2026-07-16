@@ -17,8 +17,7 @@ import androidx.room.ForeignKey
 )
 data class CredentialProfile(
     val extensionId: String,
-    val username: String,
-    val password: String,
+    val credential: String,
     val scheduleEnabled: Boolean = true,
     val scheduleCron: String,
     val timezoneId: String,
@@ -26,7 +25,7 @@ data class CredentialProfile(
     val lastRunStatus: String? = null,
 ) {
     override fun toString(): String =
-        "CredentialProfile(extensionId=$extensionId, credentials=[REDACTED], " +
+        "CredentialProfile(extensionId=$extensionId, credential=[REDACTED], " +
             "scheduleEnabled=$scheduleEnabled, scheduleCron=$scheduleCron, " +
             "timezoneId=$timezoneId, lastRunAt=$lastRunAt, lastRunStatus=$lastRunStatus)"
 }

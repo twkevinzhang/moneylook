@@ -43,7 +43,7 @@ class ScheduleWorker @AssistedInject constructor(
         val extensionId = inputData.getString(KEY_EXTENSION_ID) ?: return Result.failure()
         val extension = installedExtensionDao.getById(extensionId) ?: return Result.failure()
         val profile = credentialProfileDao.getByExtensionId(extensionId) ?: return Result.failure()
-        if (!profile.scheduleEnabled || profile.username.isBlank() || profile.password.isEmpty()) {
+        if (!profile.scheduleEnabled || profile.credential.isBlank()) {
             return Result.success()
         }
 
