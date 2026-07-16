@@ -6,6 +6,7 @@ import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.CacheControl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntry
@@ -85,18 +86,23 @@ class MarketplaceRepositoryImpl @Inject constructor(
     }
 
     private fun fetchString(url: String): String {
-        okHttpClient.newCall(Request.Builder().url(url).build()).execute().use { response ->
+        okHttpClient.newCall(buildRequest(url)).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code} for $url")
             return readBoundedBytes(response.body, MAX_METADATA_BYTES, url).toString(Charsets.UTF_8)
         }
     }
 
     private fun fetchBytes(url: String): ByteArray {
-        okHttpClient.newCall(Request.Builder().url(url).build()).execute().use { response ->
+        okHttpClient.newCall(buildRequest(url)).execute().use { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code} for $url")
             return readBoundedBytes(response.body, MAX_SCRIPT_BYTES, url)
         }
     }
+
+    internal fun buildRequest(url: String): Request = Request.Builder()
+        .url(url)
+        .cacheControl(CacheControl.FORCE_NETWORK)
+        .build()
 
     private fun readBoundedBytes(body: okhttp3.ResponseBody?, limit: Long, url: String): ByteArray {
         body ?: throw IOException("Empty response for $url")
