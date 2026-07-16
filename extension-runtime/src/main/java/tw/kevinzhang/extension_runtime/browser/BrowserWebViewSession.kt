@@ -41,7 +41,25 @@ internal class BrowserWebViewSession(
     private var currentUrl: String? = null
     private var generation: Long = 0
 
-    suspend fun open(request: BrowserOpenRequest): BrowserOpenResponse = withContext(Dispatchers.Main.immediate) {
+    suspend fun open(request: BrowserOpenRequest): BrowserOpenResponse = navigate(
+        timeoutMs = request.timeoutMs,
+        settleMs = request.settleMs,
+    ) { view ->
+        view.loadUrl(request.url)
+    }
+
+    suspend fun post(request: BrowserFormPostRequest): BrowserOpenResponse = navigate(
+        timeoutMs = request.timeoutMs,
+        settleMs = request.settleMs,
+    ) { view ->
+        startFormPostNavigation(view, request)
+    }
+
+    private suspend fun navigate(
+        timeoutMs: Long,
+        settleMs: Long,
+        start: (WebView) -> Unit,
+    ): BrowserOpenResponse = withContext(Dispatchers.Main.immediate) {
         when (state) {
             State.REQUESTING, State.OPENING -> throw SafeBrowserException("BROWSER_BUSY", "browser session is busy")
             State.CLOSED -> throw SafeBrowserException("BROWSER_CLOSED", "browser session is closed")
@@ -53,14 +71,20 @@ internal class BrowserWebViewSession(
         openEvents = events
         state = State.OPENING
         try {
-            val finalUrl = withTimeout<String>(request.timeoutMs) {
-                view.loadUrl(request.url)
+            val finalUrl = withTimeout<String>(timeoutMs) {
+                start(view)
                 while (true) {
                     when (val event = events.receive()) {
                         is OpenEvent.Failed -> throw event.error
                         is OpenEvent.Finished -> {
-                            if (request.settleMs > 0) delay(request.settleMs)
+                            if (settleMs > 0) delay(settleMs)
                             if (state != State.OPENING) {
+                                if (state == State.CLOSED) {
+                                    throw SafeBrowserException(
+                                        "BROWSER_CLOSED",
+                                        "browser session is closed",
+                                    )
+                                }
                                 throw SafeBrowserException(
                                     "BROWSER_NAVIGATION",
                                     "browser navigation did not complete",
@@ -84,21 +108,24 @@ internal class BrowserWebViewSession(
             }
             val parsed = finalUrl.toHttpUrlOrNull()
                 ?: throw SafeBrowserException("BROWSER_NAVIGATION", "browser returned an invalid URL")
+            if (parsed.scheme !in SUPPORTED_SCHEMES) {
+                throw SafeBrowserException("BROWSER_NAVIGATION", "browser returned an unsupported URL")
+            }
             currentUrl = finalUrl
             state = State.READY
             BrowserOpenResponse(url = finalUrl, origin = parsed.origin())
         } catch (e: CancellationException) {
             view.stopLoading()
             if (e is TimeoutCancellationException) {
-                state = State.FAILED
+                if (state != State.CLOSED) state = State.FAILED
                 throw SafeBrowserException("BROWSER_TIMEOUT", "browser navigation timed out")
             }
             throw e
         } catch (e: SafeBrowserException) {
-            state = State.FAILED
+            if (state != State.CLOSED) state = State.FAILED
             throw e
         } catch (e: Exception) {
-            state = State.FAILED
+            if (state != State.CLOSED) state = State.FAILED
             throw SafeBrowserException("BROWSER_NAVIGATION", "browser navigation failed")
         } finally {
             if (openEvents === events) openEvents = null
@@ -385,6 +412,10 @@ internal class BrowserWebViewSession(
             "RESPONSE_TOO_LARGE",
         )
     }
+}
+
+internal fun startFormPostNavigation(view: WebView, request: BrowserFormPostRequest) {
+    view.postUrl(request.url, request.body)
 }
 
 private fun HttpUrl.origin(): String {

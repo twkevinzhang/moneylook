@@ -184,6 +184,8 @@ class ExtensionRunnerImpl @Inject constructor(
                         try {
                             if (method === 'open') {
                                 __native_browser__.open(id, JSON.stringify(options || {}));
+                            } else if (method === 'post') {
+                                __native_browser__.post(id, JSON.stringify(options || {}));
                             } else {
                                 __native_browser__.request(id, JSON.stringify(options || {}));
                             }
@@ -195,6 +197,7 @@ class ExtensionRunnerImpl @Inject constructor(
                 };
                 const browser = Object.freeze({
                     open: function(options) { return browserCall('open', options); },
+                    post: function(options) { return browserCall('post', options); },
                     request: function(options) { return browserCall('request', options); },
                     close: function() {
                         __browserPending.forEach(function(pending) {

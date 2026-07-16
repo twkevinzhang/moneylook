@@ -7,6 +7,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import okio.ByteString.Companion.toByteString
+import java.nio.charset.StandardCharsets
 
 class BrowserRequestTest {
     private val gson = Gson()
@@ -43,6 +44,34 @@ class BrowserRequestTest {
     }
 
     @Test
+    fun parsesFormPostAsStrictUtf8WithNavigationBounds() {
+        val post = BrowserRequestJsonParser.parsePost(
+            """{
+                "url":"https://example.com/login",
+                "body":"customer=%E6%B8%AC%E8%A9%A6&password=encoded%2Bvalue",
+                "timeoutMs":4321,
+                "settleMs":750
+            }""".trimIndent(),
+            gson,
+        )
+
+        assertEquals("https://example.com/login", post.url)
+        assertEquals(
+            "customer=%E6%B8%AC%E8%A9%A6&password=encoded%2Bvalue",
+            post.body.toString(StandardCharsets.UTF_8),
+        )
+        assertEquals(4321L, post.timeoutMs)
+        assertEquals(750L, post.settleMs)
+
+        val defaults = BrowserRequestJsonParser.parsePost(
+            """{"url":"https://example.com/login","body":"a=b"}""",
+            gson,
+        )
+        assertEquals(30_000L, defaults.timeoutMs)
+        assertEquals(500L, defaults.settleMs)
+    }
+
+    @Test
     fun openAndRequestRequireAbsoluteHttpUrls() {
         listOf("/relative", "data:text/plain,secret", "javascript:alert(1)", "file:///tmp/value").forEach { url ->
             val openError = assertThrows(SafeBrowserException::class.java) {
@@ -51,8 +80,67 @@ class BrowserRequestTest {
             val requestError = assertThrows(SafeBrowserException::class.java) {
                 BrowserRequestJsonParser.parseRequest(gson.toJson(mapOf("url" to url)), gson)
             }
+            val postError = assertThrows(SafeBrowserException::class.java) {
+                BrowserRequestJsonParser.parsePost(gson.toJson(mapOf("url" to url, "body" to "a=b")), gson)
+            }
             assertEquals("INVALID_URL", openError.code)
             assertEquals("INVALID_URL", requestError.code)
+            assertEquals("INVALID_URL", postError.code)
+        }
+    }
+
+    @Test
+    fun formPostRejectsMissingMalformedOrOversizedUtf8Body() {
+        val missing = assertThrows(SafeBrowserException::class.java) {
+            BrowserRequestJsonParser.parsePost(
+                gson.toJson(mapOf("url" to "https://example.com/login")),
+                gson,
+            )
+        }
+        assertEquals("INVALID_REQUEST", missing.code)
+
+        val malformed = assertThrows(SafeBrowserException::class.java) {
+            BrowserRequestJsonParser.parsePost(
+                gson.toJson(mapOf("url" to "https://example.com/login", "body" to "\uD800")),
+                gson,
+            )
+        }
+        assertEquals("INVALID_BODY", malformed.code)
+
+        val oversized = assertThrows(SafeBrowserException::class.java) {
+            BrowserRequestJsonParser.parsePost(
+                gson.toJson(
+                    mapOf(
+                        "url" to "https://example.com/login",
+                        "body" to "x".repeat(2 * 1024 * 1024 + 1),
+                    ),
+                ),
+                gson,
+            )
+        }
+        assertEquals("BODY_TOO_LARGE", oversized.code)
+    }
+
+    @Test
+    fun formPostRequiresBoundedNavigationTimeoutAndSettleValues() {
+        listOf(
+            mapOf("timeoutMs" to 0),
+            mapOf("timeoutMs" to 30_001),
+            mapOf("settleMs" to -1),
+            mapOf("settleMs" to 5_001),
+        ).forEach { invalidBounds ->
+            val error = assertThrows(SafeBrowserException::class.java) {
+                BrowserRequestJsonParser.parsePost(
+                    gson.toJson(
+                        mapOf(
+                            "url" to "https://example.com/login",
+                            "body" to "a=b",
+                        ) + invalidBounds,
+                    ),
+                    gson,
+                )
+            }
+            assertEquals("INVALID_TIMEOUT", error.code)
         }
     }
 
@@ -179,5 +267,22 @@ class BrowserRequestTest {
             )
         }
         assertEquals("RESPONSE_TOO_LARGE", base64Error.code)
+    }
+
+    @Test
+    fun navigationResponseContainsOnlyFinalUrlAndOrigin() {
+        val json = gson.toJson(
+            BrowserOpenResponse(
+                url = "https://example.com/account",
+                origin = "https://example.com",
+            ),
+        )
+
+        assertEquals(
+            """{"url":"https://example.com/account","origin":"https://example.com"}""",
+            json,
+        )
+        assertFalse(json.contains("body"))
+        assertFalse(json.contains("html"))
     }
 }
