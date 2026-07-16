@@ -61,6 +61,8 @@ dependencies {
     implementation(libs.cron.utils)
 
     testImplementation(libs.junit4)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.robolectric)
 
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
