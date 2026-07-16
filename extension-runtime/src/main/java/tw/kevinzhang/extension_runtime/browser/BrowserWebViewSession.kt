@@ -45,7 +45,7 @@ internal class BrowserWebViewSession(
         timeoutMs = request.timeoutMs,
         settleMs = request.settleMs,
     ) { view ->
-        view.loadUrl(request.url)
+        startOpenNavigation(view, request)
     }
 
     suspend fun post(request: BrowserFormPostRequest): BrowserOpenResponse = navigate(
@@ -412,6 +412,11 @@ internal class BrowserWebViewSession(
             "RESPONSE_TOO_LARGE",
         )
     }
+}
+
+internal fun startOpenNavigation(view: WebView, request: BrowserOpenRequest) {
+    request.userAgent?.let { view.settings.userAgentString = it }
+    view.loadUrl(request.url)
 }
 
 internal fun startFormPostNavigation(view: WebView, request: BrowserFormPostRequest) {

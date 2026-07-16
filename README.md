@@ -85,6 +85,7 @@ Browser bridge 範例：
 ```typescript
 await sdk.browser.open({
   url: 'https://mybank.com/login',
+  userAgent: 'Mozilla/5.0 Extension-Compatible-UA/1.0',
   timeoutMs: 30_000,
   settleMs: 1_000,
 })
@@ -113,11 +114,12 @@ sdk.browser.close()
 
 `sdk.browser` contract：
 
-- `open({ url, timeoutMs?, settleMs? }) → Promise<{ url, origin }>`
+- `open({ url, userAgent?, timeoutMs?, settleMs? }) → Promise<{ url, origin }>`
 - `post({ url, body, timeoutMs?, settleMs? }) → Promise<{ url, origin }>`
 - `request({ url, method?, headers?, body?, bodyEncoding?, responseEncoding?, timeoutMs?, withCredentials? }) → Promise<HttpResponse & { url }>`
 - `close() → void`
 - `open`、`post` 與 `request` 的 URL 都必須是 absolute HTTP(S) URL；不接受 `file:`、`data:`、`javascript:` 或 relative URL。
+- `open.userAgent` 是可選的 1–512 字元 printable ASCII 字串；不得包含 CR、LF 或其他 control character。未指定時使用 WebView 預設 User-Agent。
 - `post` 的 `body` 必須由 extension 先編碼成 UTF-8 `application/x-www-form-urlencoded` 字串；它會等待主 frame 的 HTTP redirect 與頁面 JavaScript 導覽穩定，只回傳 final URL/origin，不回傳 HTML 或 response body。
 - Browser XHR 遵守正常 same-origin/CORS、forbidden-header 與 automatic redirect 規則。跨 origin endpoint 若未開放 CORS，extension 必須先 `open` 該 origin；真正不受 CORS 限制的 request 請使用 `sdk.http.request`。
 - XHR response 不會公開 `Set-Cookie`，但 Cookie 會由該 invocation 的 WebView profile 自動保存並供後續同 session request 使用。
