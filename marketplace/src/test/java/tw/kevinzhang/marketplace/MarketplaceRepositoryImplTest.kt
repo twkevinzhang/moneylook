@@ -2,7 +2,12 @@ package tw.kevinzhang.marketplace
 
 import com.google.gson.Gson
 import com.google.gson.JsonParser
+import kotlinx.coroutines.runBlocking
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -45,11 +50,70 @@ class MarketplaceRepositoryImplTest {
     }
 
     @Test
-    fun `marketplace downloads revalidate github raw content`() {
+    fun `marketplace request bypasses local cache without relying on query cache keys`() {
         val request = repo.buildRequest("https://raw.githubusercontent.com/owner/repo/main/index.min.json")
 
         assertEquals("no-cache", request.header("Cache-Control"))
-        assertTrue(request.url.queryParameter("_moneylook")?.isNotBlank() == true)
+        assertEquals(null, request.url.query)
+    }
+
+    @Test
+    fun `index resolves main ref and downloads from immutable commit raw url`() = runBlocking {
+        val revision = "0123456789abcdef0123456789abcdef01234567"
+        val requests = mutableListOf<String>()
+        val immutableRepo = repositoryWithResponses(requests) { path ->
+            when (path) {
+                "/repos/owner/repo/git/ref/heads/main" ->
+                    "{\"object\":{\"sha\":\"$revision\"}}"
+                "/owner/repo/$revision/index.min.json" -> "[]"
+                else -> error("Unexpected request path: $path")
+            }
+        }
+
+        assertTrue(immutableRepo.fetchIndex("https://github.com/owner/repo").isEmpty())
+
+        assertEquals(
+            listOf(
+                "https://api.github.com/repos/owner/repo/git/ref/heads/main",
+                "https://raw.githubusercontent.com/owner/repo/$revision/index.min.json",
+            ),
+            requests,
+        )
+    }
+
+    @Test
+    fun `cached revision keeps manifest and script on the same immutable commit`() = runBlocking {
+        val revision = "abcdef0123456789abcdef0123456789abcdef01"
+        val requests = mutableListOf<String>()
+        val manifest = """
+            {
+              "id":"tw.test","name":"Test","version":3,"versionName":"3.0.0",
+              "description":"desc","iconUrl":null,
+              "credential":{"fields":[{"key":"account","label":"Account","type":"text","required":true,"summary":true}]},
+              "syncTrigger":{"scriptPath":"sync.js"}
+            }
+        """.trimIndent()
+        val immutableRepo = repositoryWithResponses(requests) { path ->
+            when (path) {
+                "/repos/owner/repo/git/ref/heads/main" ->
+                    "{\"object\":{\"sha\":\"$revision\"}}"
+                "/owner/repo/$revision/index.min.json" -> "[]"
+                "/owner/repo/$revision/tw.test/manifest.json" -> manifest
+                "/owner/repo/$revision/tw.test/sync.js" -> "globalThis.__moneylookResult = Promise.resolve({accounts: []});"
+                else -> error("Unexpected request path: $path")
+            }
+        }
+
+        immutableRepo.fetchIndex("https://github.com/owner/repo")
+        immutableRepo.fetchManifest("https://github.com/owner/repo", "tw.test")
+        immutableRepo.downloadSyncTriggerScript(
+            "https://github.com/owner/repo",
+            "tw.test",
+            "tw.test::https://github.com/owner/repo",
+        )
+
+        assertEquals(1, requests.count { it.contains("/git/ref/heads/main") })
+        assertTrue(requests.drop(1).all { it.contains("/$revision/") })
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -65,6 +129,39 @@ class MarketplaceRepositoryImplTest {
     @Test(expected = IllegalArgumentException::class)
     fun `raw github hostname in attacker path throws IllegalArgumentException`() {
         repo.toRawBase("https://attacker.test/raw.githubusercontent.com/owner/repo/main")
+    }
+
+    @Test
+    fun `repository url rejects dot segments`() {
+        listOf(
+            "https://github.com/../repo",
+            "https://github.com/owner/..",
+            "https://raw.githubusercontent.com/owner/../main",
+        ).forEach { url ->
+            assertInvalid { repo.toRawBase(url) }
+        }
+    }
+
+    @Test
+    fun `index rejects unsafe extension paths before returning entries`() = runBlocking {
+        val revision = "0123456789abcdef0123456789abcdef01234567"
+        val unsafePaths = listOf("", "../tw.test", "/tw.test", "tw.test?ref=1", "tw.test//nested", "tw.test%2fother")
+
+        unsafePaths.forEach { unsafePath ->
+            val immutableRepo = repositoryWithResponses(mutableListOf()) { path ->
+                when (path) {
+                    "/repos/owner/repo/git/ref/heads/main" ->
+                        "{\"object\":{\"sha\":\"$revision\"}}"
+                    "/owner/repo/$revision/index.min.json" ->
+                        "[{\"id\":\"tw.test\",\"name\":\"Test\",\"version\":1,\"versionName\":\"1.0.0\",\"path\":\"$unsafePath\"}]"
+                    else -> error("Unexpected request path: $path")
+                }
+            }
+
+            assertInvalid {
+                runBlocking { immutableRepo.fetchIndex("https://github.com/owner/repo") }
+            }
+        }
     }
 
     @Test
@@ -271,5 +368,29 @@ class MarketplaceRepositoryImplTest {
         } catch (_: IllegalArgumentException) {
             // Expected.
         }
+    }
+
+    private fun repositoryWithResponses(
+        requests: MutableList<String>,
+        bodyForPath: (String) -> String,
+    ): MarketplaceRepositoryImpl {
+        val client = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val request = chain.request()
+                requests += request.url.toString()
+                Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(bodyForPath(request.url.encodedPath).toResponseBody())
+                    .build()
+            })
+            .build()
+        return MarketplaceRepositoryImpl(
+            context = RuntimeEnvironment.getApplication(),
+            okHttpClient = client,
+            gson = Gson(),
+        )
     }
 }

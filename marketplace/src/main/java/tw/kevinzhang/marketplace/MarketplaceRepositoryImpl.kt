@@ -2,14 +2,15 @@ package tw.kevinzhang.marketplace
 
 import android.content.Context
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.CacheControl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntry
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntryDto
 import tw.kevinzhang.marketplace.data.ExtensionManifest
@@ -18,6 +19,7 @@ import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
 class MarketplaceRepositoryImpl @Inject constructor(
@@ -28,17 +30,21 @@ class MarketplaceRepositoryImpl @Inject constructor(
 
     override suspend fun fetchIndex(repoUrl: String): List<ExtensionIndexEntry> =
         withContext(Dispatchers.IO) {
-            val rawBase = toRawBase(repoUrl)
+            val rawBase = immutableRawBase(repoUrl, refreshRevision = true)
             val json = fetchString("$rawBase/index.min.json")
             val type = object : TypeToken<List<ExtensionIndexEntryDto>>() {}.type
             val dtos: List<ExtensionIndexEntryDto> = gson.fromJson(json, type)
-            dtos.map { it.toDomain() }
+            dtos.map { dto ->
+                requireSafeRelativePath(dto.path, "index.path")
+                dto.toDomain()
+            }
         }
 
     override suspend fun fetchManifest(repoUrl: String, path: String): ExtensionManifest =
         withContext(Dispatchers.IO) {
-            val rawBase = toRawBase(repoUrl)
-            val json = fetchString("$rawBase/$path/manifest.json")
+            val rawBase = immutableRawBase(repoUrl)
+            val safePath = requireSafeRelativePath(path, "index.path")
+            val json = fetchString("$rawBase/$safePath/manifest.json")
             gson.fromJson(json, ExtensionManifest::class.java).validateAndNormalize()
         }
 
@@ -47,24 +53,55 @@ class MarketplaceRepositoryImpl @Inject constructor(
         path: String,
         extensionId: String,
     ): String = withContext(Dispatchers.IO) {
-        val rawBase = toRawBase(repoUrl)
+        val rawBase = immutableRawBase(repoUrl)
+        val safePath = requireSafeRelativePath(path, "index.path")
         val manifest = gson.fromJson(
-            fetchString("$rawBase/$path/manifest.json"),
+            fetchString("$rawBase/$safePath/manifest.json"),
             ExtensionManifest::class.java,
         ).validateAndNormalize()
-        val scriptUrl = "$rawBase/$path/${manifest.syncTrigger.scriptPath}"
+        val scriptUrl = "$rawBase/$safePath/${manifest.syncTrigger.scriptPath}"
         val bytes = fetchBytes(scriptUrl)
-        val scriptFile = File(context.filesDir, "extensions/$extensionId/sync-trigger.js")
-        check(scriptFile.canonicalPath.startsWith(context.filesDir.canonicalPath)) {
-            "Script path escapes filesDir: ${scriptFile.canonicalPath}"
+        val extensionsRoot = File(context.filesDir, "extensions").canonicalFile
+        val scriptFile = File(extensionsRoot, "$extensionId/sync-trigger.js").canonicalFile
+        check(scriptFile.toPath().startsWith(extensionsRoot.toPath())) {
+            "Script path escapes extensions directory"
         }
         scriptFile.parentFile?.mkdirs()
         scriptFile.writeBytes(bytes)
         scriptFile.absolutePath
     }
 
-    // Converts https://github.com/owner/repo → https://raw.githubusercontent.com/owner/repo/main
+    // Converts a supported repository URL to its conventional branch-based Raw URL. Runtime
+    // downloads use immutableRawBase() so a CDN hit can never return content from another commit.
     internal fun toRawBase(repoUrl: String): String {
+        val repository = parseGitHubRepository(repoUrl)
+        return "$RAW_CONTENT_BASE/${repository.owner}/${repository.name}/${repository.revision ?: DEFAULT_BRANCH}"
+    }
+
+    private fun immutableRawBase(
+        repoUrl: String,
+        refreshRevision: Boolean = false,
+    ): String {
+        val repository = parseGitHubRepository(repoUrl)
+        val revision = repository.revision ?: run {
+            val key = "${repository.owner}/${repository.name}"
+            if (!refreshRevision) resolvedRevisions[key]?.let { return@run it }
+            resolveDefaultBranchRevision(repository).also { resolvedRevisions[key] = it }
+        }
+        return "$RAW_CONTENT_BASE/${repository.owner}/${repository.name}/$revision"
+    }
+
+    private fun resolveDefaultBranchRevision(repository: GitHubRepository): String {
+        val url = "$GITHUB_API_BASE/repos/${repository.owner}/${repository.name}/git/ref/heads/$DEFAULT_BRANCH"
+        val response = gson.fromJson(fetchString(url), GitHubRefResponse::class.java)
+        val revision = response.gitObject?.sha?.lowercase(Locale.US).orEmpty()
+        if (!COMMIT_SHA.matches(revision)) {
+            throw IOException("GitHub ref response did not contain a valid commit SHA")
+        }
+        return revision
+    }
+
+    private fun parseGitHubRepository(repoUrl: String): GitHubRepository {
         val normalized = repoUrl.trimEnd('/')
         val uri = try {
             URI(normalized)
@@ -74,16 +111,66 @@ class MarketplaceRepositoryImpl @Inject constructor(
         require(uri.scheme == "https" && uri.rawUserInfo == null) {
             "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl"
         }
-        return when (uri.host?.lowercase(Locale.US)) {
-            "raw.githubusercontent.com" -> normalized
-            "github.com" -> normalized.replaceFirst(
-                "https://github.com/",
-                "https://raw.githubusercontent.com/",
-            ) + "/main"
+        require(uri.rawQuery == null && uri.rawFragment == null && '%' !in uri.rawPath) {
+            "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl"
+        }
+        val segments = uri.rawPath.trim('/').split('/').filter { it.isNotBlank() }
+        val repository = when (uri.host?.lowercase(Locale.US)) {
+            "github.com" -> {
+                require(segments.size == 2) {
+                    "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl"
+                }
+                GitHubRepository(segments[0], segments[1].removeSuffix(".git"), null)
+            }
+            "raw.githubusercontent.com" -> {
+                require(segments.size == 3) {
+                    "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl"
+                }
+                val revision = segments[2]
+                require(revision == DEFAULT_BRANCH || COMMIT_SHA.matches(revision.lowercase(Locale.US))) {
+                    "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl"
+                }
+                GitHubRepository(
+                    segments[0],
+                    segments[1],
+                    revision.takeIf { it != DEFAULT_BRANCH }?.lowercase(Locale.US),
+                )
+            }
             else -> throw IllegalArgumentException(
                 "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl",
             )
         }
+        require(
+            REPOSITORY_SEGMENT.matches(repository.owner) &&
+                REPOSITORY_SEGMENT.matches(repository.name) &&
+                repository.owner !in DOT_SEGMENTS &&
+                repository.name !in DOT_SEGMENTS,
+        ) {
+            "Unsupported repo URL (only HTTPS GitHub is supported): $repoUrl"
+        }
+        return repository
+    }
+
+    private fun requireSafeRelativePath(path: String, field: String): String {
+        require(path.isNotBlank() && '\\' !in path && '%' !in path) {
+            "$field must be a safe relative path"
+        }
+        val uri = try {
+            URI(path)
+        } catch (exception: Exception) {
+            throw IllegalArgumentException("$field is invalid", exception)
+        }
+        require(
+            !uri.isAbsolute &&
+                uri.rawAuthority == null &&
+                uri.rawQuery == null &&
+                uri.rawFragment == null &&
+                !path.startsWith('/') &&
+                path.split('/').none { it.isBlank() || it in DOT_SEGMENTS },
+        ) {
+            "$field must be a safe relative path"
+        }
+        return path
     }
 
     private fun fetchString(url: String): String {
@@ -101,11 +188,7 @@ class MarketplaceRepositoryImpl @Inject constructor(
     }
 
     internal fun buildRequest(url: String): Request = Request.Builder()
-        .url(
-            url.toHttpUrl().newBuilder()
-                .addQueryParameter("_moneylook", System.nanoTime().toString())
-                .build(),
-        )
+        .url(url.toHttpUrl())
         .cacheControl(CacheControl.FORCE_NETWORK)
         .build()
 
@@ -119,7 +202,27 @@ class MarketplaceRepositoryImpl @Inject constructor(
     }
 
     private companion object {
+        const val DEFAULT_BRANCH = "main"
+        const val GITHUB_API_BASE = "https://api.github.com"
+        const val RAW_CONTENT_BASE = "https://raw.githubusercontent.com"
         const val MAX_METADATA_BYTES = 1024L * 1024
         const val MAX_SCRIPT_BYTES = 2L * 1024 * 1024
+        val COMMIT_SHA = Regex("^[0-9a-f]{40}$")
+        val REPOSITORY_SEGMENT = Regex("^[A-Za-z0-9_.-]+$")
+        val DOT_SEGMENTS = setOf(".", "..")
     }
+
+    private data class GitHubRepository(
+        val owner: String,
+        val name: String,
+        val revision: String?,
+    )
+
+    private data class GitHubRefResponse(
+        @SerializedName("object") val gitObject: GitHubRefObject?,
+    )
+
+    private data class GitHubRefObject(val sha: String?)
+
+    private val resolvedRevisions = ConcurrentHashMap<String, String>()
 }
