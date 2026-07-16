@@ -15,6 +15,7 @@ internal data class BrowserOpenRequest(
     val url: String,
     val timeoutMs: Long,
     val settleMs: Long,
+    val userAgent: String?,
 )
 
 internal data class BrowserOpenResponse(
@@ -86,10 +87,15 @@ internal object BrowserRequestJsonParser {
         val root = parseObject(json, gson)
         val url = root.string("url") ?: throw invalid("url is required")
         validateAbsoluteHttpUrl(url)
+        val userAgent = root.string("userAgent")
+        if (userAgent != null && !isValidUserAgent(userAgent)) {
+            throw invalid("userAgent must be 1 to 512 printable ASCII characters")
+        }
         return BrowserOpenRequest(
             url = url,
             timeoutMs = root.long("timeoutMs", DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
             settleMs = root.long("settleMs", 0, 0, MAX_SETTLE_MS),
+            userAgent = userAgent,
         )
     }
 
@@ -151,6 +157,9 @@ internal object BrowserRequestJsonParser {
             throw SafeBrowserException("INVALID_URL", "only HTTP and HTTPS URLs are supported")
         }
     }
+
+    private fun isValidUserAgent(userAgent: String): Boolean =
+        userAgent.length in 1..MAX_USER_AGENT_CHARS && userAgent.all { it.code in 0x20..0x7e }
 
     private fun validateBody(body: String?, encoding: String) {
         val size = when (encoding) {
@@ -247,6 +256,7 @@ internal object BrowserRequestJsonParser {
     private const val MAX_TIMEOUT_MS = 30_000L
     private const val MAX_SETTLE_MS = 5_000L
     private const val MAX_URL_CHARS = 16_384
+    private const val MAX_USER_AGENT_CHARS = 512
     private const val MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
     private const val MAX_HEADER_COUNT = 64
     private const val MAX_HEADER_NAME_CHARS = 256

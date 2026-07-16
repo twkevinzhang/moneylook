@@ -15,12 +15,18 @@ class BrowserRequestTest {
     @Test
     fun parsesOpenAndXhrRequestContract() {
         val open = BrowserRequestJsonParser.parseOpen(
-            """{"url":"https://example.com/login","timeoutMs":1234,"settleMs":500}""",
+            """{
+                "url":"https://example.com/login",
+                "timeoutMs":1234,
+                "settleMs":500,
+                "userAgent":"Mozilla/5.0 Moneylook-Test/1.0"
+            }""".trimIndent(),
             gson,
         )
         assertEquals("https://example.com/login", open.url)
         assertEquals(1234L, open.timeoutMs)
         assertEquals(500L, open.settleMs)
+        assertEquals("Mozilla/5.0 Moneylook-Test/1.0", open.userAgent)
 
         val request = BrowserRequestJsonParser.parseRequest(
             """{
@@ -41,6 +47,46 @@ class BrowserRequestTest {
         assertEquals("base64", request.responseEncoding)
         assertEquals(2345L, request.timeoutMs)
         assertFalse(request.withCredentials)
+    }
+
+    @Test
+    fun openAcceptsOnlyBoundedPrintableAsciiUserAgent() {
+        val absent = BrowserRequestJsonParser.parseOpen(
+            """{"url":"https://example.com/login"}""",
+            gson,
+        )
+        assertEquals(null, absent.userAgent)
+
+        listOf(" ", "A".repeat(512)).forEach { userAgent ->
+            assertEquals(
+                userAgent,
+                BrowserRequestJsonParser.parseOpen(
+                    gson.toJson(mapOf("url" to "https://example.com/login", "userAgent" to userAgent)),
+                    gson,
+                ).userAgent,
+            )
+        }
+
+        listOf(
+            "",
+            "A".repeat(513),
+            "Mozilla/5.0\r\nInjected: true",
+            "Mozilla/5.0\tTabbed",
+            "control-\u001f",
+            "delete-\u007f",
+            "非-ASCII",
+        ).forEach { userAgent ->
+            val error = assertThrows(SafeBrowserException::class.java) {
+                BrowserRequestJsonParser.parseOpen(
+                    gson.toJson(mapOf("url" to "https://example.com/login", "userAgent" to userAgent)),
+                    gson,
+                )
+            }
+            assertEquals("INVALID_REQUEST", error.code)
+            if (userAgent.isNotEmpty()) {
+                assertFalse(error.message.orEmpty().contains(userAgent))
+            }
+        }
     }
 
     @Test
