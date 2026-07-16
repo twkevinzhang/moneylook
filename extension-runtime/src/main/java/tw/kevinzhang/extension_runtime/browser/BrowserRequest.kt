@@ -5,6 +5,10 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.ByteString.Companion.decodeBase64
+import java.nio.CharBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 internal data class BrowserOpenRequest(
@@ -16,6 +20,13 @@ internal data class BrowserOpenRequest(
 internal data class BrowserOpenResponse(
     val url: String,
     val origin: String,
+)
+
+internal data class BrowserFormPostRequest(
+    val url: String,
+    val body: ByteArray,
+    val timeoutMs: Long,
+    val settleMs: Long,
 )
 
 internal data class BrowserXhrRequest(
@@ -82,6 +93,19 @@ internal object BrowserRequestJsonParser {
         )
     }
 
+    fun parsePost(json: String, gson: Gson): BrowserFormPostRequest {
+        val root = parseObject(json, gson)
+        val url = root.string("url") ?: throw invalid("url is required")
+        validateAbsoluteHttpUrl(url)
+        val body = root.string("body") ?: throw invalid("body is required")
+        return BrowserFormPostRequest(
+            url = url,
+            body = encodeUtf8Body(body),
+            timeoutMs = root.long("timeoutMs", DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
+            settleMs = root.long("settleMs", DEFAULT_POST_SETTLE_MS, 0, MAX_SETTLE_MS),
+        )
+    }
+
     fun parseRequest(json: String, gson: Gson): BrowserXhrRequest {
         val root = parseObject(json, gson)
         val url = root.string("url") ?: throw invalid("url is required")
@@ -137,6 +161,21 @@ internal object BrowserRequestJsonParser {
         if (size > MAX_REQUEST_BODY_BYTES) {
             throw SafeBrowserException("BODY_TOO_LARGE", "request body exceeds size limit")
         }
+    }
+
+    private fun encodeUtf8Body(body: String): ByteArray {
+        val buffer = try {
+            StandardCharsets.UTF_8.newEncoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .encode(CharBuffer.wrap(body))
+        } catch (e: CharacterCodingException) {
+            throw SafeBrowserException("INVALID_BODY", "body is not valid UTF-8 text")
+        }
+        if (buffer.remaining() > MAX_REQUEST_BODY_BYTES) {
+            throw SafeBrowserException("BODY_TOO_LARGE", "request body exceeds size limit")
+        }
+        return ByteArray(buffer.remaining()).also(buffer::get)
     }
 
     private fun parseHeaders(element: JsonElement?): Map<String, List<String>> {
@@ -204,6 +243,7 @@ internal object BrowserRequestJsonParser {
     private val BODY_ENCODINGS = setOf("utf8", "base64")
     private val RESPONSE_ENCODINGS = setOf("text", "base64")
     private const val DEFAULT_TIMEOUT_MS = 30_000L
+    private const val DEFAULT_POST_SETTLE_MS = 500L
     private const val MAX_TIMEOUT_MS = 30_000L
     private const val MAX_SETTLE_MS = 5_000L
     private const val MAX_URL_CHARS = 16_384

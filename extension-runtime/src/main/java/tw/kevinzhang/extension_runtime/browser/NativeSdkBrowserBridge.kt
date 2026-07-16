@@ -33,6 +33,13 @@ internal class NativeSdkBrowserBridge(
     }
 
     @JavascriptInterface
+    fun post(id: String, requestJson: String) {
+        execute(id, requestJson) {
+            session.post(BrowserRequestJsonParser.parsePost(requestJson, gson))
+        }
+    }
+
+    @JavascriptInterface
     fun request(id: String, requestJson: String) {
         execute(id, requestJson) {
             session.request(BrowserRequestJsonParser.parseRequest(requestJson, gson))
