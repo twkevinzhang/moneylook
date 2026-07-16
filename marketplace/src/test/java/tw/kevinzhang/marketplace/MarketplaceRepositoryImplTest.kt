@@ -44,6 +44,13 @@ class MarketplaceRepositoryImplTest {
         assertEquals(rawUrl, repo.toRawBase(rawUrl))
     }
 
+    @Test
+    fun `marketplace downloads revalidate github raw content`() {
+        val request = repo.buildRequest("https://raw.githubusercontent.com/owner/repo/main/index.min.json")
+
+        assertEquals("no-cache", request.header("Cache-Control"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `non-github url throws IllegalArgumentException`() {
         repo.toRawBase("https://gitlab.com/owner/repo")
