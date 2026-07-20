@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.extension_runtime.browser.BrowserWebViewSession
 import tw.kevinzhang.extension_runtime.browser.NativeSdkBrowserBridge
@@ -337,28 +338,78 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
     val type = object : TypeToken<Map<String, Any>>() {}.type
     val map: Map<String, Any> = gson.fromJson(json, type)
     val rawList = map["accounts"] as? List<*> ?: return null
-    val accounts = rawList.mapNotNull { item ->
-        (item as? Map<*, *>)?.let {
-            val name = it["name"] as? String ?: return@mapNotNull null
-            val balance = (it["balance"] as? Number)?.toDouble() ?: return@mapNotNull null
-            val currency = it["currency"] as? String ?: "TWD"
-            val no = it["no"] as? String
-            val transfers = (it["transfers"] as? List<*>)?.mapNotNull { transfer ->
-                (transfer as? Map<*, *>)?.let { transferMap ->
-                    val txnDateTime = transferMap["txnDateTime"] as? String ?: return@mapNotNull null
-                    val description = transferMap["description"] as? String ?: ""
-                    val amount = (transferMap["amount"] as? Number)?.toDouble() ?: 0.0
-                    val balanceAtTransfer = (transferMap["balance"] as? Number)?.toDouble() ?: 0.0
-                    val memo = transferMap["memo"] as? String ?: ""
-                    TransferData(txnDateTime, description, amount, balanceAtTransfer, memo)
-                }
-            } ?: emptyList()
-            AccountData(name, balance, currency, no, transfers)
+    val accounts = rawList.map { item ->
+        val account = item as? Map<*, *> ?: return SyncResult.Error("script result contains invalid account")
+        val name = account["name"] as? String
+            ?: return SyncResult.Error("script result contains invalid account")
+        val balance = finiteNumber(account["balance"])
+            ?: return SyncResult.Error("script result contains invalid account balance")
+        val currency = account["currency"] as? String ?: "TWD"
+        val kind = (if ("kind" in account) parseAssetKind(account["kind"]) else AssetKind.DEPOSIT)
+            ?: return SyncResult.Error("script result contains invalid account kind")
+        val no = optionalString(account, "no")
+            ?: return SyncResult.Error("script result contains invalid account")
+        val branchName = optionalString(account, "branchName")
+            ?: return SyncResult.Error("script result contains invalid account")
+        val availableCredit = optionalFiniteNumber(account, "availableCredit")
+            ?: return SyncResult.Error("script result contains invalid available credit")
+        val creditLimit = optionalFiniteNumber(account, "creditLimit")
+            ?: return SyncResult.Error("script result contains invalid credit limit")
+        if (kind != AssetKind.CREDIT_CARD && (availableCredit.value != null || creditLimit.value != null)) {
+            return SyncResult.Error("script result contains credit fields for a non-card account")
         }
+        if (kind != AssetKind.DEPOSIT && balance < 0) {
+            return SyncResult.Error("script result contains invalid debt balance")
+        }
+
+        val transfers = (account["transfers"] as? List<*>)?.mapNotNull { transfer ->
+            (transfer as? Map<*, *>)?.let { transferMap ->
+                val txnDateTime = transferMap["txnDateTime"] as? String ?: return@mapNotNull null
+                val description = transferMap["description"] as? String ?: ""
+                val amount = (transferMap["amount"] as? Number)?.toDouble() ?: 0.0
+                val balanceAtTransfer = (transferMap["balance"] as? Number)?.toDouble() ?: 0.0
+                val memo = transferMap["memo"] as? String ?: ""
+                TransferData(txnDateTime, description, amount, balanceAtTransfer, memo)
+            }
+        } ?: emptyList()
+        AccountData(
+            name = name,
+            balance = balance,
+            currency = currency,
+            no = no.value,
+            kind = kind,
+            branchName = branchName.value,
+            availableCredit = availableCredit.value,
+            creditLimit = creditLimit.value,
+            transfers = transfers,
+        )
     }
     SyncResult.Success(accounts)
 } catch (e: CancellationException) {
     throw e
 } catch (e: Exception) {
     SyncResult.Error("failed to parse script result")
+}
+
+private data class OptionalValue<T>(val value: T?)
+
+private fun optionalString(account: Map<*, *>, key: String): OptionalValue<String>? = when {
+    key !in account -> OptionalValue(null)
+    account[key] is String -> OptionalValue(account[key] as String)
+    else -> null
+}
+
+private fun optionalFiniteNumber(account: Map<*, *>, key: String): OptionalValue<Double>? = when {
+    key !in account -> OptionalValue(null)
+    else -> finiteNumber(account[key])?.let(::OptionalValue)
+}
+
+private fun finiteNumber(value: Any?): Double? =
+    (value as? Number)?.toDouble()?.takeIf { it.isFinite() }
+
+private fun parseAssetKind(value: Any?): AssetKind? = when (value) {
+    "deposit" -> AssetKind.DEPOSIT
+    "credit_card" -> AssetKind.CREDIT_CARD
+    "loan" -> AssetKind.LOAN
+    else -> null
 }

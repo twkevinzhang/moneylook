@@ -19,8 +19,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
@@ -57,6 +60,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.moneylook.schedule.ScheduleStatus
 
@@ -400,6 +404,12 @@ private fun ExtensionIcon(extension: InstalledExtension) {
 
 @Composable
 private fun AccountRow(account: Account, onClick: () -> Unit) {
+    val presentation = accountRowPresentation(
+        kind = account.kind,
+        balance = account.balance,
+        currency = account.currency,
+        availableCredit = account.availableCredit,
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -407,17 +417,38 @@ private fun AccountRow(account: Account, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Icon(
+            imageVector = accountAssetIcon(account.kind),
+            contentDescription = accountAssetIconDescription(account.kind),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp),
+        ) {
             Text(
                 text = account.accountName,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            presentation.supportingText?.let { supportingText ->
+                Text(
+                    text = supportingText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(
-                text = formatBalance(account),
+                text = presentation.primaryAmount,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
+                color = if (presentation.isLiability) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
             )
             Text(
                 text = formatRelativeTime(account.lastSyncAt),
@@ -426,6 +457,18 @@ private fun AccountRow(account: Account, onClick: () -> Unit) {
             )
         }
     }
+}
+
+private fun accountAssetIcon(kind: AssetKind) = when (kind) {
+    AssetKind.DEPOSIT -> Icons.Default.AccountBalance
+    AssetKind.CREDIT_CARD -> Icons.Default.CreditCard
+    AssetKind.LOAN -> Icons.Default.Payments
+}
+
+private fun accountAssetIconDescription(kind: AssetKind) = when (kind) {
+    AssetKind.DEPOSIT -> "存款帳戶"
+    AssetKind.CREDIT_CARD -> "信用卡"
+    AssetKind.LOAN -> "貸款"
 }
 
 @Composable
@@ -442,14 +485,6 @@ private fun ScheduleStatusLabel(status: ScheduleStatus, remainingMs: Long) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
         )
-    }
-}
-
-private fun formatBalance(account: Account): String {
-    return if (account.currency == "TWD") {
-        "$ %,.0f".format(account.balance)
-    } else {
-        "${account.currency} ${"%.2f".format(account.balance)}"
     }
 }
 

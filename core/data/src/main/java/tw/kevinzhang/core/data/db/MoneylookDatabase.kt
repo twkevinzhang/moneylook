@@ -2,6 +2,7 @@ package tw.kevinzhang.core.data.db
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.InstalledExtension
@@ -9,9 +10,10 @@ import tw.kevinzhang.core.data.model.Transfer
 
 @Database(
     entities = [Account::class, CredentialProfile::class, InstalledExtension::class, Transfer::class],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
+@TypeConverters(AssetKindConverters::class)
 abstract class MoneylookDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun credentialProfileDao(): CredentialProfileDao
