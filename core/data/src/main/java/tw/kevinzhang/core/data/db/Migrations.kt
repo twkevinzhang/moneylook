@@ -221,3 +221,13 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         db.execSQL("DROP TABLE `credential_profiles_backup`")
     }
 }
+
+/** Adds typed asset semantics without rebuilding tables that hold credential profiles. */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `kind` TEXT NOT NULL DEFAULT 'DEPOSIT'")
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `branchName` TEXT")
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `availableCredit` REAL")
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `creditLimit` REAL")
+    }
+}

@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
 import tw.kevinzhang.extension_runtime.data.SyncResult
 
@@ -90,10 +91,57 @@ class ExtensionRunnerContractTest {
         ) as SyncResult.Success
         assertEquals("Checking", parsed.accounts.single().name)
         assertEquals(-2.0, parsed.accounts.single().transfers.single().amount, 0.0)
+        assertEquals(AssetKind.DEPOSIT, parsed.accounts.single().kind)
 
         val secret = "credential-should-not-escape"
         val invalid = parseAccounts("{invalid:$secret", Gson()) as SyncResult.Error
         assertFalse(invalid.message.contains(secret))
         assertEquals(null, invalid.cause)
+    }
+
+    @Test
+    fun `parses typed card account fields and defaults legacy accounts to deposits`() {
+        val parsed = parseAccounts(
+            """{"accounts":[
+                {"name":"Legacy","balance":0,"currency":"TWD"},
+                {"name":"Card","balance":1200.5,"currency":"TWD","no":"1234",
+                 "kind":"credit_card","branchName":"忠孝分行",
+                 "availableCredit":8800.5,"creditLimit":10000}
+            ]}""".trimIndent(),
+            Gson(),
+        ) as SyncResult.Success
+
+        assertEquals(AssetKind.DEPOSIT, parsed.accounts[0].kind)
+        parsed.accounts[1].also { card ->
+            assertEquals(AssetKind.CREDIT_CARD, card.kind)
+            assertEquals("忠孝分行", card.branchName)
+            assertEquals(8800.5, card.availableCredit!!, 0.0)
+            assertEquals(10000.0, card.creditLimit!!, 0.0)
+        }
+    }
+
+    @Test
+    fun `rejects invalid asset kinds and non finite balances`() {
+        val invalidKind = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"kind":"card"}]}""",
+            Gson(),
+        )
+        val nonFiniteBalance = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1e999}]}""",
+            Gson(),
+        )
+        val nonFiniteCreditLimit = parseAccounts(
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","creditLimit":1e999}]}""",
+            Gson(),
+        )
+        val negativeLoanBalance = parseAccounts(
+            """{"accounts":[{"name":"Loan","balance":-1,"kind":"loan"}]}""",
+            Gson(),
+        )
+
+        assertTrue(invalidKind is SyncResult.Error)
+        assertTrue(nonFiniteBalance is SyncResult.Error)
+        assertTrue(nonFiniteCreditLimit is SyncResult.Error)
+        assertTrue(negativeLoanBalance is SyncResult.Error)
     }
 }
