@@ -17,6 +17,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_8_9
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
+import tw.kevinzhang.core.data.db.TransferCursorStore
 import javax.inject.Singleton
 
 @Module
@@ -44,6 +45,9 @@ object DataModule {
 
     @Provides
     fun provideTransferDao(db: MoneylookDatabase): TransferDao = db.transferDao()
+
+    @Provides
+    fun provideTransferCursorStore(transferDao: TransferDao): TransferCursorStore = transferDao
 
     @Provides
     fun provideTransferSyncStore(db: MoneylookDatabase): TransferSyncStore = db.syncResultDao()

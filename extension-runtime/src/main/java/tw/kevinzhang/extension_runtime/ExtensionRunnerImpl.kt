@@ -50,6 +50,7 @@ class ExtensionRunnerImpl @Inject constructor(
     override suspend fun run(
         extension: InstalledExtension,
         credential: ExtensionCredential,
+        syncContext: ExtensionSyncContext,
     ): SyncResult = withContext(Dispatchers.IO) {
         val scriptFile = File(extension.syncTriggerCachePath)
         if (!scriptFile.isFile) return@withContext SyncResult.Error("extension script file not found")
@@ -65,12 +66,13 @@ class ExtensionRunnerImpl @Inject constructor(
         }
         val canonicalCredentialJson = canonicalCredentialJson(credential.json)
             ?: return@withContext SyncResult.Error("stored credential JSON is invalid")
-        runInWebView(script, ExtensionCredential(canonicalCredentialJson))
+        runInWebView(script, ExtensionCredential(canonicalCredentialJson), syncContext)
     }
 
     private suspend fun runInWebView(
         script: String,
         credential: ExtensionCredential,
+        syncContext: ExtensionSyncContext,
     ): SyncResult = withContext(Dispatchers.Main) {
         val deferred = CompletableDeferred<SyncResult>()
         val webView = WebView(context)
@@ -109,7 +111,7 @@ class ExtensionRunnerImpl @Inject constructor(
 
             override fun onPageFinished(view: WebView, url: String) {
                 if (evaluated.compareAndSet(false, true)) {
-                    view.evaluateJavascript(buildWrappedScript(script, credential), null)
+                    view.evaluateJavascript(buildWrappedScript(script, credential, syncContext), null)
                 }
             }
         }
@@ -129,11 +131,16 @@ class ExtensionRunnerImpl @Inject constructor(
         }
     }
 
-    internal fun buildWrappedScript(script: String, credential: ExtensionCredential): String {
+    internal fun buildWrappedScript(
+        script: String,
+        credential: ExtensionCredential,
+        syncContext: ExtensionSyncContext,
+    ): String {
         val scriptLiteral = gson.toJson(script)
         val credentialLiteral = requireNotNull(canonicalCredentialJson(credential.json)) {
             "stored credential JSON is invalid"
         }
+        val syncContextLiteral = gson.toJson(syncContext)
         return """
             (async function() {
                 'use strict';
@@ -220,6 +227,7 @@ class ExtensionRunnerImpl @Inject constructor(
                 };
                 const sdk = Object.freeze({
                     credential: deepFreeze($credentialLiteral),
+                    sync: deepFreeze($syncContextLiteral),
                     http: http,
                     browser: browser
                 });
