@@ -32,9 +32,23 @@ class ExtensionRunnerContractTest {
         val wrapper = runner.buildWrappedScript(
             "(async () => ({ accounts: [] }))()",
             ExtensionCredential("""{"username":"alice","password":"p@ssword"}"""),
+            ExtensionSyncContext(
+                transferCursors = listOf(
+                    ExtensionTransferCursor(
+                        accountNo = "000000000001",
+                        currency = "TWD",
+                        latestTxnDateTime = "2026-07-21T18:00:00+08:00",
+                    ),
+                ),
+            ),
         )
 
         assertTrue(wrapper.contains("credential: deepFreeze({\"username\":\"alice\",\"password\":\"p@ssword\"})"))
+        assertTrue(
+            wrapper.contains(
+                "sync: deepFreeze({\"transferCursors\":[{\"accountNo\":\"000000000001\",\"currency\":\"TWD\",\"latestTxnDateTime\":\"2026-07-21T18:00:00+08:00\"}]})",
+            ),
+        )
         assertTrue(wrapper.contains("Object.getOwnPropertyNames(value)"))
         assertFalse(wrapper.contains("credentials:"))
         assertTrue(wrapper.contains("return new Promise"))
@@ -54,6 +68,20 @@ class ExtensionRunnerContractTest {
         assertTrue(wrapper.contains("pending.reject({ code: 'BROWSER_CLOSED'"))
         assertTrue(wrapper.contains("__native_browser__.close()"))
         assertTrue(wrapper.contains("finally {\n        browser.close();"))
+    }
+
+    @Test
+    fun syncContextToStringRedactsCursorValues() {
+        val context = ExtensionSyncContext(
+            transferCursors = listOf(
+                ExtensionTransferCursor("000000000001", "TWD", "2026-07-21T18:00:00+08:00"),
+            ),
+        )
+
+        assertEquals("ExtensionSyncContext(transferCursors=1)", context.toString())
+        assertFalse(context.toString().contains("000000000001"))
+        assertFalse(context.toString().contains("2026-07-21"))
+        assertEquals("ExtensionTransferCursor([REDACTED])", context.transferCursors.single().toString())
     }
 
     @Test
