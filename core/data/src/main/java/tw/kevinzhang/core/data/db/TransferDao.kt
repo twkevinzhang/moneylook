@@ -8,7 +8,7 @@ import tw.kevinzhang.core.data.model.Transfer
 
 @Dao
 interface TransferDao {
-    @Query("SELECT * FROM transfers WHERE accountId = :accountId ORDER BY txnDateTime DESC LIMIT 50")
+    @Query("SELECT * FROM transfers WHERE accountId = :accountId ORDER BY txnDateTime DESC")
     fun observeByAccount(accountId: String): Flow<List<Transfer>>
 
     @Upsert

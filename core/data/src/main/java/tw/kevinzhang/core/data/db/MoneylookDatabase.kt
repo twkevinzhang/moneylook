@@ -10,7 +10,7 @@ import tw.kevinzhang.core.data.model.Transfer
 
 @Database(
     entities = [Account::class, CredentialProfile::class, InstalledExtension::class, Transfer::class],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
@@ -19,4 +19,5 @@ abstract class MoneylookDatabase : RoomDatabase() {
     abstract fun credentialProfileDao(): CredentialProfileDao
     abstract fun installedExtensionDao(): InstalledExtensionDao
     abstract fun transferDao(): TransferDao
+    abstract fun syncResultDao(): SyncResultDao
 }

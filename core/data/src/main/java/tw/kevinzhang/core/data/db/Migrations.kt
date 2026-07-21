@@ -231,3 +231,34 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         db.execSQL("ALTER TABLE `accounts` ADD COLUMN `creditLimit` REAL")
     }
 }
+
+/** Makes a transaction's running balance optional and records history-sync completeness per account. */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `transferSyncComplete` INTEGER")
+        db.execSQL(
+            """
+            CREATE TABLE `transfers_new` (
+                `id` TEXT NOT NULL,
+                `accountId` TEXT NOT NULL,
+                `extensionId` TEXT NOT NULL,
+                `txnDateTime` TEXT NOT NULL,
+                `description` TEXT NOT NULL,
+                `amount` REAL NOT NULL,
+                `balance` REAL,
+                `memo` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            """
+            INSERT INTO `transfers_new` (`id`, `accountId`, `extensionId`, `txnDateTime`, `description`, `amount`, `balance`, `memo`)
+            SELECT `id`, `accountId`, `extensionId`, `txnDateTime`, `description`, `amount`, `balance`, `memo`
+            FROM `transfers`
+            """.trimIndent(),
+        )
+        db.execSQL("DROP TABLE `transfers`")
+        db.execSQL("ALTER TABLE `transfers_new` RENAME TO `transfers`")
+    }
+}

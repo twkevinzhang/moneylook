@@ -34,7 +34,10 @@ import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
+import tw.kevinzhang.extension_runtime.data.TransferSyncData
+import tw.kevinzhang.extension_runtime.data.TransferSyncRangeData
 import java.io.File
+import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
@@ -362,16 +365,19 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             return SyncResult.Error("script result contains invalid debt balance")
         }
 
-        val transfers = (account["transfers"] as? List<*>)?.mapNotNull { transfer ->
-            (transfer as? Map<*, *>)?.let { transferMap ->
-                val txnDateTime = transferMap["txnDateTime"] as? String ?: return@mapNotNull null
-                val description = transferMap["description"] as? String ?: ""
-                val amount = (transferMap["amount"] as? Number)?.toDouble() ?: 0.0
-                val balanceAtTransfer = (transferMap["balance"] as? Number)?.toDouble() ?: 0.0
-                val memo = transferMap["memo"] as? String ?: ""
-                TransferData(txnDateTime, description, amount, balanceAtTransfer, memo)
+        val transferSync = if ("transferSync" in account) {
+            parseTransferSync(account) ?: return SyncResult.Error("script result contains invalid transfer sync")
+        } else {
+            null
+        }
+        val transfers = parseTransfers(account, requireIsoDate = transferSync != null)
+            ?: return SyncResult.Error("script result contains invalid transfer")
+        if (transferSync != null && transfers.any { transfer ->
+                !transferDateInRequestedRange(transfer.txnDateTime, transferSync)
             }
-        } ?: emptyList()
+        ) {
+            return SyncResult.Error("script result contains transfer outside requested range")
+        }
         AccountData(
             name = name,
             balance = balance,
@@ -382,6 +388,7 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             availableCredit = availableCredit.value,
             creditLimit = creditLimit.value,
             transfers = transfers,
+            transferSync = transferSync,
         )
     }
     SyncResult.Success(accounts)
@@ -406,6 +413,88 @@ private fun optionalFiniteNumber(account: Map<*, *>, key: String): OptionalValue
 
 private fun finiteNumber(value: Any?): Double? =
     (value as? Number)?.toDouble()?.takeIf { it.isFinite() }
+
+private fun parseTransfers(account: Map<*, *>, requireIsoDate: Boolean): List<TransferData>? {
+    if ("transfers" !in account) return emptyList()
+    val rawTransfers = account["transfers"] as? List<*> ?: return null
+    return rawTransfers.map { rawTransfer ->
+        val transfer = rawTransfer as? Map<*, *> ?: return null
+        val txnDateTime = (transfer["txnDateTime"] as? String)
+            ?.takeIf { it.isNotBlank() && (!requireIsoDate || parseTransferDate(it) != null) }
+            ?: return null
+        val description = optionalString(transfer, "description") ?: return null
+        val memo = optionalString(transfer, "memo") ?: return null
+        val amount = finiteNumber(transfer["amount"]) ?: return null
+        val balance = optionalFiniteNumber(transfer, "balance") ?: return null
+        val id = optionalString(transfer, "id")?.value
+        if (id != null && id.isBlank()) return null
+        TransferData(
+            txnDateTime = txnDateTime,
+            description = description.value ?: "",
+            amount = amount,
+            balance = balance.value,
+            memo = memo.value ?: "",
+            id = id,
+        )
+    }
+}
+
+private fun parseTransferSync(account: Map<*, *>): TransferSyncData? {
+    val rawSync = account["transferSync"] as? Map<*, *> ?: return null
+    val requestedStart = rawSync["requestedStart"] as? String ?: return null
+    val requestedEnd = rawSync["requestedEnd"] as? String ?: return null
+    val requestedStartDate = parseCalendarDate(requestedStart) ?: return null
+    val requestedEndDate = parseCalendarDate(requestedEnd) ?: return null
+    if (requestedStartDate > requestedEndDate) return null
+    val complete = rawSync["complete"] as? Boolean ?: return null
+    val rawRanges = rawSync["completedRanges"] as? List<*> ?: return null
+    val completedRanges = rawRanges.map { rawRange ->
+        val range = rawRange as? Map<*, *> ?: return null
+        val start = range["start"] as? String ?: return null
+        val end = range["end"] as? String ?: return null
+        val startDate = parseCalendarDate(start) ?: return null
+        val endDate = parseCalendarDate(end) ?: return null
+        if (startDate > endDate || startDate < requestedStartDate || endDate > requestedEndDate) return null
+        TransferSyncRangeData(start, end)
+    }
+    if (complete && !rangesCoverRequest(completedRanges, requestedStartDate, requestedEndDate)) return null
+    return TransferSyncData(requestedStart, requestedEnd, completedRanges, complete)
+}
+
+private fun parseTransferDate(value: String): LocalDate? =
+    value.take(10).takeIf { it.length == 10 }?.let(::parseCalendarDate)
+
+private fun parseCalendarDate(value: String): LocalDate? = try {
+    LocalDate.parse(value)
+} catch (_: Exception) {
+    null
+}
+
+private fun transferDateInRequestedRange(
+    txnDateTime: String,
+    sync: TransferSyncData,
+): Boolean {
+    val date = parseTransferDate(txnDateTime) ?: return false
+    val start = parseCalendarDate(sync.requestedStart) ?: return false
+    val end = parseCalendarDate(sync.requestedEnd) ?: return false
+    return date in start..end
+}
+
+private fun rangesCoverRequest(
+    ranges: List<TransferSyncRangeData>,
+    requestedStart: LocalDate,
+    requestedEnd: LocalDate,
+): Boolean {
+    var nextRequired = requestedStart
+    ranges.sortedBy { it.start }.forEach { range ->
+        val start = parseCalendarDate(range.start) ?: return false
+        val end = parseCalendarDate(range.end) ?: return false
+        if (start > nextRequired) return false
+        if (end >= requestedEnd) return true
+        if (end >= nextRequired) nextRequired = end.plusDays(1)
+    }
+    return false
+}
 
 private fun parseAssetKind(value: Any?): AssetKind? = when (value) {
     "deposit" -> AssetKind.DEPOSIT

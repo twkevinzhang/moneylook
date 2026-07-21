@@ -12,4 +12,6 @@ data class AccountData(
     val availableCredit: Double? = null,
     val creditLimit: Double? = null,
     val transfers: List<TransferData> = emptyList(),
+    /** Null keeps the legacy snapshot contract for extensions that do not download history. */
+    val transferSync: TransferSyncData? = null,
 )
