@@ -244,10 +244,88 @@ class SyncResultDaoTest {
         assertEquals("legacy", database.transferDao().observeByAccount("legacy").first().single { it.id == "next" }.accountId)
     }
 
+    @Test
+    fun `scoped replacement updates complete kinds and preserves failed or omitted kinds`() = runBlocking {
+        val store = database.syncResultDao()
+        val deposit = account("deposit", kind = AssetKind.DEPOSIT)
+        val card = account("card", kind = AssetKind.CREDIT_CARD)
+        val loan = account("loan", kind = AssetKind.LOAN)
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(deposit, card, loan),
+            transfers = listOf(
+                transfer("deposit-old", "2026-07-20", 1.0, accountId = "deposit"),
+                transfer("card-old", "2026-07-20", 2.0, accountId = "card"),
+                transfer("loan-old", "2026-07-20", 3.0, accountId = "loan"),
+            ),
+            refreshes = listOf(
+                AccountTransferRefresh("deposit", null),
+                AccountTransferRefresh("card", null),
+                AccountTransferRefresh("loan", null),
+            ),
+        )
+
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(deposit.copy(balance = 2.0)),
+            transfers = listOf(transfer("deposit-new", "2026-07-21", 4.0, accountId = "deposit")),
+            refreshes = listOf(AccountTransferRefresh("deposit", null)),
+            replaceKinds = setOf(AssetKind.DEPOSIT),
+        )
+
+        val accounts = database.accountDao().observeAll().first().associateBy(Account::id)
+        assertEquals(setOf("deposit", "card", "loan"), accounts.keys)
+        assertEquals(2.0, accounts.getValue("deposit").balance, 0.0)
+        assertEquals(listOf("deposit-new"), transferIds("deposit"))
+        assertEquals(listOf("card-old"), transferIds("card"))
+        assertEquals(listOf("loan-old"), transferIds("loan"))
+    }
+
+    @Test
+    fun `empty complete kind deletes only that kind while an empty scoped set is a no-op`() = runBlocking {
+        val store = database.syncResultDao()
+        val deposit = account("deposit", kind = AssetKind.DEPOSIT)
+        val card = account("card", kind = AssetKind.CREDIT_CARD)
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(deposit, card),
+            transfers = listOf(
+                transfer("deposit-old", "2026-07-20", 1.0, accountId = "deposit"),
+                transfer("card-old", "2026-07-20", 2.0, accountId = "card"),
+            ),
+            refreshes = listOf(AccountTransferRefresh("deposit", null), AccountTransferRefresh("card", null)),
+        )
+
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = emptyList(),
+            transfers = emptyList(),
+            refreshes = emptyList(),
+            replaceKinds = emptySet(),
+        )
+        assertEquals(setOf("deposit", "card"), database.accountDao().observeAll().first().map(Account::id).toSet())
+
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = emptyList(),
+            transfers = emptyList(),
+            refreshes = emptyList(),
+            replaceKinds = setOf(AssetKind.DEPOSIT),
+        )
+
+        assertEquals(listOf("card"), database.accountDao().observeAll().first().map(Account::id))
+        assertEquals(listOf("card-old"), transferIds("card"))
+        assertTrue(transferIds("deposit").isEmpty())
+    }
+
+    private suspend fun transferIds(accountId: String): List<String> =
+        database.transferDao().observeByAccount(accountId).first().map(Transfer::id)
+
     private fun account(
         id: String,
         accountNo: String? = null,
         sourceAccountKey: String? = null,
+        kind: AssetKind = AssetKind.DEPOSIT,
     ) = Account(
         id = id,
         extensionId = "extension",
@@ -258,6 +336,7 @@ class SyncResultDaoTest {
         lastSyncAt = 1,
         accountNo = accountNo,
         sourceAccountKey = sourceAccountKey,
+        kind = kind,
     )
 
     private fun transfer(

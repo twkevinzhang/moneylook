@@ -39,5 +39,7 @@ interface TransferSyncStore {
         refreshes: List<AccountTransferRefresh>,
         /** Proposed account ID to its unique, app-private legacy identity for one-time migration. */
         legacyIdentityByAccountId: Map<String, LegacyAccountIdentity> = emptyMap(),
+        /** Null keeps legacy whole-extension replacement; otherwise only these kinds are authoritative. */
+        replaceKinds: Set<AssetKind>? = null,
     )
 }

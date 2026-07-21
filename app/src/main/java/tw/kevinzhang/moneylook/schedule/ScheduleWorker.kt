@@ -24,6 +24,7 @@ import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.moneylook.sync.BankSyncCoordinator
 import tw.kevinzhang.moneylook.sync.SyncResultPersister
+import tw.kevinzhang.moneylook.sync.appLastRunStatus
 import java.time.Duration
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -51,7 +52,11 @@ class ScheduleWorker @AssistedInject constructor(
             when (val result = syncCoordinator.sync(extension, profile)) {
                 is SyncResult.Success -> {
                     syncResultPersister.persist(extension, result)
-                    credentialProfileDao.updateLastRun(extensionId, System.currentTimeMillis(), "success")
+                    credentialProfileDao.updateLastRun(
+                        extensionId,
+                        System.currentTimeMillis(),
+                        result.appLastRunStatus,
+                    )
                     enqueueNext(applicationContext, profile)
                     Result.success()
                 }

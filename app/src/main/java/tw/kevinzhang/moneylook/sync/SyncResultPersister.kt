@@ -9,6 +9,7 @@ import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.AccountData
+import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -97,14 +98,24 @@ class SyncResultPersister @Inject constructor(
             )
         }
         transferSyncStore.replaceSnapshot(
-            extension.id,
-            accounts,
-            transfers,
-            refreshes,
-            legacyIdentityByProposedId.filterValues { it in uniqueLegacyIdentities },
+            extensionId = extension.id,
+            accounts = accounts,
+            transfers = transfers,
+            refreshes = refreshes,
+            legacyIdentityByAccountId = legacyIdentityByProposedId
+                .filterValues { it in uniqueLegacyIdentities },
+            replaceKinds = result.kindSync
+                ?.filter { it.status == KindSyncStatus.COMPLETE }
+                ?.mapTo(mutableSetOf()) { it.kind },
         )
     }
 }
+
+internal val SyncResult.Success.hasPartialKindFailure: Boolean
+    get() = kindSync?.any { it.status == KindSyncStatus.FAILED } == true
+
+internal val SyncResult.Success.appLastRunStatus: String
+    get() = if (hasPartialKindFailure) "partial" else "success"
 
 /** Only source-key upgrades with a full legacy account number are eligible for ID preservation. */
 private fun legacyIdentityForSourceKey(data: AccountData): LegacyAccountIdentity? {

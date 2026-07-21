@@ -243,13 +243,17 @@ private fun ExtensionCard(
                 }
             }
 
-            // ── Error message ─────────────────────────────────────────────
+            // ── Sync message ──────────────────────────────────────────────
             if (errorMessage != null) {
                 HorizontalDivider()
                 Text(
                     text = errorMessage,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = if (syncState == SyncState.PARTIAL) {
+                        MaterialTheme.colorScheme.tertiary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
@@ -461,12 +465,14 @@ private fun AccountRow(account: Account, onClick: () -> Unit) {
 
 private fun accountAssetIcon(kind: AssetKind) = when (kind) {
     AssetKind.DEPOSIT -> Icons.Default.AccountBalance
+    AssetKind.TIME_DEPOSIT -> Icons.Default.AccountBalance
     AssetKind.CREDIT_CARD -> Icons.Default.CreditCard
     AssetKind.LOAN -> Icons.Default.Payments
 }
 
 private fun accountAssetIconDescription(kind: AssetKind) = when (kind) {
     AssetKind.DEPOSIT -> "存款帳戶"
+    AssetKind.TIME_DEPOSIT -> "定期存款"
     AssetKind.CREDIT_CARD -> "信用卡"
     AssetKind.LOAN -> "貸款"
 }

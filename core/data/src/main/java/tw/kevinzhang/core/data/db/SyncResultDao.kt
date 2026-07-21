@@ -5,6 +5,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.Transfer
 
 /**
@@ -20,11 +21,15 @@ abstract class SyncResultDao : TransferSyncStore {
         transfers: List<Transfer>,
         refreshes: List<AccountTransferRefresh>,
         legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
+        replaceKinds: Set<AssetKind>?,
     ) {
-        if (accounts.isEmpty()) {
+        if (replaceKinds == null && accounts.isEmpty()) {
             deleteTransfersByExtensionId(extensionId)
             deleteAccountsByExtensionId(extensionId)
             return
+        }
+        require(replaceKinds == null || accounts.all { it.kind in replaceKinds }) {
+            "scoped snapshot contains an account outside its authoritative kinds"
         }
 
         val idRewrites = accounts.associate { account ->
@@ -42,10 +47,22 @@ abstract class SyncResultDao : TransferSyncStore {
         val resolvedRefreshes = refreshes.map { refresh ->
             refresh.copy(accountId = idRewrites[refresh.accountId] ?: refresh.accountId)
         }
-        val accountIds = resolvedAccounts.map(Account::id)
-        deleteTransfersForRemovedAccounts(extensionId, accountIds)
-        deleteAccountsByExtensionId(extensionId)
-        upsertAccounts(resolvedAccounts)
+        if (replaceKinds == null) {
+            val accountIds = resolvedAccounts.map(Account::id)
+            deleteTransfersForRemovedAccounts(extensionId, accountIds)
+            deleteAccountsByExtensionId(extensionId)
+        } else {
+            replaceKinds.forEach { kind ->
+                val accountIds = resolvedAccounts.filter { it.kind == kind }.map(Account::id)
+                if (accountIds.isEmpty()) {
+                    deleteTransfersByExtensionIdAndKind(extensionId, kind)
+                } else {
+                    deleteTransfersForRemovedAccountsByKind(extensionId, kind, accountIds)
+                }
+                deleteAccountsByExtensionIdAndKind(extensionId, kind)
+            }
+        }
+        if (resolvedAccounts.isNotEmpty()) upsertAccounts(resolvedAccounts)
 
         resolvedRefreshes.forEach { refresh ->
             val completedRanges = refresh.completedRanges
@@ -68,6 +85,9 @@ abstract class SyncResultDao : TransferSyncStore {
 
     @Query("DELETE FROM accounts WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteAccountsByExtensionId(extensionId: String)
+
+    @Query("DELETE FROM accounts WHERE extensionId = :extensionId AND kind = :kind")
+    protected abstract suspend fun deleteAccountsByExtensionIdAndKind(extensionId: String, kind: AssetKind)
 
     @Query(
         """
@@ -105,9 +125,39 @@ abstract class SyncResultDao : TransferSyncStore {
     @Query("DELETE FROM transfers WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteTransfersByExtensionId(extensionId: String)
 
+    @Query(
+        """
+        DELETE FROM transfers
+        WHERE accountId IN (
+            SELECT id FROM accounts WHERE extensionId = :extensionId AND kind = :kind
+        )
+        """,
+    )
+    protected abstract suspend fun deleteTransfersByExtensionIdAndKind(
+        extensionId: String,
+        kind: AssetKind,
+    )
+
     @Query("DELETE FROM transfers WHERE extensionId = :extensionId AND accountId NOT IN (:accountIds)")
     protected abstract suspend fun deleteTransfersForRemovedAccounts(
         extensionId: String,
+        accountIds: List<String>,
+    )
+
+    @Query(
+        """
+        DELETE FROM transfers
+        WHERE accountId IN (
+            SELECT id FROM accounts
+            WHERE extensionId = :extensionId
+              AND kind = :kind
+              AND id NOT IN (:accountIds)
+        )
+        """,
+    )
+    protected abstract suspend fun deleteTransfersForRemovedAccountsByKind(
+        extensionId: String,
+        kind: AssetKind,
         accountIds: List<String>,
     )
 

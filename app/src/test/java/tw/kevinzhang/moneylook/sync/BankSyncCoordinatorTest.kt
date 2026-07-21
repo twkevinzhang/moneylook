@@ -87,11 +87,33 @@ class BankSyncCoordinatorTest {
         assertEquals("extension login failed", (result as SyncResult.Error).message)
     }
 
-    private fun cursorStore() = object : TransferCursorStore {
+    @Test
+    fun mapsTimeDepositCursorKindToSdkContract() = runBlocking {
+        var receivedSyncContext: ExtensionSyncContext? = null
+        val coordinator = BankSyncCoordinator(
+            extensionRunner = object : ExtensionRunner {
+                override suspend fun run(
+                    extension: InstalledExtension,
+                    credential: ExtensionCredential,
+                    syncContext: ExtensionSyncContext,
+                ): SyncResult {
+                    receivedSyncContext = syncContext
+                    return SyncResult.Success(emptyList())
+                }
+            },
+            transferCursorStore = cursorStore(AssetKind.TIME_DEPOSIT),
+        )
+
+        coordinator.sync(extension, profile)
+
+        assertEquals("time_deposit", receivedSyncContext?.transferCursors?.single()?.kind)
+    }
+
+    private fun cursorStore(kind: AssetKind = AssetKind.DEPOSIT) = object : TransferCursorStore {
         override suspend fun latestByExtension(extensionId: String): List<TransferSyncCursor> = listOf(
             TransferSyncCursor(
                 sourceAccountKey = "deposit-opaque-1",
-                kind = AssetKind.DEPOSIT,
+                kind = kind,
                 currency = "TWD",
                 latestTxnDateTime = "2026-07-21T18:00:00+08:00",
             ),

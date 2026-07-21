@@ -11,6 +11,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
+import tw.kevinzhang.extension_runtime.data.KindSyncResult
+import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
 
 @RunWith(RobolectricTestRunner::class)
@@ -232,11 +234,60 @@ class ExtensionRunnerContractTest {
         ) as SyncResult.Success
 
         assertEquals(AssetKind.DEPOSIT, parsed.accounts[0].kind)
+        assertEquals(null, parsed.kindSync)
         parsed.accounts[1].also { card ->
             assertEquals(AssetKind.CREDIT_CARD, card.kind)
             assertEquals("忠孝分行", card.branchName)
             assertEquals(8800.5, card.availableCredit!!, 0.0)
             assertEquals(10000.0, card.creditLimit!!, 0.0)
+        }
+    }
+
+    @Test
+    fun `parses complete and failed per-kind sync results with time deposits`() {
+        val parsed = parseAccounts(
+            """{"accounts":[
+                {"name":"Checking","balance":1,"kind":"deposit"},
+                {"name":"Term","balance":2,"kind":"time_deposit"}
+            ],"kindSync":[
+                {"kind":"deposit","status":"complete"},
+                {"kind":"time_deposit","status":"complete"},
+                {"kind":"credit_card","status":"failed","code":"NO_PRODUCT"}
+            ]}""".trimIndent(),
+            Gson(),
+        ) as SyncResult.Success
+
+        assertEquals(AssetKind.TIME_DEPOSIT, parsed.accounts[1].kind)
+        assertEquals(
+            listOf(
+                KindSyncResult(AssetKind.DEPOSIT, KindSyncStatus.COMPLETE),
+                KindSyncResult(AssetKind.TIME_DEPOSIT, KindSyncStatus.COMPLETE),
+                KindSyncResult(AssetKind.CREDIT_CARD, KindSyncStatus.FAILED, "NO_PRODUCT"),
+            ),
+            parsed.kindSync,
+        )
+    }
+
+    @Test
+    fun `rejects invalid or unsafe per-kind sync results`() {
+        val secret = "credential-should-not-escape"
+        val invalidResults = listOf(
+            // Duplicate kind.
+            """{"accounts":[],"kindSync":[{"kind":"deposit","status":"complete"},{"kind":"deposit","status":"failed"}]}""",
+            // A failed kind must not return its account.
+            """{"accounts":[{"name":"Term","balance":1,"kind":"time_deposit"}],"kindSync":[{"kind":"time_deposit","status":"failed"}]}""",
+            // All returned account kinds must have a COMPLETE result.
+            """{"accounts":[{"name":"Loan","balance":1,"kind":"loan"}],"kindSync":[{"kind":"deposit","status":"complete"}]}""",
+            // At least one kind must have completed.
+            """{"accounts":[],"kindSync":[{"kind":"loan","status":"failed","code":"NO_PRODUCT"}]}""",
+            // Codes are fixed operational identifiers, not bank messages or payload data.
+            """{"accounts":[],"kindSync":[{"kind":"deposit","status":"complete"},{"kind":"loan","status":"failed","code":"$secret"}]}""",
+            """{"accounts":[],"kindSync":[{"kind":"deposit","status":"complete"},{"kind":"loan","status":"failed","code":"${"A".repeat(33)}"}]}""",
+        )
+
+        invalidResults.forEach { json ->
+            val result = parseAccounts(json, Gson()) as SyncResult.Error
+            assertFalse(result.message.contains(secret))
         }
     }
 
