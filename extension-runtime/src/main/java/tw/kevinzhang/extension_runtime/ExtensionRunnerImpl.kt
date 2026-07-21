@@ -360,6 +360,13 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             ?: return SyncResult.Error("script result contains invalid account kind")
         val no = optionalString(account, "no")
             ?: return SyncResult.Error("script result contains invalid account")
+        val sourceAccountKey = optionalNonBlankString(account, "sourceAccountKey")
+            ?: return SyncResult.Error("script result contains invalid source account key")
+        if (sourceAccountKey.value != null &&
+            (!SOURCE_ACCOUNT_KEY_PATTERN.matches(sourceAccountKey.value) || sourceAccountKey.value == no.value)
+        ) {
+            return SyncResult.Error("script result contains invalid source account key")
+        }
         val branchName = optionalString(account, "branchName")
             ?: return SyncResult.Error("script result contains invalid account")
         val availableCredit = optionalFiniteNumber(account, "availableCredit")
@@ -391,6 +398,7 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             balance = balance,
             currency = currency,
             no = no.value,
+            sourceAccountKey = sourceAccountKey.value,
             kind = kind,
             branchName = branchName.value,
             availableCredit = availableCredit.value,
@@ -399,7 +407,14 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             transferSync = transferSync,
         )
     }
-    SyncResult.Success(accounts)
+    val cursorIdentities = accounts.mapNotNull { account ->
+        account.sourceAccountKey?.let { key -> listOf(key, account.kind.name, account.currency) }
+    }
+    if (cursorIdentities.size != cursorIdentities.distinct().size) {
+        SyncResult.Error("script result contains duplicate source account key")
+    } else {
+        SyncResult.Success(accounts)
+    }
 } catch (e: CancellationException) {
     throw e
 } catch (e: Exception) {
@@ -408,9 +423,18 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
 
 private data class OptionalValue<T>(val value: T?)
 
+/** Source keys are deliberately constrained so raw account/card numbers cannot enter sdk.sync. */
+private val SOURCE_ACCOUNT_KEY_PATTERN = Regex("[0-9a-f]{64}")
+
 private fun optionalString(account: Map<*, *>, key: String): OptionalValue<String>? = when {
     key !in account -> OptionalValue(null)
     account[key] is String -> OptionalValue(account[key] as String)
+    else -> null
+}
+
+private fun optionalNonBlankString(account: Map<*, *>, key: String): OptionalValue<String>? = when {
+    key !in account -> OptionalValue(null)
+    account[key] is String && (account[key] as String).isNotBlank() -> OptionalValue(account[key] as String)
     else -> null
 }
 
@@ -436,12 +460,16 @@ private fun parseTransfers(account: Map<*, *>, requireIsoDate: Boolean): List<Tr
         val balance = optionalFiniteNumber(transfer, "balance") ?: return null
         val id = optionalString(transfer, "id")?.value
         if (id != null && id.isBlank()) return null
+        val type = optionalNonBlankString(transfer, "type") ?: return null
+        val status = optionalNonBlankString(transfer, "status") ?: return null
         TransferData(
             txnDateTime = txnDateTime,
             description = description.value ?: "",
             amount = amount,
             balance = balance.value,
             memo = memo.value ?: "",
+            type = type.value,
+            status = status.value,
             id = id,
         )
     }

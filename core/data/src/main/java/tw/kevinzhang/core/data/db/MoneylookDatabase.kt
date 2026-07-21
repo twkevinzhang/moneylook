@@ -10,7 +10,7 @@ import tw.kevinzhang.core.data.model.Transfer
 
 @Database(
     entities = [Account::class, CredentialProfile::class, InstalledExtension::class, Transfer::class],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)

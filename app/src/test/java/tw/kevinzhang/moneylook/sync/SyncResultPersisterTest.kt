@@ -8,6 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kevinzhang.core.data.db.AccountTransferRefresh
+import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferDateRange
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.model.Account
@@ -33,9 +34,16 @@ class SyncResultPersisterTest {
                     balance = 100.0,
                     currency = "TWD",
                     no = "001",
+                    sourceAccountKey = "deposit-opaque-1",
                     kind = AssetKind.DEPOSIT,
                     branchName = "總行",
-                    transfers = listOf(TransferData("2026-01-01", "", 1.0, 101.0, "")),
+                    transfers = listOf(
+                        TransferData(
+                            "2026-01-01", "", 1.0, 101.0, "",
+                            type = "transfer",
+                            status = "posted",
+                        ),
+                    ),
                 ),
                 AccountData(
                     name = "主帳戶",
@@ -59,8 +67,10 @@ class SyncResultPersisterTest {
             assertEquals(1000.0, card.creditLimit!!, 0.0)
         }
         assertEquals(store.accounts[0].id, store.transfers.single().accountId)
+        assertEquals("deposit-opaque-1", store.accounts[0].sourceAccountKey)
+        assertEquals("transfer", store.transfers.single().type)
+        assertEquals("posted", store.transfers.single().status)
         assertNull(store.refreshes[0].completedRanges)
-        assertNull(store.refreshes[0].retainFrom)
     }
 
     @Test
@@ -108,17 +118,53 @@ class SyncResultPersisterTest {
         )
         assertNotEquals(store.transfers[0].id, store.transfers[1].id)
         assertNull(store.transfers[0].balance)
-        assertEquals("2025-07-21", store.refreshes.single().retainFrom)
+    }
+
+    @Test
+    fun `source key upgrade forwards only a unique legacy identity to the transactional store`() = runBlocking {
+        val legacy = AccountData(name = "活期", balance = 1.0, currency = "TWD", no = "0012345678")
+        val store = RecordingStore()
+        val upgraded = legacy.copy(
+            sourceAccountKey = "a".repeat(64),
+            transfers = listOf(TransferData("2026-07-21", "既有交易", 1.0, null, "", id = "txn-1")),
+        )
+
+        SyncResultPersister(store).persist(extension(), SyncResult.Success(listOf(upgraded)))
+
+        assertEquals(
+            mapOf(
+                stableAccountId(extension().id, upgraded) to
+                    LegacyAccountIdentity("0012345678", AssetKind.DEPOSIT, "TWD"),
+            ),
+            store.legacyIdentityByAccountId,
+        )
+    }
+
+    @Test
+    fun `ambiguous returned legacy identity never reuses one stored account id`() = runBlocking {
+        val store = RecordingStore()
+        val first = AccountData(
+            name = "活期 A", balance = 1.0, currency = "TWD", no = "0012345678",
+            sourceAccountKey = "a".repeat(64),
+        )
+        val second = first.copy(name = "活期 B", sourceAccountKey = "b".repeat(64))
+
+        SyncResultPersister(store).persist(extension(), SyncResult.Success(listOf(first, second)))
+
+        assertTrue(store.legacyIdentityByAccountId.isEmpty())
+        assertNotEquals(store.accounts[0].id, store.accounts[1].id)
     }
 
     @Test
     fun `stable account and transfer ids are opaque and deterministic`() {
         val numbered = AccountData("活期", 1.0, "TWD", no = "001")
+        val sourceKeyed = numbered.copy(sourceAccountKey = "deposit-opaque-1")
         val named = AccountData("活期", 1.0, "TWD")
         val foreignCurrency = numbered.copy(currency = "USD")
         val card = numbered.copy(kind = AssetKind.CREDIT_CARD)
 
         assertNotEquals(stableAccountId("bank", numbered), stableAccountId("bank", named))
+        assertNotEquals(stableAccountId("bank", numbered), stableAccountId("bank", sourceKeyed))
         assertNotEquals(stableAccountId("bank", numbered), stableAccountId("bank", foreignCurrency))
         assertNotEquals(stableAccountId("bank", numbered), stableAccountId("bank", card))
         assertEquals(stableAccountId("bank", named), stableAccountId("bank", named))
@@ -162,17 +208,20 @@ class SyncResultPersisterTest {
         var accounts: List<Account> = emptyList()
         var transfers: List<Transfer> = emptyList()
         var refreshes: List<AccountTransferRefresh> = emptyList()
+        var legacyIdentityByAccountId: Map<String, LegacyAccountIdentity> = emptyMap()
 
         override suspend fun replaceSnapshot(
             extensionId: String,
             accounts: List<Account>,
             transfers: List<Transfer>,
             refreshes: List<AccountTransferRefresh>,
+            legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
         ) {
             this.extensionId = extensionId
             this.accounts = accounts
             this.transfers = transfers
             this.refreshes = refreshes
+            this.legacyIdentityByAccountId = legacyIdentityByAccountId
         }
     }
 }

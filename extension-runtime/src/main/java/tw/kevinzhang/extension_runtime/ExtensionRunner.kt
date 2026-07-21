@@ -10,7 +10,10 @@ data class ExtensionCredential(
 }
 
 data class ExtensionTransferCursor(
-    val accountNo: String,
+    /** Opaque source identity, safe to expose to the extension that owns it. */
+    val sourceAccountKey: String,
+    /** Lowercase SDK asset kind: deposit, credit_card, or loan. */
+    val kind: String,
     val currency: String,
     val latestTxnDateTime: String,
 ) {

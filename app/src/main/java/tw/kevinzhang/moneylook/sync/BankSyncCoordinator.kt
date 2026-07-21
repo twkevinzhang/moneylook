@@ -3,6 +3,7 @@ package tw.kevinzhang.moneylook.sync
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.db.TransferCursorStore
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.extension_runtime.ExtensionCredential
 import tw.kevinzhang.extension_runtime.ExtensionRunner
 import tw.kevinzhang.extension_runtime.ExtensionSyncContext
@@ -22,7 +23,8 @@ class BankSyncCoordinator @Inject constructor(
     ): SyncResult {
         val transferCursors = transferCursorStore.latestByExtension(extension.id).map { cursor ->
             ExtensionTransferCursor(
-                accountNo = cursor.accountNo,
+                sourceAccountKey = cursor.sourceAccountKey,
+                kind = cursor.kind.sdkValue(),
                 currency = cursor.currency,
                 latestTxnDateTime = cursor.latestTxnDateTime,
             )
@@ -33,4 +35,10 @@ class BankSyncCoordinator @Inject constructor(
             syncContext = ExtensionSyncContext(transferCursors),
         )
     }
+}
+
+private fun AssetKind.sdkValue(): String = when (this) {
+    AssetKind.DEPOSIT -> "deposit"
+    AssetKind.CREDIT_CARD -> "credit_card"
+    AssetKind.LOAN -> "loan"
 }

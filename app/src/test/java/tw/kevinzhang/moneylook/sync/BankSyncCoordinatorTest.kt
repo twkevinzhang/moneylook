@@ -9,6 +9,7 @@ import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.db.TransferCursorStore
 import tw.kevinzhang.core.data.db.TransferSyncCursor
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.extension_runtime.ExtensionCredential
 import tw.kevinzhang.extension_runtime.ExtensionRunner
 import tw.kevinzhang.extension_runtime.ExtensionSyncContext
@@ -58,7 +59,8 @@ class BankSyncCoordinatorTest {
         assertSame(expected, result)
         assertSame(extension, receivedExtension)
         assertEquals(profile.credential, receivedCredential?.json)
-        assertEquals("000000000001", receivedSyncContext?.transferCursors?.single()?.accountNo)
+        assertEquals("deposit-opaque-1", receivedSyncContext?.transferCursors?.single()?.sourceAccountKey)
+        assertEquals("deposit", receivedSyncContext?.transferCursors?.single()?.kind)
         assertEquals("TWD", receivedSyncContext?.transferCursors?.single()?.currency)
         assertEquals(
             "2026-07-21T18:00:00+08:00",
@@ -88,7 +90,8 @@ class BankSyncCoordinatorTest {
     private fun cursorStore() = object : TransferCursorStore {
         override suspend fun latestByExtension(extensionId: String): List<TransferSyncCursor> = listOf(
             TransferSyncCursor(
-                accountNo = "000000000001",
+                sourceAccountKey = "deposit-opaque-1",
+                kind = AssetKind.DEPOSIT,
                 currency = "TWD",
                 latestTxnDateTime = "2026-07-21T18:00:00+08:00",
             ),

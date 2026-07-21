@@ -6,6 +6,8 @@ data class TransferData(
     val amount: Double,   // positive = income, negative = expend
     val balance: Double?,
     val memo: String,
+    val type: String? = null,
+    val status: String? = null,
     /** Bank-provided immutable transaction identifier, when the source exposes one. */
     val id: String? = null,
 )

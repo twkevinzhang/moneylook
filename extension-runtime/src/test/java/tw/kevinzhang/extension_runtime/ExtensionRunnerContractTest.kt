@@ -15,6 +15,8 @@ import tw.kevinzhang.extension_runtime.data.SyncResult
 
 @RunWith(RobolectricTestRunner::class)
 class ExtensionRunnerContractTest {
+    private val sourceKey = "a".repeat(64)
+
     @Test
     fun credentialToStringIsRedacted() {
         val credential = ExtensionCredential("""{"username":"alice","password":"p@ssword"}""")
@@ -35,7 +37,8 @@ class ExtensionRunnerContractTest {
             ExtensionSyncContext(
                 transferCursors = listOf(
                     ExtensionTransferCursor(
-                        accountNo = "000000000001",
+                        sourceAccountKey = sourceKey,
+                        kind = "deposit",
                         currency = "TWD",
                         latestTxnDateTime = "2026-07-21T18:00:00+08:00",
                     ),
@@ -46,7 +49,7 @@ class ExtensionRunnerContractTest {
         assertTrue(wrapper.contains("credential: deepFreeze({\"username\":\"alice\",\"password\":\"p@ssword\"})"))
         assertTrue(
             wrapper.contains(
-                "sync: deepFreeze({\"transferCursors\":[{\"accountNo\":\"000000000001\",\"currency\":\"TWD\",\"latestTxnDateTime\":\"2026-07-21T18:00:00+08:00\"}]})",
+                "sync: deepFreeze({\"transferCursors\":[{\"sourceAccountKey\":\"$sourceKey\",\"kind\":\"deposit\",\"currency\":\"TWD\",\"latestTxnDateTime\":\"2026-07-21T18:00:00+08:00\"}]})",
             ),
         )
         assertTrue(wrapper.contains("Object.getOwnPropertyNames(value)"))
@@ -74,12 +77,12 @@ class ExtensionRunnerContractTest {
     fun syncContextToStringRedactsCursorValues() {
         val context = ExtensionSyncContext(
             transferCursors = listOf(
-                ExtensionTransferCursor("000000000001", "TWD", "2026-07-21T18:00:00+08:00"),
+                ExtensionTransferCursor(sourceKey, "deposit", "TWD", "2026-07-21T18:00:00+08:00"),
             ),
         )
 
         assertEquals("ExtensionSyncContext(transferCursors=1)", context.toString())
-        assertFalse(context.toString().contains("000000000001"))
+        assertFalse(context.toString().contains(sourceKey))
         assertFalse(context.toString().contains("2026-07-21"))
         assertEquals("ExtensionTransferCursor([REDACTED])", context.transferCursors.single().toString())
     }
@@ -149,12 +152,15 @@ class ExtensionRunnerContractTest {
     fun `parses range based transfer sync and rejects malformed transfer amounts`() {
         val parsed = parseAccounts(
             """{"accounts":[{"name":"Checking","balance":12.5,"transfers":[
-                {"id":"source-1","txnDateTime":"2026-07-21T11:25:30","amount":-2.0,"balance":10.5}
+                {"id":"source-1","txnDateTime":"2026-07-21T11:25:30","amount":-2.0,"balance":10.5,"type":"transfer","status":"posted"}
             ],"transferSync":{"requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
-              "completedRanges":[{"start":"2025-07-21","end":"2026-07-21"}],"complete":true}}]}""".trimIndent(),
+              "completedRanges":[{"start":"2025-07-21","end":"2026-07-21"}],"complete":true},"sourceAccountKey":"${"a".repeat(64)}"}]}""".trimIndent(),
             Gson(),
         ) as SyncResult.Success
         assertEquals("source-1", parsed.accounts.single().transfers.single().id)
+        assertEquals(sourceKey, parsed.accounts.single().sourceAccountKey)
+        assertEquals("transfer", parsed.accounts.single().transfers.single().type)
+        assertEquals("posted", parsed.accounts.single().transfers.single().status)
         assertEquals(10.5, parsed.accounts.single().transfers.single().balance!!, 0.0)
         assertTrue(parsed.accounts.single().transferSync!!.complete)
 
@@ -162,7 +168,7 @@ class ExtensionRunnerContractTest {
             """{"accounts":[{"name":"Checking","balance":1,"transfers":[
                 {"txnDateTime":"2026-06-01","amount":1}
             ],"transferSync":{"requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
-              "completedRanges":[{"start":"2026-07-01","end":"2026-07-21"}],"complete":false}}]}""".trimIndent(),
+              "completedRanges":[{"start":"2026-07-01","end":"2026-07-21"}],"complete":false},"sourceAccountKey":"${"b".repeat(64)}"}]}""".trimIndent(),
             Gson(),
         )
 
@@ -183,10 +189,33 @@ class ExtensionRunnerContractTest {
             }}]}""".trimIndent(),
             Gson(),
         )
+        val legacyHistoryWithoutSourceKey = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"transferSync":{
+                "requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
+                "completedRanges":[{"start":"2025-07-21","end":"2026-07-21"}],"complete":true
+            }}]}""".trimIndent(),
+            Gson(),
+        )
+        val rawAccountNumberAsSourceKey = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"no":"0012345678","sourceAccountKey":"0012345678"}]}""",
+            Gson(),
+        )
+        val nonDigestSourceKey = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"sourceAccountKey":"not-an-opaque-key"}]}""",
+            Gson(),
+        )
+        val sourceKeyEqualToAccountNo = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"no":"${"a".repeat(64)}","sourceAccountKey":"${"a".repeat(64)}"}]}""",
+            Gson(),
+        )
 
         assertTrue(missingAmount is SyncResult.Error)
         assertTrue(infiniteRunningBalance is SyncResult.Error)
         assertTrue(incompleteMarkedComplete is SyncResult.Error)
+        assertTrue(legacyHistoryWithoutSourceKey is SyncResult.Success)
+        assertTrue(rawAccountNumberAsSourceKey is SyncResult.Error)
+        assertTrue(nonDigestSourceKey is SyncResult.Error)
+        assertTrue(sourceKeyEqualToAccountNo is SyncResult.Error)
         assertTrue(partialRangeCanStillReturnFetchedTransactions is SyncResult.Success)
     }
 

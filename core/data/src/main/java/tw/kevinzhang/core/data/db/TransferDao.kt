@@ -16,19 +16,20 @@ interface TransferDao : TransferCursorStore {
 
     @Query(
         """
-        SELECT a.accountNo AS accountNo,
+        SELECT a.sourceAccountKey AS sourceAccountKey,
+               a.kind AS kind,
                a.currency AS currency,
                MAX(t.txnDateTime) AS latestTxnDateTime
         FROM accounts AS a
         INNER JOIN transfers AS t ON t.accountId = a.id
         WHERE a.extensionId = :extensionId
-          AND a.accountNo IS NOT NULL
-          AND length(trim(a.accountNo)) > 0
+          AND a.sourceAccountKey IS NOT NULL
+          AND length(trim(a.sourceAccountKey)) > 0
           AND length(t.txnDateTime) >= 10
           AND substr(t.txnDateTime, 5, 1) = '-'
           AND substr(t.txnDateTime, 8, 1) = '-'
-        GROUP BY a.accountNo, a.currency
-        ORDER BY a.accountNo, a.currency
+        GROUP BY a.sourceAccountKey, a.kind, a.currency
+        ORDER BY a.sourceAccountKey, a.kind, a.currency
         """,
     )
     override suspend fun latestByExtension(extensionId: String): List<TransferSyncCursor>
