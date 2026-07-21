@@ -100,6 +100,69 @@ class ExtensionRunnerContractTest {
     }
 
     @Test
+    fun `legacy transfers accept existing non ISO dates while preserving missing presentation fields`() {
+        val parsed = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":12.5,"transfers":[
+                {"txnDateTime":"20260721112530","amount":-2.0}
+            ]}]}""".trimIndent(),
+            Gson(),
+        ) as SyncResult.Success
+
+        parsed.accounts.single().transfers.single().also { transfer ->
+            assertEquals("20260721112530", transfer.txnDateTime)
+            assertEquals("", transfer.description)
+            assertEquals("", transfer.memo)
+            assertEquals(-2.0, transfer.amount, 0.0)
+            assertEquals(null, transfer.balance)
+        }
+    }
+
+    @Test
+    fun `parses range based transfer sync and rejects malformed transfer amounts`() {
+        val parsed = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":12.5,"transfers":[
+                {"id":"source-1","txnDateTime":"2026-07-21T11:25:30","amount":-2.0,"balance":10.5}
+            ],"transferSync":{"requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
+              "completedRanges":[{"start":"2025-07-21","end":"2026-07-21"}],"complete":true}}]}""".trimIndent(),
+            Gson(),
+        ) as SyncResult.Success
+        assertEquals("source-1", parsed.accounts.single().transfers.single().id)
+        assertEquals(10.5, parsed.accounts.single().transfers.single().balance!!, 0.0)
+        assertTrue(parsed.accounts.single().transferSync!!.complete)
+
+        val partialRangeCanStillReturnFetchedTransactions = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"transfers":[
+                {"txnDateTime":"2026-06-01","amount":1}
+            ],"transferSync":{"requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
+              "completedRanges":[{"start":"2026-07-01","end":"2026-07-21"}],"complete":false}}]}""".trimIndent(),
+            Gson(),
+        )
+
+        val missingAmount = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"transfers":[{"txnDateTime":"20260721"}]}]}""",
+            Gson(),
+        )
+        val infiniteRunningBalance = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"transfers":[
+                {"txnDateTime":"20260721","amount":1,"balance":1e999}
+            ]}]}""".trimIndent(),
+            Gson(),
+        )
+        val incompleteMarkedComplete = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"transferSync":{
+                "requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
+                "completedRanges":[{"start":"2026-01-01","end":"2026-07-21"}],"complete":true
+            }}]}""".trimIndent(),
+            Gson(),
+        )
+
+        assertTrue(missingAmount is SyncResult.Error)
+        assertTrue(infiniteRunningBalance is SyncResult.Error)
+        assertTrue(incompleteMarkedComplete is SyncResult.Error)
+        assertTrue(partialRangeCanStillReturnFetchedTransactions is SyncResult.Success)
+    }
+
+    @Test
     fun `parses typed card account fields and defaults legacy accounts to deposits`() {
         val parsed = parseAccounts(
             """{"accounts":[

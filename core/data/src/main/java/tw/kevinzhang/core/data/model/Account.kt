@@ -17,4 +17,6 @@ data class Account(
     val branchName: String? = null,
     val availableCredit: Double? = null,
     val creditLimit: Double? = null,
+    /** Null means the installed extension still uses the legacy transaction snapshot contract. */
+    val transferSyncComplete: Boolean? = null,
 )

@@ -11,6 +11,6 @@ data class Transfer(
     val txnDateTime: String,
     val description: String,
     val amount: Double,               // positive = income, negative = expend
-    val balance: Double,
+    val balance: Double?,
     val memo: String,
 )
