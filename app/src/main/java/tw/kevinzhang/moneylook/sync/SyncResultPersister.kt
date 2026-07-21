@@ -1,6 +1,7 @@
 package tw.kevinzhang.moneylook.sync
 
 import tw.kevinzhang.core.data.db.AccountTransferRefresh
+import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferDateRange
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.model.Account
@@ -19,9 +20,18 @@ class SyncResultPersister @Inject constructor(
 ) {
     suspend fun persist(extension: InstalledExtension, result: SyncResult.Success) {
         val now = System.currentTimeMillis()
+        val legacyIdentityByProposedId = result.accounts.associate { data ->
+            stableAccountId(extension.id, data) to legacyIdentityForSourceKey(data)
+        }.filterValues { it != null }.mapValues { (_, identity) -> requireNotNull(identity) }
+        val uniqueLegacyIdentities = legacyIdentityByProposedId.values
+            .groupingBy { it }
+            .eachCount()
+            .filterValues { count -> count == 1 }
+            .keys
+        fun accountId(data: AccountData): String = stableAccountId(extension.id, data)
         val accounts = result.accounts.map { data ->
             Account(
-                id = stableAccountId(extension.id, data),
+                id = accountId(data),
                 extensionId = extension.id,
                 extensionName = extension.name,
                 accountName = data.name,
@@ -29,6 +39,7 @@ class SyncResultPersister @Inject constructor(
                 currency = data.currency,
                 lastSyncAt = now,
                 accountNo = data.no,
+                sourceAccountKey = data.sourceAccountKey,
                 kind = data.kind,
                 branchName = data.branchName,
                 availableCredit = data.availableCredit,
@@ -37,7 +48,7 @@ class SyncResultPersister @Inject constructor(
             )
         }
         val transfers = result.accounts.flatMap { data ->
-            val accountId = stableAccountId(extension.id, data)
+            val accountId = accountId(data)
             val legacyOccurrences = mutableMapOf<String, Int>()
             data.transfers.map { transfer ->
                 val occurrence = if (transfer.id == null) {
@@ -72,29 +83,45 @@ class SyncResultPersister @Inject constructor(
                     amount = transfer.amount,
                     balance = transfer.balance,
                     memo = transfer.memo,
+                    type = transfer.type,
+                    status = transfer.status,
                 )
             }
         }
         val refreshes = result.accounts.map { data ->
             AccountTransferRefresh(
-                accountId = stableAccountId(extension.id, data),
+                accountId = accountId(data),
                 completedRanges = data.transferSync?.completedRanges?.map { range ->
                     TransferDateRange(start = range.start, end = range.end)
                 },
-                retainFrom = data.transferSync?.requestedStart,
             )
         }
-        transferSyncStore.replaceSnapshot(extension.id, accounts, transfers, refreshes)
+        transferSyncStore.replaceSnapshot(
+            extension.id,
+            accounts,
+            transfers,
+            refreshes,
+            legacyIdentityByProposedId.filterValues { it in uniqueLegacyIdentities },
+        )
     }
+}
+
+/** Only source-key upgrades with a full legacy account number are eligible for ID preservation. */
+private fun legacyIdentityForSourceKey(data: AccountData): LegacyAccountIdentity? {
+    if (data.sourceAccountKey.isNullOrBlank()) return null
+    val accountNo = data.no?.takeIf { it.isNotBlank() } ?: return null
+    return LegacyAccountIdentity(accountNo, data.kind, data.currency)
 }
 
 /**
  * Account names are not unique: banks commonly expose multiple accounts with the same product
- * label. The bank account number is therefore preferred, while a name remains the compatibility
- * fallback for extensions that do not return one.
+ * label. An extension-provided opaque source key is therefore preferred. Account numbers and
+ * names remain legacy compatibility fallbacks for extensions that do not return one.
  */
 internal fun stableAccountId(extensionId: String, data: AccountData): String {
-    val identity = data.no?.takeIf { it.isNotBlank() } ?: data.name
+    val identity = data.sourceAccountKey?.takeIf { it.isNotBlank() }
+        ?: data.no?.takeIf { it.isNotBlank() }
+        ?: data.name
     val canonicalIdentity = listOf(extensionId, data.kind.name, identity, data.currency)
         .joinToString(separator = "\u001F") { value -> "${value.length}:$value" }
     val digest = MessageDigest.getInstance("SHA-256")

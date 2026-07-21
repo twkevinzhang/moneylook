@@ -262,3 +262,22 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         db.execSQL("ALTER TABLE `transfers_new` RENAME TO `transfers`")
     }
 }
+
+/** Adds opaque cursor identities and optional bank transaction metadata without exposing account numbers. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Existing rows intentionally remain null: their old account-number cursor cannot safely
+        // be converted to an extension-visible opaque key. The next extension sync repopulates it.
+        db.execSQL("ALTER TABLE `accounts` ADD COLUMN `sourceAccountKey` TEXT")
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `type` TEXT")
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `status` TEXT")
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_accounts_extensionId_sourceAccountKey_kind_currency` " +
+                "ON `accounts` (`extensionId`, `sourceAccountKey`, `kind`, `currency`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_transfers_accountId_txnDateTime` " +
+                "ON `transfers` (`accountId`, `txnDateTime`)",
+        )
+    }
+}

@@ -195,7 +195,7 @@ private fun TransferRow(transfer: Transfer, currency: String) {
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Text(
-                text = "尚未分類",
+                text = transfer.type ?: "尚未分類",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -207,6 +207,13 @@ private fun TransferRow(transfer: Transfer, currency: String) {
             if (transfer.memo.isNotBlank()) {
                 Text(
                     text = transfer.memo,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            transfer.status?.let { status ->
+                Text(
+                    text = status,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
