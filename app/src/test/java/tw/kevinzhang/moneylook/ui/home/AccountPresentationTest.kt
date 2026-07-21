@@ -61,4 +61,17 @@ class AccountPresentationTest {
 
         assertEquals("$ 0", presentation.primaryAmount)
     }
+
+    @Test
+    fun timeDepositUsesAssetFormatting() {
+        val presentation = accountRowPresentation(
+            kind = AssetKind.TIME_DEPOSIT,
+            balance = 10_000.0,
+            currency = "TWD",
+            availableCredit = null,
+        )
+
+        assertEquals("$ 10,000", presentation.primaryAmount)
+        assertFalse(presentation.isLiability)
+    }
 }

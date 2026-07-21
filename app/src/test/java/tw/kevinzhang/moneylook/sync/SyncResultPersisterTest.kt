@@ -16,6 +16,8 @@ import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.extension_runtime.data.AccountData
+import tw.kevinzhang.extension_runtime.data.KindSyncResult
+import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
 import tw.kevinzhang.extension_runtime.data.TransferSyncData
@@ -156,6 +158,36 @@ class SyncResultPersisterTest {
     }
 
     @Test
+    fun `partial result forwards only complete kinds to the transactional store`() = runBlocking {
+        val store = RecordingStore()
+        val result = SyncResult.Success(
+            accounts = listOf(AccountData("活期", 1.0, "TWD", kind = AssetKind.DEPOSIT)),
+            kindSync = listOf(
+                KindSyncResult(AssetKind.DEPOSIT, KindSyncStatus.COMPLETE, null),
+                KindSyncResult(AssetKind.TIME_DEPOSIT, KindSyncStatus.FAILED, "TERM_QUERY_REJECTED"),
+            ),
+        )
+
+        SyncResultPersister(store).persist(extension(), result)
+
+        assertEquals(setOf(AssetKind.DEPOSIT), store.replaceKinds)
+        assertTrue(result.hasPartialKindFailure)
+        assertEquals("partial", result.appLastRunStatus)
+    }
+
+    @Test
+    fun `legacy result keeps whole snapshot replacement semantics`() = runBlocking {
+        val store = RecordingStore()
+        val result = SyncResult.Success(listOf(AccountData("活期", 1.0, "TWD")))
+
+        SyncResultPersister(store).persist(extension(), result)
+
+        assertNull(store.replaceKinds)
+        assertFalse(result.hasPartialKindFailure)
+        assertEquals("success", result.appLastRunStatus)
+    }
+
+    @Test
     fun `stable account and transfer ids are opaque and deterministic`() {
         val numbered = AccountData("活期", 1.0, "TWD", no = "001")
         val sourceKeyed = numbered.copy(sourceAccountKey = "deposit-opaque-1")
@@ -209,6 +241,7 @@ class SyncResultPersisterTest {
         var transfers: List<Transfer> = emptyList()
         var refreshes: List<AccountTransferRefresh> = emptyList()
         var legacyIdentityByAccountId: Map<String, LegacyAccountIdentity> = emptyMap()
+        var replaceKinds: Set<AssetKind>? = null
 
         override suspend fun replaceSnapshot(
             extensionId: String,
@@ -216,12 +249,14 @@ class SyncResultPersisterTest {
             transfers: List<Transfer>,
             refreshes: List<AccountTransferRefresh>,
             legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
+            replaceKinds: Set<AssetKind>?,
         ) {
             this.extensionId = extensionId
             this.accounts = accounts
             this.transfers = transfers
             this.refreshes = refreshes
             this.legacyIdentityByAccountId = legacyIdentityByAccountId
+            this.replaceKinds = replaceKinds
         }
     }
 }

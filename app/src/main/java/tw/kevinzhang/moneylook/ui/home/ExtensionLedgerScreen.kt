@@ -268,6 +268,7 @@ internal fun signedTransferAmount(amount: Double, currency: String): String =
 
 internal fun ledgerPrimaryAmountLabel(kind: AssetKind): String = when (kind) {
     AssetKind.DEPOSIT -> "存款餘額"
+    AssetKind.TIME_DEPOSIT -> "定存餘額"
     AssetKind.CREDIT_CARD -> "應繳金額"
     AssetKind.LOAN -> "貸款餘額"
 }

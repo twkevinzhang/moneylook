@@ -39,6 +39,7 @@ class BankSyncCoordinator @Inject constructor(
 
 private fun AssetKind.sdkValue(): String = when (this) {
     AssetKind.DEPOSIT -> "deposit"
+    AssetKind.TIME_DEPOSIT -> "time_deposit"
     AssetKind.CREDIT_CARD -> "credit_card"
     AssetKind.LOAN -> "loan"
 }

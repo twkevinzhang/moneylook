@@ -26,6 +26,7 @@ class ExtensionLedgerPresentationTest {
         assertEquals("•••• 5678", maskLedgerAccountNo("0012345678"))
         assertEquals("••••", maskLedgerAccountNo("1234"))
         assertTrue(signedTransferAmount(-123.0, "TWD").startsWith("-"))
+        assertEquals("定存餘額", ledgerPrimaryAmountLabel(AssetKind.TIME_DEPOSIT))
         assertEquals("應繳金額", ledgerPrimaryAmountLabel(AssetKind.CREDIT_CARD))
     }
 

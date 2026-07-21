@@ -32,6 +32,8 @@ import tw.kevinzhang.extension_runtime.bridge.NativeHttpTransport
 import tw.kevinzhang.extension_runtime.bridge.RunRequestBudget
 import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
 import tw.kevinzhang.extension_runtime.data.AccountData
+import tw.kevinzhang.extension_runtime.data.KindSyncResult
+import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
 import tw.kevinzhang.extension_runtime.data.TransferSyncData
@@ -407,13 +409,18 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             transferSync = transferSync,
         )
     }
+    val kindSync = if ("kindSync" in map) {
+        parseKindSync(map, accounts) ?: return SyncResult.Error("script result contains invalid kind sync")
+    } else {
+        null
+    }
     val cursorIdentities = accounts.mapNotNull { account ->
         account.sourceAccountKey?.let { key -> listOf(key, account.kind.name, account.currency) }
     }
     if (cursorIdentities.size != cursorIdentities.distinct().size) {
         SyncResult.Error("script result contains duplicate source account key")
     } else {
-        SyncResult.Success(accounts)
+        SyncResult.Success(accounts, kindSync)
     }
 } catch (e: CancellationException) {
     throw e
@@ -425,6 +432,39 @@ private data class OptionalValue<T>(val value: T?)
 
 /** Source keys are deliberately constrained so raw account/card numbers cannot enter sdk.sync. */
 private val SOURCE_ACCOUNT_KEY_PATTERN = Regex("[0-9a-f]{64}")
+private val KIND_SYNC_CODE_PATTERN = Regex("[A-Z0-9_]{1,32}")
+
+private fun parseKindSync(
+    root: Map<String, Any>,
+    accounts: List<AccountData>,
+): List<KindSyncResult>? {
+    val rawResults = root["kindSync"] as? List<*> ?: return null
+    val results = rawResults.map { raw ->
+        val result = raw as? Map<*, *> ?: return null
+        val kind = parseAssetKind(result["kind"]) ?: return null
+        val status = parseKindSyncStatus(result["status"]) ?: return null
+        val code = when {
+            "code" !in result -> null
+            result["code"] is String && KIND_SYNC_CODE_PATTERN.matches(result["code"] as String) -> result["code"] as String
+            else -> return null
+        }
+        KindSyncResult(kind, status, code)
+    }
+    if (results.map { it.kind }.distinct().size != results.size) return null
+    if (results.none { it.status == KindSyncStatus.COMPLETE }) return null
+    val completeKinds = results
+        .filter { it.status == KindSyncStatus.COMPLETE }
+        .map { it.kind }
+        .toSet()
+    if (accounts.any { it.kind !in completeKinds }) return null
+    return results
+}
+
+private fun parseKindSyncStatus(value: Any?): KindSyncStatus? = when (value) {
+    "complete" -> KindSyncStatus.COMPLETE
+    "failed" -> KindSyncStatus.FAILED
+    else -> null
+}
 
 private fun optionalString(account: Map<*, *>, key: String): OptionalValue<String>? = when {
     key !in account -> OptionalValue(null)
@@ -534,6 +574,7 @@ private fun rangesCoverRequest(
 
 private fun parseAssetKind(value: Any?): AssetKind? = when (value) {
     "deposit" -> AssetKind.DEPOSIT
+    "time_deposit" -> AssetKind.TIME_DEPOSIT
     "credit_card" -> AssetKind.CREDIT_CARD
     "loan" -> AssetKind.LOAN
     else -> null
