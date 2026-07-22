@@ -59,14 +59,16 @@ data class GlobalDateRange(
         "${startInclusive.year} 年 ${startInclusive.monthValue} 月"
     }
 
-    fun tabLabel(): String = if (!isCustom) {
-        "${startInclusive.year}/${startInclusive.monthValue}"
-    } else if (startInclusive.year == endInclusive.year) {
-        "${startInclusive.monthValue}/${startInclusive.dayOfMonth}–${endInclusive.monthValue}/${endInclusive.dayOfMonth}"
+    /** First line of a date pager tab. Cross-year custom ranges retain both years. */
+    fun tabYearLabel(): String = if (startInclusive.year == endInclusive.year) {
+        startInclusive.year.toString()
     } else {
-        "${startInclusive.year}/${startInclusive.monthValue}/${startInclusive.dayOfMonth}–" +
-            "${endInclusive.year}/${endInclusive.monthValue}/${endInclusive.dayOfMonth}"
+        "${startInclusive.year}–${endInclusive.year}"
     }
+
+    /** Second line of a date pager tab; calendar months deliberately show their full range. */
+    fun tabDateRangeLabel(): String =
+        "${startInclusive.monthValue}/${startInclusive.dayOfMonth}–${endInclusive.monthValue}/${endInclusive.dayOfMonth}"
 
     companion object {
         fun thisMonth(today: LocalDate): GlobalDateRange = month(YearMonth.from(today))

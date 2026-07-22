@@ -32,6 +32,29 @@ class GlobalTransactionsPresentationTest {
     }
 
     @Test
+    fun `date pager labels show full calendar months and unambiguous custom years`() {
+        val february = GlobalDateRange.month(YearMonth.of(2024, 2))
+        assertEquals("2024", february.tabYearLabel())
+        assertEquals("2/1–2/29", february.tabDateRangeLabel())
+
+        val crossYear = GlobalDateRange(
+            startInclusive = LocalDate.of(2025, 12, 30),
+            endInclusive = LocalDate.of(2026, 1, 2),
+            isCustom = true,
+        )
+        assertEquals("2025–2026", crossYear.tabYearLabel())
+        assertEquals("12/30–1/2", crossYear.tabDateRangeLabel())
+
+        val sameYear = GlobalDateRange(
+            startInclusive = LocalDate.of(2026, 6, 30),
+            endInclusive = LocalDate.of(2026, 7, 2),
+            isCustom = true,
+        )
+        assertEquals("2026", sameYear.tabYearLabel())
+        assertEquals("6/30–7/2", sameYear.tabDateRangeLabel())
+    }
+
+    @Test
     fun `all currency details and advanced filters work together`() {
         val items = listOf(
             item(id = "food", amount = -120.0, categoryId = "food", categoryName = "餐飲", tags = listOf(GlobalTag("daily", "日常"))),
