@@ -6,7 +6,11 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "transfers",
-    indices = [Index(value = ["accountId", "txnDateTime"])],
+    indices = [
+        Index(value = ["accountId", "txnDateTime"]),
+        // Global ledgers and reports constrain dates across every account.
+        Index(value = ["txnDateTime"]),
+    ],
 )
 data class Transfer(
     @PrimaryKey val id: String,       // "{accountId}_{txnDateTime}"

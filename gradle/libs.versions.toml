@@ -44,6 +44,8 @@ cronutils = "9.2.1"
 # Testing
 junit4 = "4.13.2"
 robolectric = "4.13"
+androidxTest = "1.6.2"
+androidxTestJunit = "1.2.1"
 
 [libraries]
 # AndroidX
@@ -65,6 +67,7 @@ compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 compose-ui-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material-icons = { group = "androidx.compose.material", name = "material-icons-extended" }
 compose-activity = { group = "androidx.activity", name = "activity-compose", version.ref = "composeActivity" }
@@ -106,6 +109,8 @@ cron-utils = { group = "com.cronutils", name = "cron-utils", version.ref = "cron
 # Testing
 junit4 = { group = "junit", name = "junit", version.ref = "junit4" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTest" }
+androidx-test-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestJunit" }
 
 [bundles]
 okhttp = ["okhttp-core", "okhttp-logging"]

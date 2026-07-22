@@ -50,6 +50,29 @@ data class TransferListItem(
     val tags: List<Tag>,
 )
 
+/**
+ * Cross-account ledger row. It intentionally projects only an account's display metadata;
+ * account numbers and extension credentials are never selected into this UI-facing model.
+ */
+data class GlobalTransferListItem(
+    @Embedded val transfer: Transfer,
+    @Embedded(prefix = "annotation_") val annotation: TransferAnnotation?,
+    @Embedded(prefix = "category_") val category: Category?,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "id",
+        associateBy = Junction(
+            value = TransferTagCrossRef::class,
+            parentColumn = "transferId",
+            entityColumn = "tagId",
+        ),
+    )
+    val tags: List<Tag>,
+    val accountName: String,
+    val extensionName: String,
+    val currency: String,
+)
+
 @Dao
 abstract class TransferAnnotationDao {
     @Transaction
@@ -59,6 +82,21 @@ abstract class TransferAnnotationDao {
     @Transaction
     @Query(TRANSFER_DETAIL_SELECT + " WHERE t.accountId = :accountId ORDER BY t.txnDateTime DESC")
     abstract fun observeByAccount(accountId: String): Flow<List<TransferListItem>>
+
+    /**
+     * Observes every account's transactions in [startInclusive, endExclusive). ISO dates and
+     * datetimes sort lexicographically, so callers can pass date prefixes such as 2026-07-01.
+     */
+    @Transaction
+    @Query(
+        GLOBAL_TRANSFER_LIST_SELECT +
+            " WHERE t.txnDateTime >= :startInclusive AND t.txnDateTime < :endExclusive" +
+            " ORDER BY t.txnDateTime DESC, t.id DESC",
+    )
+    abstract fun observeGlobalBetween(
+        startInclusive: String,
+        endExclusive: String,
+    ): Flow<List<GlobalTransferListItem>>
 
     @Upsert
     abstract suspend fun upsert(annotation: TransferAnnotation)
@@ -167,6 +205,29 @@ abstract class TransferAnnotationDao {
                 c.emoji AS category_emoji,
                 c.kind AS category_kind
             FROM transfers AS t
+            LEFT JOIN transfer_annotations AS a ON a.transferId = t.id
+            LEFT JOIN categories AS c ON c.id = a.categoryId
+        """
+
+        const val GLOBAL_TRANSFER_LIST_SELECT = """
+            SELECT
+                t.*,
+                a.transferId AS annotation_transferId,
+                a.extensionId AS annotation_extensionId,
+                a.categoryId AS annotation_categoryId,
+                a.note AS annotation_note,
+                a.categoryAssignment AS annotation_categoryAssignment,
+                a.manualOverride AS annotation_manualOverride,
+                c.id AS category_id,
+                c.name AS category_name,
+                c.color AS category_color,
+                c.emoji AS category_emoji,
+                c.kind AS category_kind,
+                account.accountName AS accountName,
+                account.extensionName AS extensionName,
+                account.currency AS currency
+            FROM transfers AS t
+            INNER JOIN accounts AS account ON account.id = t.accountId
             LEFT JOIN transfer_annotations AS a ON a.transferId = t.id
             LEFT JOIN categories AS c ON c.id = a.categoryId
         """

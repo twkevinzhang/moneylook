@@ -76,16 +76,15 @@ class AccountPresentationTest {
     }
 
     @Test
-    fun hiddenAmountsMaskBothBalanceAndAvailableCredit() {
+    fun creditCardAmountsAreAlwaysShown() {
         val presentation = accountRowPresentation(
             kind = AssetKind.CREDIT_CARD,
             balance = 7_498.0,
             currency = "TWD",
             availableCredit = 22_502.0,
-            isAmountVisible = false,
         )
 
-        assertEquals("••••", presentation.primaryAmount)
-        assertEquals("可用額度 ••••", presentation.supportingText)
+        assertEquals("-$ 7,498", presentation.primaryAmount)
+        assertEquals("可用額度 $ 22,502", presentation.supportingText)
     }
 }

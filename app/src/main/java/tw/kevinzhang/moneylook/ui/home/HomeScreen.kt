@@ -26,8 +26,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -85,7 +84,6 @@ fun HomeScreen(
     val countdownMs by viewModel.countdownMs.collectAsStateWithLifecycle()
     var showSyncDialog by remember { mutableStateOf(false) }
     var editingExtension by remember { mutableStateOf<InstalledExtension?>(null) }
-    var areAmountsVisible by rememberSaveable { mutableStateOf(true) }
     val hasPartialData = syncStatuses.values.any { status ->
         status.syncState == SyncState.PARTIAL || status.syncState == SyncState.ERROR
     }
@@ -131,7 +129,14 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Moneylook") })
+            TopAppBar(
+                title = { Text("Moneylook") },
+                actions = {
+                    IconButton(onClick = onNavigateToMarketplace) {
+                        Icon(Icons.Default.Store, contentDescription = "Marketplace")
+                    }
+                },
+            )
         },
         bottomBar = bottomBar,
         floatingActionButton = {
@@ -148,8 +153,6 @@ fun HomeScreen(
             item(key = "home-overview") {
                 HomeOverviewCard(
                     overview = overview,
-                    areAmountsVisible = areAmountsVisible,
-                    onToggleAmountVisibility = { areAmountsVisible = !areAmountsVisible },
                 )
             }
             if (extensions.isEmpty()) {
@@ -177,7 +180,6 @@ fun HomeScreen(
                         onSync = { viewModel.sync(ext) },
                         onEditCredentials = { editingExtension = ext },
                         onViewLedger = onNavigateToLedger,
-                        areAmountsVisible = areAmountsVisible,
                     )
                 }
             }
@@ -188,8 +190,6 @@ fun HomeScreen(
 @Composable
 private fun HomeOverviewCard(
     overview: HomeOverviewPresentation,
-    areAmountsVisible: Boolean,
-    onToggleAmountVisibility: () -> Unit,
 ) {
     var selectedSection by rememberSaveable { mutableStateOf(OverviewSection.ASSETS) }
     val selectedLabel = if (selectedSection == OverviewSection.ASSETS) "資產" else "負債"
@@ -217,12 +217,6 @@ private fun HomeOverviewCard(
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
-                IconButton(onClick = onToggleAmountVisibility) {
-                    Icon(
-                        imageVector = if (areAmountsVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = if (areAmountsVisible) "隱藏所有金額" else "顯示所有金額",
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -243,7 +237,6 @@ private fun HomeOverviewCard(
                     OverviewAmountRow(
                         currency = summary.currency,
                         amount = summary.netWorth,
-                        areAmountsVisible = areAmountsVisible,
                         emphasized = true,
                     )
                 }
@@ -282,7 +275,6 @@ private fun HomeOverviewCard(
                         } else {
                             summary.liabilities
                         },
-                        areAmountsVisible = areAmountsVisible,
                         emphasized = false,
                     )
                 }
@@ -308,7 +300,6 @@ private fun HomeOverviewCard(
 private fun OverviewAmountRow(
     currency: String,
     amount: Double,
-    areAmountsVisible: Boolean,
     emphasized: Boolean,
 ) {
     Row(
@@ -323,7 +314,7 @@ private fun OverviewAmountRow(
             style = if (emphasized) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
         )
         Text(
-            text = formatVisibleCurrencyAmount(amount, currency, areAmountsVisible),
+            text = formatCurrencyAmount(amount, currency),
             style = if (emphasized) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
             fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Medium,
         )
@@ -343,7 +334,6 @@ private fun ExtensionCard(
     onSync: () -> Unit,
     onEditCredentials: () -> Unit,
     onViewLedger: (accountId: String) -> Unit,
-    areAmountsVisible: Boolean,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -437,7 +427,6 @@ private fun ExtensionCard(
                     HorizontalDivider()
                     AccountRow(
                         account = account,
-                        areAmountsVisible = areAmountsVisible,
                         onClick = { onViewLedger(account.id) },
                     )
                 }
@@ -586,7 +575,6 @@ private fun ExtensionIcon(extension: InstalledExtension) {
 @Composable
 private fun AccountRow(
     account: Account,
-    areAmountsVisible: Boolean,
     onClick: () -> Unit,
 ) {
     val presentation = accountRowPresentation(
@@ -594,7 +582,6 @@ private fun AccountRow(
         balance = account.balance,
         currency = account.currency,
         availableCredit = account.availableCredit,
-        isAmountVisible = areAmountsVisible,
     )
     Row(
         modifier = Modifier

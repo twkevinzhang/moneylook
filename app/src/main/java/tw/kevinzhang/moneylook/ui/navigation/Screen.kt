@@ -2,6 +2,7 @@ package tw.kevinzhang.moneylook.ui.navigation
 
 sealed class Screen(val route: String) {
     object Home : Screen("home")
+    object GlobalTransactions : Screen("global_transactions")
     object Marketplace : Screen("marketplace")
     object Settings : Screen("settings")
     object ManageRepos : Screen("manage_repos")
