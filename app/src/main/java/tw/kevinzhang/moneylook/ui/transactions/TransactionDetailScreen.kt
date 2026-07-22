@@ -1,21 +1,25 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,10 +28,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,11 +43,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.CategoryKind
 
 data class TransactionDetailUiState(
     val title: String,
     val amountText: String,
+    val amount: Double,
     val accountName: String,
     val transactionDate: String,
     val postingDate: String?,
@@ -62,15 +71,77 @@ data class TransactionDetailUiState(
 fun TransactionDetailContent(
     state: TransactionDetailUiState,
     onNavigateUp: () -> Unit,
-    onSave: (categoryId: String?, tagIds: Set<String>, userNote: String) -> Unit,
-    onCreateTag: (String) -> Unit,
-    onResumeAutomatic: () -> Unit,
+    onSave: (TransactionDetailDraft) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var categoryId by remember(state.selectedCategoryId) { mutableStateOf(state.selectedCategoryId) }
-    var tagIds by remember(state.selectedTagIds) { mutableStateOf(state.selectedTagIds) }
-    var userNote by remember(state.userNote) { mutableStateOf(state.userNote) }
-    var newTag by remember { mutableStateOf("") }
+    var draft by remember(state.selectedCategoryId, state.selectedTagIds, state.userNote) {
+        mutableStateOf(
+            TransactionDetailDraft(
+                categoryId = state.selectedCategoryId,
+                tagIds = state.selectedTagIds,
+                note = state.userNote,
+            ),
+        )
+    }
+    var newTagName by remember { mutableStateOf("") }
+    var showDiscardDialog by remember { mutableStateOf(false) }
+    var showCategoryPicker by remember { mutableStateOf(false) }
+    var editingRule by remember { mutableStateOf<AutoRuleDraft?>(null) }
+
+    val requestExit = {
+        if (draft.isDirtyComparedWith(state)) showDiscardDialog = true else onNavigateUp()
+    }
+    BackHandler(onBack = requestExit)
+
+    val selectedCategory = state.categories.firstOrNull { it.id == draft.categoryId }
+    val visibleTags = state.tags + draft.newTagNames.map { name ->
+        TagOption(draftTagId(name), name, defaultCategoryColors.first())
+    }
+
+    if (showDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = { showDiscardDialog = false },
+            title = { Text("放棄變更？") },
+            text = { Text("你尚未儲存分類、標籤或備註的變更。") },
+            confirmButton = {
+                TextButton(onClick = { showDiscardDialog = false }) { Text("繼續編輯") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardDialog = false; onNavigateUp() }) { Text("放棄變更") }
+            },
+        )
+    }
+    if (showCategoryPicker) {
+        CategoryPickerSheet(
+            categories = state.categories,
+            selectedCategoryId = draft.categoryId,
+            amount = state.amount,
+            description = state.description,
+            currentRule = draft.matchingRule,
+            onDismiss = { showCategoryPicker = false },
+            onSelectCategory = { categoryId ->
+                draft = draft.copy(
+                    categoryId = categoryId,
+                    matchingRule = draft.matchingRule?.copy(categoryId = categoryId),
+                )
+            },
+            onRuleChange = { rule -> draft = draft.copy(matchingRule = rule?.copy(categoryId = draft.categoryId)) },
+            onEditRule = { editingRule = draft.matchingRule ?: defaultExactDescriptionRule(state.description, draft.categoryId) },
+        )
+    }
+    editingRule?.let { rule ->
+        AutoRuleEditorDialog(
+            initial = rule,
+            categories = state.categories,
+            tags = visibleTags,
+            accounts = emptyList(),
+            onDismiss = { editingRule = null },
+            onSave = { edited ->
+                draft = draft.copy(matchingRule = edited.copy(categoryId = draft.categoryId))
+                editingRule = null
+            },
+        )
+    }
 
     Scaffold(
         modifier = modifier,
@@ -78,16 +149,17 @@ fun TransactionDetailContent(
             TopAppBar(
                 title = { Text("交易明細") },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateUp) {
+                    IconButton(onClick = requestExit) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
             )
         },
         bottomBar = {
-            SurfaceSaveBar(
+            DetailSaveBar(
                 enabled = !state.isSaving,
-                onSave = { onSave(categoryId, tagIds, userNote.trim()) },
+                onCancel = requestExit,
+                onSave = { onSave(draft.copy(note = draft.note.trim())) },
             )
         },
     ) { padding ->
@@ -95,28 +167,19 @@ fun TransactionDetailContent(
             modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            TransactionSummary(state)
+            TransactionSummary(
+                state = state,
+                category = selectedCategory,
+                onCategoryClick = { showCategoryPicker = true },
+            )
             ReadOnlyFacts(state)
-            HorizontalDivider()
-            Text("分類", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = categoryId == null, onClick = { categoryId = null }, label = { Text("尚未分類") })
-                state.categories.forEach { category ->
-                    FilterChip(
-                        selected = categoryId == category.id,
-                        onClick = { categoryId = category.id },
-                        label = { Text(category.name) },
-                        leadingIcon = { ColorDot(category.color) },
-                    )
-                }
-            }
             HorizontalDivider()
             Text("標籤", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.tags.forEach { tag ->
+                visibleTags.forEach { tag ->
                     FilterChip(
-                        selected = tag.id in tagIds,
-                        onClick = { tagIds = tagIds.toggle(tag.id) },
+                        selected = tag.id in draft.tagIds,
+                        onClick = { draft = draft.copy(tagIds = draft.tagIds.toggle(tag.id)) },
                         label = { Text(tag.name) },
                         leadingIcon = { ColorDot(tag.color) },
                     )
@@ -124,29 +187,39 @@ fun TransactionDetailContent(
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = newTag,
-                    onValueChange = { newTag = it },
+                    value = newTagName,
+                    onValueChange = { newTagName = it },
                     label = { Text("建立標籤") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = { newTag.trim().takeIf(String::isNotEmpty)?.let(onCreateTag); newTag = "" },
-                    enabled = newTag.isNotBlank(),
-                ) { Icon(Icons.Default.Add, contentDescription = "新增標籤") }
+                    onClick = {
+                        val name = newTagName.trim()
+                        val existing = visibleTags.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                        draft = if (existing == null) {
+                            draft.copy(
+                                newTagNames = draft.newTagNames + name,
+                                tagIds = draft.tagIds + draftTagId(name),
+                            )
+                        } else draft.copy(tagIds = draft.tagIds + existing.id)
+                        newTagName = ""
+                    },
+                    enabled = newTagName.trim().isNotEmpty(),
+                ) { Icon(Icons.Default.Add, contentDescription = "新增草稿標籤") }
             }
             HorizontalDivider()
             OutlinedTextField(
-                value = userNote,
-                onValueChange = { userNote = it },
+                value = draft.note,
+                onValueChange = { draft = draft.copy(note = it) },
                 label = { Text("備註") },
                 placeholder = { Text("加入自己的備註") },
                 minLines = 3,
                 modifier = Modifier.fillMaxWidth(),
             )
             if (state.isManualOverride) {
-                OutlinedButton(onClick = onResumeAutomatic, modifier = Modifier.fillMaxWidth()) {
-                    Text("恢復自動分類")
+                TextButton(onClick = { draft = draft.copy(resumeAutomatic = true) }) {
+                    Text(if (draft.resumeAutomatic) "已在儲存時恢復自動分類" else "恢復自動分類")
                 }
             }
         }
@@ -154,11 +227,26 @@ fun TransactionDetailContent(
 }
 
 @Composable
-private fun TransactionSummary(state: TransactionDetailUiState) {
+private fun TransactionSummary(
+    state: TransactionDetailUiState,
+    category: CategoryOption?,
+    onCategoryClick: () -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(state.title.ifBlank { "交易" }, style = MaterialTheme.typography.titleMedium)
-            Text(state.amountText, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                modifier = Modifier.size(68.dp).background(Color(category?.color ?: 0xFF607D8B), CircleShape).clickable(onClick = onCategoryClick),
+                contentAlignment = Alignment.Center,
+            ) { Text(category?.emoji ?: "🏷️", style = MaterialTheme.typography.headlineMedium) }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(category?.name ?: "尚未分類", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(state.amountText, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            }
+            IconButton(onClick = onCategoryClick) { Icon(Icons.Default.Edit, contentDescription = "更改分類") }
         }
     }
 }
@@ -174,8 +262,7 @@ private fun ReadOnlyFacts(state: TransactionDetailUiState) {
     }
 }
 
-@Composable
-private fun ReadOnlyFact(label: String, value: String) {
+@Composable private fun ReadOnlyFact(label: String, value: String) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyLarge)
@@ -183,22 +270,148 @@ private fun ReadOnlyFact(label: String, value: String) {
 }
 
 @Composable
-private fun SurfaceSaveBar(enabled: Boolean, onSave: () -> Unit) {
+private fun DetailSaveBar(enabled: Boolean, onCancel: () -> Unit, onSave: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.End,
-    ) { Button(onClick = onSave, enabled = enabled) { Text("儲存") } }
+        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+    ) {
+        TextButton(onClick = onCancel) { Text("取消") }
+        Button(onClick = onSave, enabled = enabled) { Text("儲存") }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CategoryPickerSheet(
+    categories: List<CategoryOption>,
+    selectedCategoryId: String?,
+    amount: Double,
+    description: String,
+    currentRule: AutoRuleDraft?,
+    onDismiss: () -> Unit,
+    onSelectCategory: (String?) -> Unit,
+    onRuleChange: (AutoRuleDraft?) -> Unit,
+    onEditRule: () -> Unit,
+) {
+    var kind by remember(selectedCategoryId) {
+        mutableStateOf(categories.firstOrNull { it.id == selectedCategoryId }?.kind ?: allowedKinds(amount).first())
+    }
+    val appliesToMatches = currentRule != null
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("更改分類", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            ApplyScopeRow(
+                appliesToMatches = appliesToMatches,
+                editEnabled = appliesToMatches,
+                onCurrentOnly = { onRuleChange(null) },
+                onSameDescription = { onRuleChange(currentRule ?: defaultExactDescriptionRule(description, selectedCategoryId)) },
+                onEditRule = onEditRule,
+            )
+            HorizontalDivider()
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CategoryKind.entries.forEach { item ->
+                    FilterChip(
+                        selected = kind == item,
+                        onClick = { kind = item },
+                        enabled = item in allowedKinds(amount),
+                        label = { Text(item.toDisplayName()) },
+                    )
+                }
+            }
+            FilterChip(
+                selected = selectedCategoryId == null,
+                onClick = { onSelectCategory(null) },
+                label = { Text("尚未分類") },
+            )
+            if (kind in allowedKinds(amount)) {
+                CategoryGrid(
+                    categories = categories.filter { it.kind == kind },
+                    selectedCategoryId = selectedCategoryId,
+                    onSelect = onSelectCategory,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ApplyScopeRow(
+    appliesToMatches: Boolean,
+    editEnabled: Boolean,
+    onCurrentOnly: () -> Unit,
+    onSameDescription: () -> Unit,
+    onEditRule: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            FilterChip(selected = !appliesToMatches, onClick = onCurrentOnly, label = { Text("套用這筆明細") })
+            FilterChip(selected = appliesToMatches, onClick = onSameDescription, label = { Text("套用過去及未來的相同明細") })
+        }
+        IconButton(onClick = onEditRule, enabled = editEnabled) {
+            Icon(Icons.Default.Edit, contentDescription = "編輯自動分類規則")
+        }
+    }
+}
+
+@Composable
+private fun CategoryGrid(categories: List<CategoryOption>, selectedCategoryId: String?, onSelect: (String?) -> Unit) {
+    if (categories.isEmpty()) {
+        Text("尚無此類別，請先到設定新增。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
+    FlowRow(
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        categories.forEach { category ->
+            Column(
+                modifier = Modifier.size(width = 78.dp, height = 98.dp).clickable { onSelect(category.id) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(
+                    modifier = Modifier.size(56.dp).background(Color(category.color), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) { Text(category.emoji, style = MaterialTheme.typography.titleLarge) }
+                Text(
+                    text = category.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    color = if (category.id == selectedCategoryId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+    }
 }
 
 @Composable
 internal fun ColorDot(color: Long) {
-    androidx.compose.foundation.layout.Box(
-        modifier = Modifier
-            .padding(end = 2.dp)
-            .background(Color(color), CircleShape)
-            .then(Modifier.padding(4.dp)),
-    )
+    Box(modifier = Modifier.padding(end = 2.dp).background(Color(color), CircleShape).then(Modifier.padding(4.dp)))
 }
 
-private fun Set<String>.toggle(id: String): Set<String> =
-    if (id in this) this - id else this + id
+internal fun allowedKinds(amount: Double): Set<CategoryKind> = when {
+    amount > 0.0 -> setOf(CategoryKind.INCOME, CategoryKind.TRANSFER)
+    amount < 0.0 -> setOf(CategoryKind.EXPENSE, CategoryKind.TRANSFER)
+    else -> setOf(CategoryKind.TRANSFER)
+}
+
+internal fun CategoryKind.toDisplayName(): String = when (this) {
+    CategoryKind.EXPENSE -> "支出"
+    CategoryKind.INCOME -> "收入"
+    CategoryKind.TRANSFER -> "移轉"
+}
+
+internal fun defaultExactDescriptionRule(description: String, categoryId: String?): AutoRuleDraft = AutoRuleDraft(
+    name = "${description.trim().take(24).ifBlank { "相同明細" }}分類",
+    descriptionContains = description.trim(),
+    descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.EXACT,
+    categoryId = categoryId,
+    applyExisting = true,
+)
+
+internal fun draftTagId(name: String): String = "draft:$name"
+private fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id

@@ -163,7 +163,9 @@ abstract class TransferAnnotationDao {
                 a.manualOverride AS annotation_manualOverride,
                 c.id AS category_id,
                 c.name AS category_name,
-                c.color AS category_color
+                c.color AS category_color,
+                c.emoji AS category_emoji,
+                c.kind AS category_kind
             FROM transfers AS t
             LEFT JOIN transfer_annotations AS a ON a.transferId = t.id
             LEFT JOIN categories AS c ON c.id = a.categoryId

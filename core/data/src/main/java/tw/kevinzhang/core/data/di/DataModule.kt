@@ -18,6 +18,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_7_8
 import tw.kevinzhang.core.data.db.MIGRATION_8_9
 import tw.kevinzhang.core.data.db.MIGRATION_9_10
 import tw.kevinzhang.core.data.db.MIGRATION_10_11
+import tw.kevinzhang.core.data.db.MIGRATION_11_12
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -41,6 +42,7 @@ object DataModule {
                 MIGRATION_8_9,
                 MIGRATION_9_10,
                 MIGRATION_10_11,
+                MIGRATION_11_12,
             )
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()

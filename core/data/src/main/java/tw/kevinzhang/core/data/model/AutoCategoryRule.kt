@@ -11,6 +11,12 @@ enum class AutoCategoryRuleDirection {
     EXPENSE,
 }
 
+/** Determines whether a rule matches a fragment of, or the whole normalized, bank description. */
+enum class AutoCategoryRuleDescriptionMatchMode {
+    CONTAINS,
+    EXACT,
+}
+
 /** Gmail-style user rule. Rules are global; [accountId] optionally narrows the scope. */
 @Entity(
     tableName = "auto_category_rules",
@@ -36,6 +42,9 @@ data class AutoCategoryRule(
     val enabled: Boolean = true,
     /** Smaller values run first; ties are deterministically resolved by [id]. */
     val priority: Int = 0,
+    /** Existing rules retain their original substring behaviour after the v12 migration. */
+    val descriptionMatchMode: AutoCategoryRuleDescriptionMatchMode =
+        AutoCategoryRuleDescriptionMatchMode.CONTAINS,
 ) {
     init {
         require(name == name.trim() && name.isNotEmpty()) { "rule name must be non-blank and trimmed" }

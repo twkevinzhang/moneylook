@@ -14,6 +14,9 @@ interface TagDao {
     @Query("SELECT * FROM tags WHERE id = :id")
     suspend fun getById(id: String): Tag?
 
+    @Query("SELECT * FROM tags WHERE name = :name COLLATE NOCASE LIMIT 1")
+    suspend fun getByName(name: String): Tag?
+
     @Upsert
     suspend fun upsert(tag: Tag)
 

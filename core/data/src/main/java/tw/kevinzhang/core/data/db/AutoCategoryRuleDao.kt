@@ -68,7 +68,9 @@ abstract class AutoCategoryRuleDao {
                 r.*,
                 c.id AS category_id,
                 c.name AS category_name,
-                c.color AS category_color
+                c.color AS category_color,
+                c.emoji AS category_emoji,
+                c.kind AS category_kind
             FROM auto_category_rules AS r
             LEFT JOIN categories AS c ON c.id = r.categoryId
         """
