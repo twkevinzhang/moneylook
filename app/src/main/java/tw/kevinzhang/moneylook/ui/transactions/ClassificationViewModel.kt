@@ -18,6 +18,7 @@ import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.AutoCategoryRuleDao
 import tw.kevinzhang.core.data.db.AutoCategoryRuleWithTags
 import tw.kevinzhang.core.data.db.CategoryDao
+import tw.kevinzhang.core.data.db.DefaultClassificationCatalog
 import tw.kevinzhang.core.data.db.TagDao
 import tw.kevinzhang.core.data.db.TransferAnnotationDao
 import tw.kevinzhang.core.data.db.TransactionDetailDraftStore
@@ -180,7 +181,10 @@ class ClassificationViewModel @Inject constructor(
             preferences.edit().putBoolean(DEFAULT_CATEGORIES_SEEDED, true).apply()
             return
         }
-        for (category in defaultCategoryCatalog) categoryDao.upsert(category)
+        for (category in DefaultClassificationCatalog.categories) categoryDao.upsert(category)
+        for (rule in DefaultClassificationCatalog.publicAutoCategoryRules) {
+            autoCategoryRuleDao.insertIfAbsent(rule)
+        }
         preferences.edit().putBoolean(DEFAULT_CATEGORIES_SEEDED, true).apply()
     }
 
@@ -189,36 +193,6 @@ class ClassificationViewModel @Inject constructor(
     }
 
 }
-
-private val defaultCategoryCatalog = listOf(
-    defaultCategory("expense-food", "餐飲", "🍽️", "#FB8C00", CategoryKind.EXPENSE),
-    defaultCategory("expense-clothing", "服飾", "👕", "#F9C928", CategoryKind.EXPENSE),
-    defaultCategory("expense-home", "住家", "🏠", "#9CD948", CategoryKind.EXPENSE),
-    defaultCategory("expense-transport", "交通", "🚌", "#3E8EEA", CategoryKind.EXPENSE),
-    defaultCategory("expense-learning", "學習", "📘", "#4169E1", CategoryKind.EXPENSE),
-    defaultCategory("expense-entertainment", "休閒娛樂", "🎮", "#8739E8", CategoryKind.EXPENSE),
-    defaultCategory("expense-shopping", "購物", "🛒", "#45C7E8", CategoryKind.EXPENSE),
-    defaultCategory("expense-medical", "醫療", "🩺", "#EF5350", CategoryKind.EXPENSE),
-    defaultCategory("expense-cash", "現金消費", "💵", "#43B96D", CategoryKind.EXPENSE),
-    defaultCategory("expense-insurance", "保險", "🛡️", "#EC80BD", CategoryKind.EXPENSE),
-    defaultCategory("expense-fees", "費用/手續費", "💸", "#66C94D", CategoryKind.EXPENSE),
-    defaultCategory("expense-tax", "稅金", "🧾", "#109C91", CategoryKind.EXPENSE),
-    defaultCategory("expense-gift", "禮物", "🎁", "#EF5350", CategoryKind.EXPENSE),
-    defaultCategory("expense-business", "合夥生意", "🍻", "#EF5350", CategoryKind.EXPENSE),
-    defaultCategory("expense-phone", "電信費", "📞", "#3F63D8", CategoryKind.EXPENSE),
-    defaultCategory("expense-internet", "網路活動", "🖥️", "#8439E9", CategoryKind.EXPENSE),
-    defaultCategory("expense-topup", "儲值", "🍴", "#4169E1", CategoryKind.EXPENSE),
-    defaultCategory("expense-ipass", "iPASS 儲值", "🎫", "#72C95B", CategoryKind.EXPENSE),
-    defaultCategory("expense-jkopay", "街口儲值", "🎟️", "#EF5350", CategoryKind.EXPENSE),
-    defaultCategory("expense-dispute", "爭議", "🐾", "#EF5350", CategoryKind.EXPENSE),
-    defaultCategory("income-salary", "薪資", "💰", "#43B96D", CategoryKind.INCOME),
-    defaultCategory("income-bonus", "獎金", "✨", "#F9C928", CategoryKind.INCOME),
-    defaultCategory("income-refund", "退款", "↩️", "#3E8EEA", CategoryKind.INCOME),
-    defaultCategory("transfer-account", "帳戶移轉", "🔄", "#607D8B", CategoryKind.TRANSFER),
-)
-
-private fun defaultCategory(id: String, name: String, emoji: String, color: String, kind: CategoryKind) =
-    Category(id = id, name = name, color = color, emoji = emoji, kind = kind)
 
 private fun TransferDetail.toDetailUi(
     categories: List<Category>,
@@ -271,6 +245,7 @@ private fun tw.kevinzhang.core.data.model.AutoCategoryRule.toDraft(tagIds: Set<S
     tagIds = tagIds,
     enabled = enabled,
     priority = priority,
+    isDefault = isDefault,
 )
 
 private fun AutoRuleDraft.normalizedOrNull(): Pair<tw.kevinzhang.core.data.model.AutoCategoryRule, Set<String>>? {
@@ -283,6 +258,7 @@ private fun AutoRuleDraft.normalizedOrNull(): Pair<tw.kevinzhang.core.data.model
         direction = when (direction) { null -> AutoCategoryRuleDirection.ANY; TransactionDirection.INCOME -> AutoCategoryRuleDirection.INCOME; TransactionDirection.EXPENSE -> AutoCategoryRuleDirection.EXPENSE },
         minAbsoluteAmount = min, maxAbsoluteAmount = max, accountId = accountId, categoryId = categoryId, enabled = enabled, priority = priority,
         descriptionMatchMode = descriptionMatchMode,
+        isDefault = isDefault,
     ) to tagIds
 }
 

@@ -42,6 +42,7 @@ data class AutoRuleDraft(
     val tagIds: Set<String> = emptySet(),
     val enabled: Boolean = true,
     val priority: Int = 0,
+    val isDefault: Boolean = false,
     val applyExisting: Boolean = false,
 )
 
@@ -84,7 +85,19 @@ internal fun AutoRuleDraft.matches(candidate: TransactionRuleCandidate): Boolean
 internal fun orderedMatchingRules(
     rules: List<AutoRuleDraft>,
     candidate: TransactionRuleCandidate,
-): List<AutoRuleDraft> = rules.filter { it.enabled && it.matches(candidate) }.sortedBy { it.priority }
+): List<AutoRuleDraft> = rules.filter { it.enabled && it.matches(candidate) }.sortedWith(autoRuleDraftComparator)
+
+internal val autoRuleDraftComparator = compareBy<AutoRuleDraft>(
+    { if (it.isDefault) 1 else 0 },
+    { it.priority },
+    { it.id },
+)
+
+internal fun nextUserRulePriority(rules: List<AutoRuleDraft>): Int = rules.asSequence()
+    .filterNot(AutoRuleDraft::isDefault)
+    .maxOfOrNull(AutoRuleDraft::priority)
+    ?.let { if (it == Int.MAX_VALUE) it else it + 1 }
+    ?: 0
 
 internal val defaultCategoryColors = listOf(
     0xFF2E7D32L,
