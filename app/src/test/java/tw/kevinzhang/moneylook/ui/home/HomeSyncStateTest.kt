@@ -8,6 +8,8 @@ import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
+import tw.kevinzhang.extension_runtime.data.TransferSyncData
+import tw.kevinzhang.extension_runtime.data.TransferSyncRangeData
 
 class HomeSyncStateTest {
     @Test
@@ -31,6 +33,29 @@ class HomeSyncStateTest {
 
         assertEquals(SyncState.SUCCESS, result.homeSyncState())
         assertNull(result.homeSyncMessage())
+    }
+
+    @Test
+    fun `incomplete account history uses the fixed partial warning without bank details`() {
+        val result = SyncResult.Success(
+            accounts = listOf(
+                AccountData(
+                    name = "活期",
+                    balance = 1.0,
+                    currency = "TWD",
+                    transferSync = TransferSyncData(
+                        requestedStart = "2026-01-01",
+                        requestedEnd = "2026-07-22",
+                        completedRanges = listOf(TransferSyncRangeData("2026-07-01", "2026-07-22")),
+                        complete = false,
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(SyncState.PARTIAL, result.homeSyncState())
+        assertEquals(PARTIAL_SYNC_MESSAGE, result.homeSyncMessage())
+        assertEquals(false, requireNotNull(result.homeSyncMessage()).contains("活期"))
     }
 
     @Test

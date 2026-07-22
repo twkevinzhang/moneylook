@@ -111,11 +111,17 @@ class SyncResultPersister @Inject constructor(
     }
 }
 
-internal val SyncResult.Success.hasPartialKindFailure: Boolean
-    get() = kindSync?.any { it.status == KindSyncStatus.FAILED } == true
+/**
+ * A successful extension run may still leave a product or part of an account's history
+ * unsynchronized. Treat either case as partial so callers do not present it as a complete
+ * snapshot.
+ */
+internal val SyncResult.Success.hasPartialSyncFailure: Boolean
+    get() = kindSync?.any { it.status == KindSyncStatus.FAILED } == true ||
+        accounts.any { it.transferSync?.complete == false }
 
 internal val SyncResult.Success.appLastRunStatus: String
-    get() = if (hasPartialKindFailure) "partial" else "success"
+    get() = if (hasPartialSyncFailure) "partial" else "success"
 
 /** Only source-key upgrades with a full legacy account number are eligible for ID preservation. */
 private fun legacyIdentityForSourceKey(data: AccountData): LegacyAccountIdentity? {

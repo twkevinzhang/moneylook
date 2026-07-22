@@ -41,7 +41,7 @@ import tw.kevinzhang.moneylook.schedule.SchedulerManager
 import tw.kevinzhang.moneylook.sync.BankSyncCoordinator
 import tw.kevinzhang.moneylook.sync.SyncResultPersister
 import tw.kevinzhang.moneylook.sync.appLastRunStatus
-import tw.kevinzhang.moneylook.sync.hasPartialKindFailure
+import tw.kevinzhang.moneylook.sync.hasPartialSyncFailure
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import javax.inject.Inject
@@ -51,10 +51,10 @@ enum class SyncState { IDLE, SYNCING, SUCCESS, PARTIAL, ERROR }
 internal const val PARTIAL_SYNC_MESSAGE = "部分資料同步失敗，已保留上次資料"
 
 internal fun SyncResult.Success.homeSyncState(): SyncState =
-    if (hasPartialKindFailure) SyncState.PARTIAL else SyncState.SUCCESS
+    if (hasPartialSyncFailure) SyncState.PARTIAL else SyncState.SUCCESS
 
 internal fun SyncResult.Success.homeSyncMessage(): String? =
-    PARTIAL_SYNC_MESSAGE.takeIf { hasPartialKindFailure }
+    PARTIAL_SYNC_MESSAGE.takeIf { hasPartialSyncFailure }
 
 internal fun persistedSyncState(lastRunStatus: String?): SyncState =
     if (lastRunStatus == "partial") SyncState.PARTIAL else SyncState.IDLE
