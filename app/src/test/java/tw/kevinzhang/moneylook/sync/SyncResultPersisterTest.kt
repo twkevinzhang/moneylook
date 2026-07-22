@@ -171,19 +171,50 @@ class SyncResultPersisterTest {
         SyncResultPersister(store).persist(extension(), result)
 
         assertEquals(setOf(AssetKind.DEPOSIT), store.replaceKinds)
-        assertTrue(result.hasPartialKindFailure)
+        assertTrue(result.hasPartialSyncFailure)
         assertEquals("partial", result.appLastRunStatus)
     }
 
     @Test
-    fun `legacy result keeps whole snapshot replacement semantics`() = runBlocking {
+    fun `incomplete account history marks a successful result partial without changing completed ranges`() = runBlocking {
+        val store = RecordingStore()
+        val result = SyncResult.Success(
+            accounts = listOf(
+                AccountData(
+                    name = "活期",
+                    balance = 1.0,
+                    currency = "TWD",
+                    transferSync = TransferSyncData(
+                        requestedStart = "2026-01-01",
+                        requestedEnd = "2026-07-22",
+                        completedRanges = listOf(TransferSyncRangeData("2026-07-01", "2026-07-22")),
+                        complete = false,
+                    ),
+                ),
+            ),
+            kindSync = listOf(KindSyncResult(AssetKind.DEPOSIT, KindSyncStatus.COMPLETE, null)),
+        )
+
+        SyncResultPersister(store).persist(extension(), result)
+
+        assertEquals(false, store.accounts.single().transferSyncComplete)
+        assertEquals(
+            listOf(TransferDateRange("2026-07-01", "2026-07-22")),
+            store.refreshes.single().completedRanges,
+        )
+        assertTrue(result.hasPartialSyncFailure)
+        assertEquals("partial", result.appLastRunStatus)
+    }
+
+    @Test
+    fun `complete or legacy result keeps its snapshot replacement semantics`() = runBlocking {
         val store = RecordingStore()
         val result = SyncResult.Success(listOf(AccountData("活期", 1.0, "TWD")))
 
         SyncResultPersister(store).persist(extension(), result)
 
         assertNull(store.replaceKinds)
-        assertFalse(result.hasPartialKindFailure)
+        assertFalse(result.hasPartialSyncFailure)
         assertEquals("success", result.appLastRunStatus)
     }
 
