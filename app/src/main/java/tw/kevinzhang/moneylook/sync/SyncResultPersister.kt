@@ -18,6 +18,7 @@ import javax.inject.Singleton
 @Singleton
 class SyncResultPersister @Inject constructor(
     private val transferSyncStore: TransferSyncStore,
+    private val autoCategorizer: TransferAutoCategorizer = TransferAutoCategorizer { },
 ) {
     suspend fun persist(extension: InstalledExtension, result: SyncResult.Success) {
         val now = System.currentTimeMillis()
@@ -108,6 +109,7 @@ class SyncResultPersister @Inject constructor(
                 ?.filter { it.status == KindSyncStatus.COMPLETE }
                 ?.mapTo(mutableSetOf()) { it.kind },
         )
+        autoCategorizer.categorizeTransferIds(transfers.map(Transfer::id))
     }
 }
 

@@ -8,4 +8,10 @@ sealed class Screen(val route: String) {
     object ExtensionLedger : Screen("ledger/{accountId}") {
         fun route(accountId: String) = "ledger/${java.net.URLEncoder.encode(accountId, "UTF-8")}"
     }
+    object TransactionDetail : Screen("transaction/{transferId}") {
+        fun route(transferId: String) = "transaction/${java.net.URLEncoder.encode(transferId, "UTF-8")}"
+    }
+    object Categories : Screen("categories")
+    object Tags : Screen("tags")
+    object AutoRules : Screen("auto_rules")
 }

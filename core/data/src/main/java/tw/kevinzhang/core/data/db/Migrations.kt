@@ -281,3 +281,124 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         )
     }
 }
+
+/** Adds user-owned categories, tags, transaction annotations, and automatic classification rules. */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `categories` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL COLLATE NOCASE,
+                `color` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_categories_name` ON `categories` (`name`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `tags` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL COLLATE NOCASE,
+                `color` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_tags_name` ON `tags` (`name`)")
+
+        // No foreign key to transfers: sync range replacement must preserve this user metadata.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `transfer_annotations` (
+                `transferId` TEXT NOT NULL,
+                `extensionId` TEXT NOT NULL,
+                `categoryId` TEXT,
+                `note` TEXT NOT NULL,
+                `categoryAssignment` TEXT NOT NULL,
+                `manualOverride` INTEGER NOT NULL,
+                PRIMARY KEY(`transferId`),
+                FOREIGN KEY(`categoryId`) REFERENCES `categories`(`id`)
+                    ON UPDATE NO ACTION ON DELETE SET NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_transfer_annotations_extensionId` " +
+                "ON `transfer_annotations` (`extensionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_transfer_annotations_categoryId` " +
+                "ON `transfer_annotations` (`categoryId`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `transfer_tag_cross_refs` (
+                `transferId` TEXT NOT NULL,
+                `tagId` TEXT NOT NULL,
+                `source` TEXT NOT NULL,
+                PRIMARY KEY(`transferId`, `tagId`),
+                FOREIGN KEY(`tagId`) REFERENCES `tags`(`id`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_transfer_tag_cross_refs_tagId` " +
+                "ON `transfer_tag_cross_refs` (`tagId`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `auto_category_rules` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `descriptionContains` TEXT,
+                `direction` TEXT NOT NULL,
+                `minAbsoluteAmount` REAL,
+                `maxAbsoluteAmount` REAL,
+                `accountId` TEXT,
+                `categoryId` TEXT,
+                `enabled` INTEGER NOT NULL,
+                `priority` INTEGER NOT NULL,
+                PRIMARY KEY(`id`),
+                FOREIGN KEY(`categoryId`) REFERENCES `categories`(`id`)
+                    ON UPDATE NO ACTION ON DELETE SET NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_enabled_priority_id` " +
+                "ON `auto_category_rules` (`enabled`, `priority`, `id`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_accountId` " +
+                "ON `auto_category_rules` (`accountId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_categoryId` " +
+                "ON `auto_category_rules` (`categoryId`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `auto_category_rule_tag_cross_refs` (
+                `ruleId` TEXT NOT NULL,
+                `tagId` TEXT NOT NULL,
+                PRIMARY KEY(`ruleId`, `tagId`),
+                FOREIGN KEY(`ruleId`) REFERENCES `auto_category_rules`(`id`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE,
+                FOREIGN KEY(`tagId`) REFERENCES `tags`(`id`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rule_tag_cross_refs_tagId` " +
+                "ON `auto_category_rule_tag_cross_refs` (`tagId`)",
+        )
+    }
+}

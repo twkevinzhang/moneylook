@@ -14,6 +14,14 @@ interface TransferDao : TransferCursorStore {
     @Upsert
     suspend fun upsertAll(transfers: List<Transfer>)
 
+    /** Used by the rule application service after a sync without observing a Flow per transfer. */
+    @Query("SELECT * FROM transfers WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<Transfer>
+
+    /** Explicit user action can apply enabled rules to the full local transaction history. */
+    @Query("SELECT * FROM transfers")
+    suspend fun getAll(): List<Transfer>
+
     @Query(
         """
         SELECT a.sourceAccountKey AS sourceAccountKey,

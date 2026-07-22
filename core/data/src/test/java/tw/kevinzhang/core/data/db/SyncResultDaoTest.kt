@@ -13,8 +13,12 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.Category
+import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
+import tw.kevinzhang.core.data.model.TransferAnnotation
 
 @RunWith(RobolectricTestRunner::class)
 class SyncResultDaoTest {
@@ -84,6 +88,51 @@ class SyncResultDaoTest {
             false,
             database.accountDao().observeAll().first().single { it.id == "account" }.transferSyncComplete,
         )
+    }
+
+    @Test
+    fun `range replacement with a stable transfer id preserves manual category tags and note`() = runBlocking {
+        val store = database.syncResultDao()
+        val annotationDao = database.transferAnnotationDao()
+        val account = account("account")
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(account),
+            transfers = listOf(transfer("stable", "2026-07-21", -100.0)),
+            refreshes = listOf(AccountTransferRefresh("account", null)),
+        )
+        database.categoryDao().upsert(Category("food", "餐飲", "#2E7D32"))
+        database.tagDao().upsert(Tag("work", "公司", "#1565C0"))
+        annotationDao.saveManualAnnotation(
+            TransferAnnotation(
+                transferId = "stable",
+                extensionId = "extension",
+                categoryId = "food",
+                note = "保留這個備註",
+                categoryAssignment = AssignmentSource.MANUAL,
+            ),
+            setOf("work"),
+        )
+
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(account),
+            transfers = listOf(
+                transfer("stable", "2026-07-21", -100.0).copy(description = "銀行更新後的描述"),
+            ),
+            refreshes = listOf(
+                AccountTransferRefresh("account", listOf(TransferDateRange("2026-07-21", "2026-07-21"))),
+            ),
+        )
+
+        annotationDao.observeDetail("stable").first()!!.also { detail ->
+            assertEquals("銀行更新後的描述", detail.transfer.description)
+            assertEquals("food", detail.annotation?.categoryId)
+            assertEquals("保留這個備註", detail.annotation?.note)
+            assertEquals(AssignmentSource.MANUAL, detail.annotation?.categoryAssignment)
+            assertEquals(listOf("work"), detail.tags.map(Tag::id))
+        }
+        Unit
     }
 
     @Test
