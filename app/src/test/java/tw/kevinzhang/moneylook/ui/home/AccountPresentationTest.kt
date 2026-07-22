@@ -74,4 +74,18 @@ class AccountPresentationTest {
         assertEquals("$ 10,000", presentation.primaryAmount)
         assertFalse(presentation.isLiability)
     }
+
+    @Test
+    fun hiddenAmountsMaskBothBalanceAndAvailableCredit() {
+        val presentation = accountRowPresentation(
+            kind = AssetKind.CREDIT_CARD,
+            balance = 7_498.0,
+            currency = "TWD",
+            availableCredit = 22_502.0,
+            isAmountVisible = false,
+        )
+
+        assertEquals("••••", presentation.primaryAmount)
+        assertEquals("可用額度 ••••", presentation.supportingText)
+    }
 }

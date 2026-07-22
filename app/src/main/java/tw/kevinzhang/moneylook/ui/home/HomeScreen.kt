@@ -26,11 +26,15 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -47,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +85,16 @@ fun HomeScreen(
     val countdownMs by viewModel.countdownMs.collectAsStateWithLifecycle()
     var showSyncDialog by remember { mutableStateOf(false) }
     var editingExtension by remember { mutableStateOf<InstalledExtension?>(null) }
+    var areAmountsVisible by rememberSaveable { mutableStateOf(true) }
+    val hasPartialData = syncStatuses.values.any { status ->
+        status.syncState == SyncState.PARTIAL || status.syncState == SyncState.ERROR
+    }
+    val overview = remember(accounts, hasPartialData) {
+        homeOverviewPresentation(
+            accounts = accounts,
+            hasPartialData = hasPartialData,
+        )
+    }
 
     editingExtension?.let { extension ->
         CredentialEditDialog(
@@ -125,17 +140,28 @@ fun HomeScreen(
             }
         },
     ) { innerPadding ->
-        if (extensions.isEmpty()) {
-            EmptyState(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
-                onAddExtension = onNavigateToMarketplace,
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(innerPadding),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(key = "home-overview") {
+                HomeOverviewCard(
+                    overview = overview,
+                    areAmountsVisible = areAmountsVisible,
+                    onToggleAmountVisibility = { areAmountsVisible = !areAmountsVisible },
+                )
+            }
+            if (extensions.isEmpty()) {
+                item(key = "no-extensions") {
+                    EmptyState(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        onAddExtension = onNavigateToMarketplace,
+                    )
+                }
+            } else {
                 items(extensions, key = { it.id }) { ext ->
                     val status = syncStatuses[ext.id]
                     val extAccounts = accounts.filter { it.extensionId == ext.id }
@@ -151,10 +177,156 @@ fun HomeScreen(
                         onSync = { viewModel.sync(ext) },
                         onEditCredentials = { editingExtension = ext },
                         onViewLedger = onNavigateToLedger,
+                        areAmountsVisible = areAmountsVisible,
                     )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HomeOverviewCard(
+    overview: HomeOverviewPresentation,
+    areAmountsVisible: Boolean,
+    onToggleAmountVisibility: () -> Unit,
+) {
+    var selectedSection by rememberSaveable { mutableStateOf(OverviewSection.ASSETS) }
+    val selectedLabel = if (selectedSection == OverviewSection.ASSETS) "資產" else "負債"
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "總覽",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "依幣別彙總，未進行匯率換算",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+                IconButton(onClick = onToggleAmountVisibility) {
+                    Icon(
+                        imageVector = if (areAmountsVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (areAmountsVisible) "隱藏所有金額" else "顯示所有金額",
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = "淨資產",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            if (!overview.hasAccounts) {
+                Text(
+                    text = "尚無帳戶資料",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            } else {
+                overview.currencies.forEach { summary ->
+                    OverviewAmountRow(
+                        currency = summary.currency,
+                        amount = summary.netWorth,
+                        areAmountsVisible = areAmountsVisible,
+                        emphasized = true,
+                    )
+                }
+            }
+
+            if (overview.hasAccounts) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = selectedSection == OverviewSection.ASSETS,
+                        onClick = { selectedSection = OverviewSection.ASSETS },
+                        label = { Text("資產") },
+                        modifier = Modifier.weight(1f),
+                    )
+                    FilterChip(
+                        selected = selectedSection == OverviewSection.LIABILITIES,
+                        onClick = { selectedSection = OverviewSection.LIABILITIES },
+                        label = { Text("負債") },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = selectedLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                overview.currencies.forEach { summary ->
+                    OverviewAmountRow(
+                        currency = summary.currency,
+                        amount = if (selectedSection == OverviewSection.ASSETS) {
+                            summary.assets
+                        } else {
+                            summary.liabilities
+                        },
+                        areAmountsVisible = areAmountsVisible,
+                        emphasized = false,
+                    )
+                }
+            }
+
+            if (overview.hasPartialData) {
+                HorizontalDivider(modifier = Modifier.padding(top = 16.dp, bottom = 10.dp))
+                Text(
+                    text = if (overview.hasAccounts) {
+                        "部分資料可能尚未更新，已保留最後成功同步的餘額。"
+                    } else {
+                        "部分資料同步失敗，尚無可顯示的帳戶餘額。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OverviewAmountRow(
+    currency: String,
+    amount: Double,
+    areAmountsVisible: Boolean,
+    emphasized: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = if (emphasized) 6.dp else 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = currency,
+            style = if (emphasized) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            text = formatVisibleCurrencyAmount(amount, currency, areAmountsVisible),
+            style = if (emphasized) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+            fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Medium,
+        )
     }
 }
 
@@ -171,6 +343,7 @@ private fun ExtensionCard(
     onSync: () -> Unit,
     onEditCredentials: () -> Unit,
     onViewLedger: (accountId: String) -> Unit,
+    areAmountsVisible: Boolean,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -262,7 +435,11 @@ private fun ExtensionCard(
             if (accounts.isNotEmpty()) {
                 accounts.forEach { account ->
                     HorizontalDivider()
-                    AccountRow(account, onClick = { onViewLedger(account.id) })
+                    AccountRow(
+                        account = account,
+                        areAmountsVisible = areAmountsVisible,
+                        onClick = { onViewLedger(account.id) },
+                    )
                 }
             }
         }
@@ -407,12 +584,17 @@ private fun ExtensionIcon(extension: InstalledExtension) {
 }
 
 @Composable
-private fun AccountRow(account: Account, onClick: () -> Unit) {
+private fun AccountRow(
+    account: Account,
+    areAmountsVisible: Boolean,
+    onClick: () -> Unit,
+) {
     val presentation = accountRowPresentation(
         kind = account.kind,
         balance = account.balance,
         currency = account.currency,
         availableCredit = account.availableCredit,
+        isAmountVisible = areAmountsVisible,
     )
     Row(
         modifier = Modifier
