@@ -20,4 +20,8 @@ dependencies {
     ksp(libs.hilt.compiler)
     api(libs.bundles.okhttp)
     api(libs.gson)
+    implementation(libs.coroutines.android)
+    testImplementation(libs.junit4)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.okhttp.mockwebserver)
 }

@@ -147,12 +147,10 @@ fun analysisPresentation(
     )
 }
 
-/** Category meaning wins for classified data; only uncategorized bank rows use their sign. */
+/** Transfers are excluded; every other row follows its original amount sign. */
 fun AnalysisTransaction.reportingDirection(): AnalysisDirection? = when (categoryKind) {
-    AnalysisCategoryKind.INCOME -> AnalysisDirection.INCOME
-    AnalysisCategoryKind.EXPENSE -> AnalysisDirection.EXPENSE
     AnalysisCategoryKind.TRANSFER -> null
-    null -> when {
+    else -> when {
         amount > 0.0 -> AnalysisDirection.INCOME
         amount < 0.0 -> AnalysisDirection.EXPENSE
         else -> null

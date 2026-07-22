@@ -1,6 +1,7 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,14 +16,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PageSize
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DateRangePicker
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,21 +43,30 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlin.math.abs
 
 @Composable
@@ -68,11 +80,8 @@ fun GlobalTransactionsScreen(
     GlobalTransactionsContent(
         state = state,
         onNavigateToTransaction = onNavigateToTransaction,
-        onPreviousMonth = viewModel::previousMonth,
-        onNextMonth = viewModel::nextMonth,
-        onResetToThisMonth = viewModel::resetToThisMonth,
+        onSelectDateRange = viewModel::selectDateRange,
         onSetDateRange = viewModel::setDateRange,
-        onSetCurrency = viewModel::setCurrency,
         onSetQuery = viewModel::setQuery,
         onUpdateFilter = viewModel::updateFilter,
         onClearFilters = viewModel::clearFilters,
@@ -89,11 +98,8 @@ fun GlobalTransactionsScreen(
 fun GlobalTransactionsContent(
     state: GlobalTransactionsUiState,
     onNavigateToTransaction: (String) -> Unit,
-    onPreviousMonth: () -> Unit,
-    onNextMonth: () -> Unit,
-    onResetToThisMonth: () -> Unit,
+    onSelectDateRange: (GlobalDateRange) -> Unit,
     onSetDateRange: (LocalDate?, LocalDate?) -> Boolean,
-    onSetCurrency: (String) -> Unit,
     onSetQuery: (String) -> Unit,
     onUpdateFilter: ((GlobalTransactionsFilter) -> GlobalTransactionsFilter) -> Unit,
     onClearFilters: () -> Unit,
@@ -106,9 +112,44 @@ fun GlobalTransactionsContent(
 ) {
     var showFilters by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
+    var searchActive by remember { mutableStateOf(false) }
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text("明細") }) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    if (searchActive) {
+                        OutlinedTextField(
+                            value = state.filter.query,
+                            onValueChange = onSetQuery,
+                            placeholder = { Text("搜尋交易、帳戶、分類或標籤") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        Text("明細")
+                    }
+                },
+                actions = {
+                    if (searchActive) {
+                        IconButton(onClick = { searchActive = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "關閉搜尋")
+                        }
+                    } else {
+                        IconButton(onClick = { searchActive = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "搜尋")
+                        }
+                    }
+                    IconButton(onClick = { showFilters = true }) {
+                        Icon(Icons.Default.FilterList, contentDescription = "進階篩選")
+                    }
+                    IconButton(onClick = { showDatePicker = true }) {
+                        Icon(Icons.Default.CalendarMonth, contentDescription = "選擇日期區間")
+                    }
+                },
+            )
+        },
         bottomBar = bottomBar,
     ) { padding ->
         LazyColumn(
@@ -118,21 +159,22 @@ fun GlobalTransactionsContent(
             item("controls") {
                 GlobalTransactionControls(
                     state = state,
-                    onPreviousMonth = onPreviousMonth,
-                    onNextMonth = onNextMonth,
-                    onResetToThisMonth = onResetToThisMonth,
-                    onShowDatePicker = { showDatePicker = true },
-                    onSetCurrency = onSetCurrency,
-                    onSetQuery = onSetQuery,
-                    onShowFilters = { showFilters = true },
+                    onSelectDateRange = onSelectDateRange,
                 )
             }
             item("summary") {
                 GlobalSummaryCards(
                     summary = state.summary,
-                    currency = state.filter.currency,
+                    currency = "TWD",
+                    selectedDirection = state.filter.direction,
                     onIncome = { onSelectReportDirection(GlobalTransactionDirection.INCOME) },
                     onExpense = { onSelectReportDirection(GlobalTransactionDirection.EXPENSE) },
+                )
+            }
+            item("exchange-rate-notice") {
+                ExchangeRateNotice(
+                    loading = state.exchangeRatesLoading,
+                    hasMissingCurrencies = state.missingExchangeCurrencies.isNotEmpty(),
                 )
             }
             item("tabs") {
@@ -140,15 +182,9 @@ fun GlobalTransactionsContent(
             }
             when (state.activeTab) {
                 GlobalTransactionsTab.CATEGORY -> {
-                    item("category-direction") {
-                        CategoryDirectionSelector(
-                            selected = state.categoryDirection,
-                            onSelect = onSelectReportDirection,
-                        )
-                    }
                     if (state.categories.isEmpty()) item("empty-category") { GlobalEmptyState("這個條件下沒有可統計的收支分類") }
                     else items(state.categories, key = { "category-${it.id}-${it.name}" }) { category ->
-                        CategorySummaryRow(category, state.filter.currency, onClick = { onCategoryClick(category.id) })
+                        CategorySummaryRow(category, "TWD", onClick = { onCategoryClick(category.id) })
                     }
                 }
                 GlobalTransactionsTab.DETAILS -> {
@@ -180,64 +216,105 @@ fun GlobalTransactionsContent(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GlobalTransactionControls(
     state: GlobalTransactionsUiState,
-    onPreviousMonth: () -> Unit,
-    onNextMonth: () -> Unit,
-    onResetToThisMonth: () -> Unit,
-    onShowDatePicker: () -> Unit,
-    onSetCurrency: (String) -> Unit,
-    onSetQuery: (String) -> Unit,
-    onShowFilters: () -> Unit,
+    onSelectDateRange: (GlobalDateRange) -> Unit,
 ) {
-    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onPreviousMonth) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "上個月") }
-            Text(state.dateRange.label(), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            IconButton(onClick = onNextMonth) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "下個月") }
-            IconButton(onClick = onShowDatePicker) { Icon(Icons.Default.CalendarMonth, "選擇日期區間") }
+    val today = remember { LocalDate.now() }
+    val model = remember(state.datePagerAnchor, today) {
+        globalDateRangePager(state.datePagerAnchor, today)
+    }
+    val pagerState = rememberPagerState(
+        initialPage = model.selectedPage,
+        pageCount = { model.pageCount },
+    )
+    val scope = rememberCoroutineScope()
+    val currentRange by rememberUpdatedState(state.dateRange)
+    val selectRange by rememberUpdatedState(onSelectDateRange)
+
+    LaunchedEffect(pagerState, model) {
+        if (pagerState.currentPage != model.selectedPage) {
+            pagerState.scrollToPage(model.selectedPage)
         }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { page ->
+                val range = model.rangeAt(page)
+                if (range != currentRange) selectRange(range)
+            }
+    }
+
+    HorizontalPager(
+        state = pagerState,
+        modifier = Modifier.fillMaxWidth().testTag("date-period-pager"),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 104.dp),
+        pageSpacing = 8.dp,
+        pageSize = PageSize.Fixed(152.dp),
+        beyondViewportPageCount = 1,
+    ) { page ->
+        val range = model.rangeAt(page)
+        val selected = page == pagerState.currentPage
+        Card(
+            modifier = Modifier
+                .height(48.dp)
+                .clickable { scope.launch { pagerState.animateScrollToPage(page) } },
+            colors = CardDefaults.cardColors(
+                containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer
+                else MaterialTheme.colorScheme.surfaceContainer,
+            ),
         ) {
-            AssistChip(onClick = onResetToThisMonth, label = { Text("本月") })
-            state.currencies.forEach { currency ->
-                FilterChip(selected = currency == state.filter.currency, onClick = { onSetCurrency(currency) }, label = { Text(currency) })
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = range.tabLabel(),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    maxLines = 1,
+                )
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = state.filter.query,
-                onValueChange = onSetQuery,
-                label = { Text("搜尋交易、帳戶、分類或標籤") },
-                leadingIcon = { Icon(Icons.Default.Search, null) },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = onShowFilters) { Icon(Icons.Default.FilterList, "進階篩選") }
-        }
     }
+}
+
+@Composable
+private fun ExchangeRateNotice(loading: Boolean, hasMissingCurrencies: Boolean) {
+    val text = when {
+        loading -> "正在取得最新匯率 · 匯率資料：ExchangeRate-API"
+        hasMissingCurrencies -> "統計已換算為 TWD · 部分幣別未計入 · 匯率資料：ExchangeRate-API"
+        else -> "統計已依最新匯率換算為 TWD · 匯率資料：ExchangeRate-API"
+    }
+    Text(
+        text = text,
+        modifier = Modifier.padding(horizontal = 16.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
 private fun GlobalSummaryCards(
     summary: GlobalTransactionsSummary,
     currency: String,
+    selectedDirection: GlobalTransactionDirection?,
     onIncome: () -> Unit,
     onExpense: () -> Unit,
 ) {
     Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        SummaryCard("收入", summary.income, currency, MaterialTheme.colorScheme.primary, onIncome, Modifier.weight(1f))
-        SummaryCard("支出", summary.expense, currency, MaterialTheme.colorScheme.error, onExpense, Modifier.weight(1f))
+        SummaryCard("收入", summary.income, currency, MaterialTheme.colorScheme.primary, selectedDirection == GlobalTransactionDirection.INCOME, onIncome, Modifier.weight(1f).testTag("summary-income"))
+        SummaryCard("支出", summary.expense, currency, MaterialTheme.colorScheme.error, selectedDirection == GlobalTransactionDirection.EXPENSE, onExpense, Modifier.weight(1f).testTag("summary-expense"))
     }
 }
 
 @Composable
-private fun SummaryCard(label: String, amount: Double, currency: String, color: Color, onClick: () -> Unit, modifier: Modifier) {
-    Card(modifier = modifier.clickable(onClick = onClick)) {
+private fun SummaryCard(label: String, amount: Double, currency: String, color: Color, selected: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    Card(
+        modifier = modifier.semantics { this.selected = selected }.clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        border = if (selected) CardDefaults.outlinedCardBorder().copy(width = 2.dp, brush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary)) else null,
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(label, style = MaterialTheme.typography.labelLarge)
             Text(globalMoney(amount, currency), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = color)
@@ -251,30 +328,6 @@ private fun GlobalTabs(selected: GlobalTransactionsTab, onSelect: (GlobalTransac
         FilterChip(selected == GlobalTransactionsTab.CATEGORY, { onSelect(GlobalTransactionsTab.CATEGORY) }, { Text("分類") }, Modifier.weight(1f))
         FilterChip(selected == GlobalTransactionsTab.DETAILS, { onSelect(GlobalTransactionsTab.DETAILS) }, { Text("明細") }, Modifier.weight(1f))
         FilterChip(selected == GlobalTransactionsTab.ANALYSIS, { onSelect(GlobalTransactionsTab.ANALYSIS) }, { Text("分析") }, Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun CategoryDirectionSelector(
-    selected: GlobalTransactionDirection,
-    onSelect: (GlobalTransactionDirection) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(
-            selected = selected == GlobalTransactionDirection.INCOME,
-            onClick = { onSelect(GlobalTransactionDirection.INCOME) },
-            label = { Text("收入") },
-            modifier = Modifier.weight(1f),
-        )
-        FilterChip(
-            selected = selected == GlobalTransactionDirection.EXPENSE,
-            onClick = { onSelect(GlobalTransactionDirection.EXPENSE) },
-            label = { Text("支出") },
-            modifier = Modifier.weight(1f),
-        )
     }
 }
 
@@ -346,7 +399,6 @@ private fun GlobalTransactionFilterSheet(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     DirectionChip("收入", GlobalTransactionDirection.INCOME, state.filter.direction, onUpdate)
                     DirectionChip("支出", GlobalTransactionDirection.EXPENSE, state.filter.direction, onUpdate)
-                    DirectionChip("移轉", GlobalTransactionDirection.TRANSFER, state.filter.direction, onUpdate)
                 }
             }
             item {

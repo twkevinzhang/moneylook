@@ -6,7 +6,7 @@ import org.junit.Test
 
 class AnalysisPresentationTest {
     @Test
-    fun categoryKindOverridesAmountSignAndTransfersNeverEnterReports() {
+    fun amountSignControlsDirectionAndTransfersNeverEnterReports() {
         val presentation = analysisPresentation(
             transactions = listOf(
                 transaction("2026-07-01", 100.0),
@@ -20,12 +20,12 @@ class AnalysisPresentationTest {
             referenceMonth = AnalysisMonth(2026, 7),
         )
 
-        assertEquals(120.0, presentation.summary.income, 0.0)
-        assertEquals(40.0, presentation.summary.expense, 0.0)
-        assertEquals(80.0, presentation.summary.balance, 0.0)
-        assertEquals(listOf("未分類", "薪資"), presentation.categorySlices(AnalysisDirection.INCOME).map { it.name })
-        assertEquals(listOf("餐飲"), presentation.categorySlices(AnalysisDirection.EXPENSE).map { it.name })
-        assertEquals(40.0, presentation.categorySlices(AnalysisDirection.EXPENSE).single().amount, 0.0)
+        assertEquals(140.0, presentation.summary.income, 0.0)
+        assertEquals(20.0, presentation.summary.expense, 0.0)
+        assertEquals(120.0, presentation.summary.balance, 0.0)
+        assertEquals(listOf("未分類", "餐飲"), presentation.categorySlices(AnalysisDirection.INCOME).map { it.name })
+        assertEquals(listOf("薪資"), presentation.categorySlices(AnalysisDirection.EXPENSE).map { it.name })
+        assertEquals(20.0, presentation.categorySlices(AnalysisDirection.EXPENSE).single().amount, 0.0)
     }
 
     @Test
@@ -50,9 +50,9 @@ class AnalysisPresentationTest {
     }
 
     @Test
-    fun reportDirectionUsesCategoryWhenPresentAndOnlyUsesSignWhenUncategorized() {
-        assertEquals(AnalysisDirection.EXPENSE, transaction("2026-07-01", 1.0, categoryKind = AnalysisCategoryKind.EXPENSE).reportingDirection())
-        assertEquals(AnalysisDirection.INCOME, transaction("2026-07-01", -1.0, categoryKind = AnalysisCategoryKind.INCOME).reportingDirection())
+    fun reportDirectionUsesSignExceptForTransfers() {
+        assertEquals(AnalysisDirection.INCOME, transaction("2026-07-01", 1.0, categoryKind = AnalysisCategoryKind.EXPENSE).reportingDirection())
+        assertEquals(AnalysisDirection.EXPENSE, transaction("2026-07-01", -1.0, categoryKind = AnalysisCategoryKind.INCOME).reportingDirection())
         assertEquals(AnalysisDirection.EXPENSE, transaction("2026-07-01", -1.0).reportingDirection())
         assertNull(transaction("2026-07-01", 1.0, categoryKind = AnalysisCategoryKind.TRANSFER).reportingDirection())
     }

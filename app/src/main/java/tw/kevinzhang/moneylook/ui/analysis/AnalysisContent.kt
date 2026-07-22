@@ -15,15 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -47,9 +42,9 @@ import kotlin.math.max
 @Composable
 fun AnalysisContent(
     presentation: AnalysisPresentation,
+    selectedDirection: AnalysisDirection = AnalysisDirection.EXPENSE,
     modifier: Modifier = Modifier,
 ) {
-    var categoryDirection by rememberSaveable { mutableStateOf(AnalysisDirection.EXPENSE) }
     Column(
         modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -60,28 +55,10 @@ fun AnalysisContent(
         SectionHeading("本期分類", "錢花在哪裡？")
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = categoryDirection == AnalysisDirection.INCOME,
-                        onClick = { categoryDirection = AnalysisDirection.INCOME },
-                        label = { Text("收入") },
-                        modifier = Modifier.weight(1f),
-                    )
-                    FilterChip(
-                        selected = categoryDirection == AnalysisDirection.EXPENSE,
-                        onClick = { categoryDirection = AnalysisDirection.EXPENSE },
-                        label = { Text("支出") },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Spacer(Modifier.height(18.dp))
                 CategoryDonut(
-                    slices = presentation.categorySlices(categoryDirection),
+                    slices = presentation.categorySlices(selectedDirection),
                     currency = presentation.currency,
-                    direction = categoryDirection,
+                    direction = selectedDirection,
                     periodLabel = presentation.periodLabel,
                 )
             }
