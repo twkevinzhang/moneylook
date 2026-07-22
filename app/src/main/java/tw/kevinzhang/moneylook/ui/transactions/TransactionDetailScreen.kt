@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -321,11 +322,6 @@ private fun CategoryPickerSheet(
                     )
                 }
             }
-            FilterChip(
-                selected = selectedCategoryId == null,
-                onClick = { onSelectCategory(null) },
-                label = { Text("尚未分類") },
-            )
             if (kind in allowedKinds(amount)) {
                 CategoryGrid(
                     categories = categories.filter { it.kind == kind },
@@ -345,46 +341,81 @@ private fun ApplyScopeRow(
     onSameDescription: () -> Unit,
     onEditRule: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            FilterChip(selected = !appliesToMatches, onClick = onCurrentOnly, label = { Text("套用這筆明細") })
-            FilterChip(selected = appliesToMatches, onClick = onSameDescription, label = { Text("套用過去及未來的相同明細") })
-        }
-        IconButton(onClick = onEditRule, enabled = editEnabled) {
-            Icon(Icons.Default.Edit, contentDescription = "編輯自動分類規則")
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FilterChip(
+            selected = !appliesToMatches,
+            onClick = onCurrentOnly,
+            label = { Text("套用這筆明細") },
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            FilterChip(
+                selected = appliesToMatches,
+                onClick = onSameDescription,
+                label = { Text("套用過去及未來的相同明細") },
+            )
+            Spacer(Modifier.weight(1f))
+            FilterChip(
+                selected = appliesToMatches,
+                onClick = onEditRule,
+                enabled = editEnabled,
+                label = { Text("編輯規則") },
+            )
         }
     }
 }
 
 @Composable
 private fun CategoryGrid(categories: List<CategoryOption>, selectedCategoryId: String?, onSelect: (String?) -> Unit) {
-    if (categories.isEmpty()) {
-        Text("尚無此類別，請先到設定新增。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        return
-    }
     FlowRow(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
+        CategoryTile(
+            emoji = UNCATEGORIZED_EMOJI,
+            name = "尚未分類",
+            color = UNCATEGORIZED_COLOR,
+            selected = selectedCategoryId == null,
+            onClick = { onSelect(null) },
+        )
         categories.forEach { category ->
-            Column(
-                modifier = Modifier.size(width = 78.dp, height = 98.dp).clickable { onSelect(category.id) },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Box(
-                    modifier = Modifier.size(56.dp).background(Color(category.color), CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) { Text(category.emoji, style = MaterialTheme.typography.titleLarge) }
-                Text(
-                    text = category.name,
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.Center,
-                    color = if (category.id == selectedCategoryId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                )
-            }
+            CategoryTile(
+                emoji = category.emoji,
+                name = category.name,
+                color = category.color,
+                selected = category.id == selectedCategoryId,
+                onClick = { onSelect(category.id) },
+            )
         }
+    }
+    if (categories.isEmpty()) {
+        Text("尚無此類別，請先到設定新增。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun CategoryTile(
+    emoji: String,
+    name: String,
+    color: Long,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.size(width = 78.dp, height = 98.dp).clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            modifier = Modifier.size(56.dp).background(Color(color), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) { Text(emoji, style = MaterialTheme.typography.titleLarge) }
+        Text(
+            text = name,
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
@@ -404,6 +435,9 @@ internal fun CategoryKind.toDisplayName(): String = when (this) {
     CategoryKind.INCOME -> "收入"
     CategoryKind.TRANSFER -> "移轉"
 }
+
+internal const val UNCATEGORIZED_EMOJI = "🏷️"
+private const val UNCATEGORIZED_COLOR = 0xFF607D8B
 
 internal fun defaultExactDescriptionRule(description: String, categoryId: String?): AutoRuleDraft = AutoRuleDraft(
     name = "${description.trim().take(24).ifBlank { "相同明細" }}分類",
