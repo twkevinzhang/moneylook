@@ -23,6 +23,10 @@ import tw.kevinzhang.moneylook.ui.home.HomeScreen
 import tw.kevinzhang.moneylook.ui.marketplace.ManageReposScreen
 import tw.kevinzhang.moneylook.ui.marketplace.MarketplaceScreen
 import tw.kevinzhang.moneylook.ui.settings.SettingsScreen
+import tw.kevinzhang.moneylook.ui.transactions.AutoRuleScreen
+import tw.kevinzhang.moneylook.ui.transactions.CategoryManagementScreen
+import tw.kevinzhang.moneylook.ui.transactions.TagManagementScreen
+import tw.kevinzhang.moneylook.ui.transactions.TransactionDetailScreen
 
 private val bottomBarRoutes = setOf(
     Screen.Home.route,
@@ -108,7 +112,12 @@ fun AppNavHost(navController: NavHostController) {
             )
         }
         composable(Screen.Settings.route) {
-            SettingsScreen(bottomBar = bottomBar)
+            SettingsScreen(
+                bottomBar = bottomBar,
+                onNavigateToCategories = { navController.navigate(Screen.Categories.route) },
+                onNavigateToTags = { navController.navigate(Screen.Tags.route) },
+                onNavigateToRules = { navController.navigate(Screen.AutoRules.route) },
+            )
         }
         composable(Screen.ManageRepos.route) {
             ManageReposScreen(onNavigateUp = { navController.popBackStack() })
@@ -124,7 +133,23 @@ fun AppNavHost(navController: NavHostController) {
             ExtensionLedgerScreen(
                 accountId = accountId,
                 onNavigateUp = { navController.popBackStack() },
+                onNavigateToTransaction = { transferId -> navController.navigate(Screen.TransactionDetail.route(transferId)) },
             )
+        }
+        composable(
+            route = Screen.TransactionDetail.route,
+            arguments = listOf(navArgument("transferId") { type = NavType.StringType }),
+        ) {
+            TransactionDetailScreen(onNavigateUp = { navController.popBackStack() })
+        }
+        composable(Screen.Categories.route) {
+            CategoryManagementScreen(onNavigateUp = { navController.popBackStack() })
+        }
+        composable(Screen.Tags.route) {
+            TagManagementScreen(onNavigateUp = { navController.popBackStack() })
+        }
+        composable(Screen.AutoRules.route) {
+            AutoRuleScreen(onNavigateUp = { navController.popBackStack() })
         }
     }
 }
