@@ -421,3 +421,15 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfers_txnDateTime` ON `transfers` (`txnDateTime`)")
     }
 }
+
+/** Marks bundled rules while preserving user rules and seeds only rules whose category still exists. */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `auto_category_rules` ADD COLUMN `isDefault` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_isDefault_enabled_priority_id` " +
+                "ON `auto_category_rules` (`isDefault`, `enabled`, `priority`, `id`)",
+        )
+        DefaultClassificationSeeder.seedRulesForExistingCategories(db)
+    }
+}

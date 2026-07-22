@@ -2,7 +2,9 @@ package tw.kevinzhang.core.data.db
 
 import androidx.room.Dao
 import androidx.room.Embedded
+import androidx.room.Insert
 import androidx.room.Junction
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Relation
 import androidx.room.Transaction
@@ -31,15 +33,19 @@ data class AutoCategoryRuleWithTags(
 @Dao
 abstract class AutoCategoryRuleDao {
     @Transaction
-    @Query(RULE_SELECT + " ORDER BY r.priority, r.id")
+    @Query(RULE_SELECT + " ORDER BY r.isDefault, r.priority, r.id")
     abstract fun observeAll(): Flow<List<AutoCategoryRuleWithTags>>
 
     @Transaction
-    @Query(RULE_SELECT + " WHERE r.enabled = 1 ORDER BY r.priority, r.id")
+    @Query(RULE_SELECT + " WHERE r.enabled = 1 ORDER BY r.isDefault, r.priority, r.id")
     abstract suspend fun getEnabledInPriorityOrder(): List<AutoCategoryRuleWithTags>
 
     @Upsert
     abstract suspend fun upsert(rule: AutoCategoryRule)
+
+    /** Inserts a bundled rule without replacing a user-edited rule with the same stable ID. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    abstract suspend fun insertIfAbsent(rule: AutoCategoryRule): Long
 
     @Transaction
     open suspend fun upsertWithTags(rule: AutoCategoryRule, tagIds: Set<String>) {

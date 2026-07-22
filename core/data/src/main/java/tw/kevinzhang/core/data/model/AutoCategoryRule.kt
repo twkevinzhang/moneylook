@@ -28,7 +28,12 @@ enum class AutoCategoryRuleDescriptionMatchMode {
             onDelete = ForeignKey.SET_NULL,
         ),
     ],
-    indices = [Index(value = ["enabled", "priority", "id"]), Index(value = ["accountId"]), Index(value = ["categoryId"])],
+    indices = [
+        Index(value = ["enabled", "priority", "id"]),
+        Index(value = ["isDefault", "enabled", "priority", "id"]),
+        Index(value = ["accountId"]),
+        Index(value = ["categoryId"]),
+    ],
 )
 data class AutoCategoryRule(
     @PrimaryKey val id: String,
@@ -45,6 +50,8 @@ data class AutoCategoryRule(
     /** Existing rules retain their original substring behaviour after the v12 migration. */
     val descriptionMatchMode: AutoCategoryRuleDescriptionMatchMode =
         AutoCategoryRuleDescriptionMatchMode.CONTAINS,
+    /** Bundled rules remain identifiable so user-created rules always run before them. */
+    val isDefault: Boolean = false,
 ) {
     init {
         require(name == name.trim() && name.isNotEmpty()) { "rule name must be non-blank and trimmed" }

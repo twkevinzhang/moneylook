@@ -17,13 +17,22 @@ class AutoRulePresentationTest {
         assertFalse(rule.copy(direction = TransactionDirection.INCOME).matches(candidate))
     }
 
-    @Test fun `enabled matches are ordered by ascending priority`() {
+    @Test fun `enabled user rules run before defaults then by ascending priority`() {
         val rules = listOf(
             AutoRuleDraft(id = "late", priority = 9),
             AutoRuleDraft(id = "disabled", priority = 1, enabled = false),
             AutoRuleDraft(id = "first", priority = 2),
+            AutoRuleDraft(id = "default", priority = 0, isDefault = true),
         )
-        assertEquals(listOf("first", "late"), orderedMatchingRules(rules, candidate).map { it.id })
+        assertEquals(listOf("first", "late", "default"), orderedMatchingRules(rules, candidate).map { it.id })
+    }
+
+    @Test fun `new user priority ignores bundled defaults`() {
+        val rules = listOf(
+            AutoRuleDraft(id = "user", priority = 4),
+            AutoRuleDraft(id = "default", priority = 190, isDefault = true),
+        )
+        assertEquals(5, nextUserRulePriority(rules))
     }
 
     @Test fun `saved rule requires a name condition action and valid amount range`() {

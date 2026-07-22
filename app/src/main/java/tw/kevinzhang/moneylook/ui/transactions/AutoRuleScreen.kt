@@ -78,7 +78,7 @@ fun AutoRuleListContent(
     }
     Scaffold(
         topBar = { TopAppBar(title = { Text("自動分類規則") }, navigationIcon = { BackButton(onNavigateUp) }) },
-        floatingActionButton = { FloatingActionButton(onClick = { editing = AutoRuleDraft(priority = rules.maxOfOrNull { it.priority }?.plus(1) ?: 0) }) { Icon(Icons.Default.Add, "新增規則") } },
+        floatingActionButton = { FloatingActionButton(onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) }) { Icon(Icons.Default.Add, "新增規則") } },
     ) { padding ->
         if (rules.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -86,7 +86,7 @@ fun AutoRuleListContent(
                 Text("新同步的交易會依規則由上而下比對。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else LazyColumn(modifier = Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rules.sortedBy { it.priority }, key = { it.id }) { rule ->
+            items(rules.sortedWith(autoRuleDraftComparator), key = { it.id }) { rule ->
                 RuleCard(rule, categories, tags, onToggle = { onSave(rule.copy(enabled = it)) }, onEdit = { editing = rule }, onDelete = { deleteId = rule.id }, onApplyExisting = { onApplyExisting(rule.id) })
             }
         }
