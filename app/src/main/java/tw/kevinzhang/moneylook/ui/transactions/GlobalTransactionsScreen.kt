@@ -3,6 +3,8 @@ package tw.kevinzhang.moneylook.ui.transactions
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.SnapPosition
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -18,16 +20,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PageSize
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
@@ -37,6 +39,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DateRangePicker
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -55,10 +58,12 @@ import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -78,6 +83,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -93,6 +100,7 @@ fun GlobalTransactionsScreen(
         state = state,
         onNavigateToTransaction = onNavigateToTransaction,
         onSelectDateRange = viewModel::selectDateRange,
+        onResetToThisMonth = viewModel::resetToThisMonth,
         onSetDateRange = viewModel::setDateRange,
         onSetQuery = viewModel::setQuery,
         onUpdateFilter = viewModel::updateFilter,
@@ -111,6 +119,7 @@ fun GlobalTransactionsContent(
     state: GlobalTransactionsUiState,
     onNavigateToTransaction: (String) -> Unit,
     onSelectDateRange: (GlobalDateRange) -> Unit,
+    onResetToThisMonth: () -> Unit,
     onSetDateRange: (LocalDate?, LocalDate?) -> Boolean,
     onSetQuery: (String) -> Unit,
     onUpdateFilter: ((GlobalTransactionsFilter) -> GlobalTransactionsFilter) -> Unit,
@@ -215,8 +224,10 @@ fun GlobalTransactionsContent(
         ) {
             item("controls") {
                 GlobalTransactionControls(
-                    state = state,
+                    dateRange = state.dateRange,
+                    datePagerAnchor = state.datePagerAnchor,
                     onSelectDateRange = onSelectDateRange,
+                    onResetToThisMonth = onResetToThisMonth,
                 )
             }
             item("summary") {
@@ -276,67 +287,104 @@ fun GlobalTransactionsContent(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GlobalTransactionControls(
-    state: GlobalTransactionsUiState,
+    dateRange: GlobalDateRange,
+    datePagerAnchor: GlobalDateRange,
     onSelectDateRange: (GlobalDateRange) -> Unit,
+    onResetToThisMonth: () -> Unit,
 ) {
     val today = remember { LocalDate.now() }
-    val model = remember(state.datePagerAnchor, today) {
-        globalDateRangePager(state.datePagerAnchor, today)
+    val model = remember(datePagerAnchor, today) {
+        globalDateRangePager(datePagerAnchor, today)
     }
-    val pagerState = rememberPagerState(
-        initialPage = model.selectedPage,
-        pageCount = { model.pageCount },
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = model.selectedPage,
     )
     val scope = rememberCoroutineScope()
+    var settledCenterPage by remember(model) { mutableIntStateOf(model.selectedPage) }
 
     LaunchedEffect(model) {
-        if (pagerState.currentPage != model.selectedPage) {
-            pagerState.scrollToPage(model.selectedPage)
-        }
+        listState.scrollToItem(model.selectedPage)
+    }
+
+    LaunchedEffect(listState, model) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .filter { isScrolling -> !isScrolling }
+            .collect {
+                val layoutInfo = listState.layoutInfo
+                val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+                settledCenterPage = layoutInfo.visibleItemsInfo
+                    .minByOrNull { item -> abs((item.offset + item.size / 2) - viewportCenter) }
+                    ?.index
+                    ?: model.selectedPage
+            }
     }
 
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val pageWidth = maxWidth / 3
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxWidth().testTag("date-period-pager"),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = pageWidth),
-            pageSpacing = 0.dp,
-            pageSize = PageSize.Fixed(pageWidth),
-            beyondViewportPageCount = 1,
-        ) { page ->
-            val range = model.rangeAt(page)
-            val selected = range == state.dateRange
-            Column(
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .testTag("date-period-${range.startKey}")
-                    .selectable(
-                        selected = selected,
-                        role = Role.Tab,
-                        onClick = {
-                            onSelectDateRange(range)
-                            scope.launch { pagerState.animateScrollToPage(page) }
-                        },
-                    ),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+        val showReturnToThisMonth = datePagerAnchor.isCustom || settledCenterPage != model.pageCount - 1
+        Box(Modifier.fillMaxWidth()) {
+            LazyRow(
+                state = listState,
+                modifier = Modifier.fillMaxWidth().testTag("date-period-pager"),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = pageWidth),
+                flingBehavior = rememberSnapFlingBehavior(listState, SnapPosition.Center),
+                overscrollEffect = null,
             ) {
-                Text(
-                    text = range.tabYearLabel(),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-                Text(
-                    text = range.tabDateRangeLabel(),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip,
-                )
+                items(
+                    count = model.pageCount,
+                    key = { page -> model.rangeAt(page).startKey },
+                ) { page ->
+                    val range = model.rangeAt(page)
+                    val selected = range == dateRange
+                    Column(
+                        modifier = Modifier
+                            .width(pageWidth)
+                            .heightIn(min = 48.dp)
+                            .testTag("date-period-${range.startKey}")
+                            .selectable(
+                                selected = selected,
+                                role = Role.Tab,
+                                onClick = {
+                                    scope.launch {
+                                        listState.animateScrollToItem(page)
+                                        onSelectDateRange(range)
+                                    }
+                                },
+                            ),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text(
+                            text = range.tabYearLabel(),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = range.tabDateRangeLabel(),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip,
+                        )
+                    }
+                }
+            }
+            if (showReturnToThisMonth) {
+                FilledTonalIconButton(
+                    onClick = {
+                        scope.launch {
+                            listState.scrollToItem(model.pageCount - 1)
+                            onResetToThisMonth()
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.LastPage, contentDescription = "回到本月")
+                }
             }
         }
     }
