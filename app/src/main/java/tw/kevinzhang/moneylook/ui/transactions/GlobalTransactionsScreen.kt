@@ -1,7 +1,8 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
-import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +20,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PageSize
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
@@ -40,6 +45,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
@@ -52,11 +59,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -113,39 +124,84 @@ fun GlobalTransactionsContent(
     var showFilters by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     var searchActive by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val exitSearch: () -> Unit = {
+        onSetQuery("")
+        searchActive = false
+        keyboardController?.hide()
+        Unit
+    }
+
+    LaunchedEffect(searchActive) {
+        if (searchActive) {
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
+    BackHandler(enabled = searchActive, onBack = exitSearch)
+
     Scaffold(
         modifier = modifier,
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    if (searchActive) {
+                        IconButton(onClick = exitSearch) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "關閉搜尋")
+                        }
+                    }
+                },
                 title = {
                     if (searchActive) {
-                        OutlinedTextField(
+                        TextField(
                             value = state.filter.query,
                             onValueChange = onSetQuery,
-                            placeholder = { Text("搜尋交易、帳戶、分類或標籤") },
+                            placeholder = {
+                                Text(
+                                    text = "搜尋交易",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
                             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (state.filter.query.isNotEmpty()) {
+                                    IconButton(onClick = { onSetQuery("") }) {
+                                        Icon(Icons.Default.Close, contentDescription = "清除搜尋")
+                                    }
+                                }
+                            },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
+                            shape = RoundedCornerShape(28.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(searchFocusRequester)
+                                .testTag("transaction-search-field"),
                         )
                     } else {
                         Text("明細")
                     }
                 },
                 actions = {
-                    if (searchActive) {
-                        IconButton(onClick = { searchActive = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "關閉搜尋")
-                        }
-                    } else {
+                    if (!searchActive) {
                         IconButton(onClick = { searchActive = true }) {
                             Icon(Icons.Default.Search, contentDescription = "搜尋")
                         }
-                    }
-                    IconButton(onClick = { showFilters = true }) {
-                        Icon(Icons.Default.FilterList, contentDescription = "進階篩選")
-                    }
-                    IconButton(onClick = { showDatePicker = true }) {
-                        Icon(Icons.Default.CalendarMonth, contentDescription = "選擇日期區間")
+                        IconButton(onClick = { showFilters = true }) {
+                            Icon(Icons.Default.FilterList, contentDescription = "進階篩選")
+                        }
+                        IconButton(onClick = { showDatePicker = true }) {
+                            Icon(Icons.Default.CalendarMonth, contentDescription = "選擇日期區間")
+                        }
                     }
                 },
             )
