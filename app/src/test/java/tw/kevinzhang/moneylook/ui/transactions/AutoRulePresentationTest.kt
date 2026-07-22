@@ -60,6 +60,10 @@ class AutoRulePresentationTest {
         assertEquals(setOf(CategoryKind.TRANSFER), allowedKinds(0.0))
     }
 
+    @Test fun `uncategorized picker tile uses the agreed tag emoji`() {
+        assertEquals("🏷️", UNCATEGORIZED_EMOJI)
+    }
+
     private fun detailState() = TransactionDetailUiState(
         title = "餐飲",
         amountText = "- 100",
