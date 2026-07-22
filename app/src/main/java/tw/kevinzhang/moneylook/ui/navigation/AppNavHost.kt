@@ -3,9 +3,9 @@ package tw.kevinzhang.moneylook.ui.navigation
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -18,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
+import tw.kevinzhang.moneylook.ui.analysis.GlobalLedgerAnalysisContent
 import tw.kevinzhang.moneylook.ui.home.ExtensionLedgerScreen
 import tw.kevinzhang.moneylook.ui.home.HomeScreen
 import tw.kevinzhang.moneylook.ui.marketplace.ManageReposScreen
@@ -25,12 +26,13 @@ import tw.kevinzhang.moneylook.ui.marketplace.MarketplaceScreen
 import tw.kevinzhang.moneylook.ui.settings.SettingsScreen
 import tw.kevinzhang.moneylook.ui.transactions.AutoRuleScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryManagementScreen
+import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionsScreen
 import tw.kevinzhang.moneylook.ui.transactions.TagManagementScreen
 import tw.kevinzhang.moneylook.ui.transactions.TransactionDetailScreen
 
 private val bottomBarRoutes = setOf(
     Screen.Home.route,
-    Screen.Marketplace.route,
+    Screen.GlobalTransactions.route,
     Screen.Settings.route,
 )
 
@@ -55,16 +57,16 @@ fun AppNavHost(navController: NavHostController) {
                     label = { Text("首頁") },
                 )
                 NavigationBarItem(
-                    selected = currentRoute == Screen.Marketplace.route,
+                    selected = currentRoute == Screen.GlobalTransactions.route,
                     onClick = {
-                        navController.navigate(Screen.Marketplace.route) {
+                        navController.navigate(Screen.GlobalTransactions.route) {
                             launchSingleTop = true
                             restoreState = true
                             popUpTo(Screen.Home.route) { saveState = true }
                         }
                     },
-                    icon = { Icon(Icons.Default.Store, contentDescription = "Marketplace") },
-                    label = { Text("Marketplace") },
+                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "明細") },
+                    label = { Text("明細") },
                 )
                 NavigationBarItem(
                     selected = currentRoute == Screen.Settings.route,
@@ -96,8 +98,6 @@ fun AppNavHost(navController: NavHostController) {
                 onNavigateToMarketplace = {
                     navController.navigate(Screen.Marketplace.route) {
                         launchSingleTop = true
-                        restoreState = true
-                        popUpTo(Screen.Home.route) { saveState = true }
                     }
                 },
                 onNavigateToLedger = { accountId ->
@@ -107,8 +107,17 @@ fun AppNavHost(navController: NavHostController) {
         }
         composable(Screen.Marketplace.route) {
             MarketplaceScreen(
-                bottomBar = bottomBar,
+                onNavigateUp = { navController.popBackStack() },
                 onNavigateToManageRepos = { navController.navigate(Screen.ManageRepos.route) },
+            )
+        }
+        composable(Screen.GlobalTransactions.route) {
+            GlobalTransactionsScreen(
+                bottomBar = bottomBar,
+                onNavigateToTransaction = { transferId ->
+                    navController.navigate(Screen.TransactionDetail.route(transferId))
+                },
+                analysisContent = { state -> GlobalLedgerAnalysisContent(state) },
             )
         }
         composable(Screen.Settings.route) {

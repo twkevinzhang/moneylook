@@ -56,19 +56,4 @@ fun homeOverviewPresentation(
     )
 }
 
-fun formatVisibleCurrencyAmount(
-    amount: Double,
-    currency: String,
-    isAmountVisible: Boolean,
-): String = if (isAmountVisible) {
-    formatCurrencyAmount(amount, currency)
-} else {
-    formatHiddenCurrencyAmount(currency)
-}
-
-fun formatHiddenCurrencyAmount(currency: String): String {
-    val normalizedCurrency = currency.trim().uppercase(Locale.ROOT)
-    return if (normalizedCurrency == "TWD") "••••" else "$normalizedCurrency ••••"
-}
-
 private fun AssetKind.isLiability(): Boolean = this == AssetKind.CREDIT_CARD || this == AssetKind.LOAN

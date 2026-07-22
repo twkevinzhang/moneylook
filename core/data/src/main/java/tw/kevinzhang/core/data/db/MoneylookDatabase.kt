@@ -27,7 +27,7 @@ import tw.kevinzhang.core.data.model.TransferTagCrossRef
         TransferAnnotation::class,
         TransferTagCrossRef::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)

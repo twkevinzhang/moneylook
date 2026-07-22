@@ -78,10 +78,9 @@ class OverviewPresentationTest {
     }
 
     @Test
-    fun hidesAmountsWithoutHidingTheCurrency() {
-        assertEquals("••••", formatVisibleCurrencyAmount(10_000.0, "TWD", isAmountVisible = false))
-        assertEquals("USD ••••", formatVisibleCurrencyAmount(10.0, "USD", isAmountVisible = false))
-        assertEquals("USD ••••", formatVisibleCurrencyAmount(10.0, " usd ", isAmountVisible = false))
+    fun formatsAmountsWithoutMasking() {
+        assertEquals("$ 10,000", formatCurrencyAmount(10_000.0, "TWD"))
+        assertEquals("USD 10.00", formatCurrencyAmount(10.0, " usd "))
     }
 
     private fun account(id: String, balance: Double, currency: String, kind: AssetKind) = Account(

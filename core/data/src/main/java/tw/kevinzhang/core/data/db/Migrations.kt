@@ -414,3 +414,10 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_categories_kind` ON `categories` (`kind`)")
     }
 }
+
+/** Adds the date-only index used by global transaction lists and reporting windows. */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfers_txnDateTime` ON `transfers` (`txnDateTime`)")
+    }
+}
