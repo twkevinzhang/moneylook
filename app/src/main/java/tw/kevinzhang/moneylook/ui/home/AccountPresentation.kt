@@ -19,9 +19,12 @@ fun accountRowPresentation(
     balance: Double,
     currency: String,
     availableCredit: Double?,
+    isAmountVisible: Boolean = true,
 ): AccountRowPresentation {
     val isLiability = kind == AssetKind.CREDIT_CARD || kind == AssetKind.LOAN
-    val primaryAmount = if (isLiability && balance > 0) {
+    val primaryAmount = if (!isAmountVisible) {
+        formatHiddenCurrencyAmount(currency)
+    } else if (isLiability && balance > 0) {
         "-${formatCurrencyAmount(abs(balance), currency)}"
     } else {
         formatCurrencyAmount(balance, currency)
@@ -29,7 +32,7 @@ fun accountRowPresentation(
 
     val supportingText = availableCredit
         ?.takeIf { kind == AssetKind.CREDIT_CARD }
-        ?.let { "可用額度 ${formatCurrencyAmount(it, currency)}" }
+        ?.let { "可用額度 ${formatVisibleCurrencyAmount(it, currency, isAmountVisible)}" }
 
     return AccountRowPresentation(
         primaryAmount = primaryAmount,
