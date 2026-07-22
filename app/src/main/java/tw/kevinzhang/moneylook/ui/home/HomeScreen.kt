@@ -67,6 +67,7 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.moneylook.schedule.ScheduleStatus
+import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -207,7 +208,7 @@ private fun HomeOverviewCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "總覽",
+                        text = homeOverviewTitle(LocalDate.now()),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
