@@ -1,12 +1,14 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import org.junit.Assert.assertNotEquals
@@ -78,8 +80,28 @@ class GlobalTransactionsInteractionTest {
         composeRule.onNodeWithTag("summary-income").performClick().assertIsSelected()
 
         composeRule.onNodeWithContentDescription("搜尋").performClick()
-        composeRule.onNodeWithText("搜尋交易、帳戶、分類或標籤").assertExists()
+        composeRule.onNodeWithTag("transaction-search-field").assertExists().assertIsFocused()
+        composeRule.onNodeWithText("搜尋交易").assertExists()
+        composeRule.onNodeWithContentDescription("關閉搜尋").assertExists()
+        composeRule.onNodeWithContentDescription("搜尋").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("進階篩選").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("選擇日期區間").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("transaction-search-field").performTextInput("coffee")
+        composeRule.waitUntil(timeoutMillis = 5_000) { state.value.filter.query == "coffee" }
+        composeRule.onNodeWithContentDescription("清除搜尋").assertExists().performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { state.value.filter.query.isEmpty() }
+        composeRule.onNodeWithTag("transaction-search-field").assertExists()
+        composeRule.onNodeWithContentDescription("清除搜尋").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("transaction-search-field").performTextInput("momo")
+        composeRule.waitUntil(timeoutMillis = 5_000) { state.value.filter.query == "momo" }
         composeRule.onNodeWithContentDescription("關閉搜尋").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { state.value.filter.query.isEmpty() }
+        composeRule.onNodeWithTag("transaction-search-field").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("搜尋").assertExists()
+        composeRule.onNodeWithContentDescription("進階篩選").assertExists()
+        composeRule.onNodeWithContentDescription("選擇日期區間").assertExists()
 
         composeRule.onNodeWithContentDescription("選擇日期區間").performClick()
         composeRule.onNodeWithText("選擇日期區間").assertExists()
