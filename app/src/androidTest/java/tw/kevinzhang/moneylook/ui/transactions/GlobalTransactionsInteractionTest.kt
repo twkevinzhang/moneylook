@@ -11,7 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
@@ -23,9 +23,10 @@ class GlobalTransactionsInteractionTest {
 
     @Test
     fun topBarActionsAndSummaryDirectionKeepTheActiveTab() {
+        val today = LocalDate.now()
         val anchor = GlobalDateRange(
-            startInclusive = LocalDate.now().minusDays(8),
-            endInclusive = LocalDate.now().minusDays(6),
+            startInclusive = today.minusDays(8),
+            endInclusive = today.minusDays(6),
             isCustom = true,
         )
         val income = item("income", 12.0, "USD")
@@ -107,9 +108,15 @@ class GlobalTransactionsInteractionTest {
         composeRule.onNodeWithText("選擇日期區間").assertExists()
         composeRule.onNodeWithText("取消").performClick()
 
+        val pager = globalDateRangePager(anchor, today)
+        val nextRange = pager.rangeAt(pager.selectedPage + 1)
         composeRule.onNodeWithTag("date-period-pager").performTouchInput { swipeLeft() }
-        composeRule.waitUntil(timeoutMillis = 5_000) { state.value.dateRange != anchor }
-        composeRule.runOnIdle { assertNotEquals(anchor, state.value.dateRange) }
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { assertEquals(anchor, state.value.dateRange) }
+
+        composeRule.onNodeWithTag("date-period-${nextRange.startKey}").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { state.value.dateRange == nextRange }
+        composeRule.onNodeWithTag("date-period-${nextRange.startKey}").assertIsSelected()
     }
 
     @Test

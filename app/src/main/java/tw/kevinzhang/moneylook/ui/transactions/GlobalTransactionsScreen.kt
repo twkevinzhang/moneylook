@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PageSize
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,9 +57,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -64,20 +66,19 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.selected
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
 import kotlin.math.abs
 
 @Composable
@@ -287,46 +288,54 @@ private fun GlobalTransactionControls(
         pageCount = { model.pageCount },
     )
     val scope = rememberCoroutineScope()
-    val currentRange by rememberUpdatedState(state.dateRange)
-    val selectRange by rememberUpdatedState(onSelectDateRange)
 
-    LaunchedEffect(pagerState, model) {
+    LaunchedEffect(model) {
         if (pagerState.currentPage != model.selectedPage) {
             pagerState.scrollToPage(model.selectedPage)
         }
-        snapshotFlow { pagerState.settledPage }
-            .distinctUntilChanged()
-            .collect { page ->
-                val range = model.rangeAt(page)
-                if (range != currentRange) selectRange(range)
-            }
     }
 
-    HorizontalPager(
-        state = pagerState,
-        modifier = Modifier.fillMaxWidth().testTag("date-period-pager"),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 104.dp),
-        pageSpacing = 8.dp,
-        pageSize = PageSize.Fixed(152.dp),
-        beyondViewportPageCount = 1,
-    ) { page ->
-        val range = model.rangeAt(page)
-        val selected = page == pagerState.currentPage
-        Card(
-            modifier = Modifier
-                .height(48.dp)
-                .clickable { scope.launch { pagerState.animateScrollToPage(page) } },
-            colors = CardDefaults.cardColors(
-                containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer
-                else MaterialTheme.colorScheme.surfaceContainer,
-            ),
-        ) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val pageWidth = maxWidth / 3
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxWidth().testTag("date-period-pager"),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = pageWidth),
+            pageSpacing = 0.dp,
+            pageSize = PageSize.Fixed(pageWidth),
+            beyondViewportPageCount = 1,
+        ) { page ->
+            val range = model.rangeAt(page)
+            val selected = range == state.dateRange
+            Column(
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("date-period-${range.startKey}")
+                    .selectable(
+                        selected = selected,
+                        role = Role.Tab,
+                        onClick = {
+                            onSelectDateRange(range)
+                            scope.launch { pagerState.animateScrollToPage(page) }
+                        },
+                    ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
                 Text(
-                    text = range.tabLabel(),
+                    text = range.tabYearLabel(),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                )
+                Text(
+                    text = range.tabDateRangeLabel(),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
                 )
             }
         }
