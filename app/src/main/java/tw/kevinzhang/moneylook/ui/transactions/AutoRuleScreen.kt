@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
+import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 
 data class AccountOption(val id: String, val name: String)
 
@@ -138,6 +139,20 @@ fun AutoRuleEditorDialog(
                 OutlinedTextField(draft.name, { draft = draft.copy(name = it) }, label = { Text("規則名稱") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Text("符合以下所有條件", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 OutlinedTextField(draft.descriptionContains, { draft = draft.copy(descriptionContains = it) }, label = { Text("明細描述包含") }, placeholder = { Text("例如：全聯") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (draft.descriptionContains.isNotBlank()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = draft.descriptionMatchMode == AutoCategoryRuleDescriptionMatchMode.CONTAINS,
+                            onClick = { draft = draft.copy(descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.CONTAINS) },
+                            label = { Text("包含文字") },
+                        )
+                        FilterChip(
+                            selected = draft.descriptionMatchMode == AutoCategoryRuleDescriptionMatchMode.EXACT,
+                            onClick = { draft = draft.copy(descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.EXACT) },
+                            label = { Text("完全相同") },
+                        )
+                    }
+                }
                 Text("收支方向", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(draft.direction == null, { draft = draft.copy(direction = null) }, { Text("不限") })
@@ -194,7 +209,9 @@ internal fun AutoRuleDraft.isValidForSave(): Boolean {
 
 internal fun ruleSummary(rule: AutoRuleDraft, categories: List<CategoryOption>, tags: List<TagOption>): String {
     val conditions = buildList {
-        rule.descriptionContains.takeIf(String::isNotBlank)?.let { add("描述含「$it」") }
+        rule.descriptionContains.takeIf(String::isNotBlank)?.let {
+            add(if (rule.descriptionMatchMode == AutoCategoryRuleDescriptionMatchMode.EXACT) "描述完全是「$it」" else "描述含「$it」")
+        }
         rule.direction?.let { add(if (it == TransactionDirection.INCOME) "收入" else "支出") }
         rule.minAbsoluteAmount.takeIf(String::isNotBlank)?.let { add("≥ $it") }
         rule.maxAbsoluteAmount.takeIf(String::isNotBlank)?.let { add("≤ $it") }

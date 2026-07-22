@@ -45,7 +45,7 @@ fun CategoryManagementContent(
 ) {
     ClassificationManagementScaffold(
         title = "分類管理",
-        items = categories.map { ManagedItem(it.id, it.name, it.color) },
+        items = categories.map { ManagedItem(it.id, it.name, it.color, it.emoji) },
         onNavigateUp = onNavigateUp,
         onSave = onSave,
         onDelete = onDelete,
@@ -69,7 +69,7 @@ fun TagManagementContent(
     )
 }
 
-private data class ManagedItem(val id: String, val name: String, val color: Long)
+private data class ManagedItem(val id: String, val name: String, val color: Long, val emoji: String? = null)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,7 +118,7 @@ private fun ClassificationManagementScaffold(
                         modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        ColorDot(item.color)
+                        item.emoji?.let { Text(it, style = MaterialTheme.typography.titleLarge) } ?: ColorDot(item.color)
                         Text(item.name, modifier = Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.bodyLarge)
                         IconButton(onClick = { editor = item }) { Icon(Icons.Default.Edit, "編輯") }
                         IconButton(onClick = { deleteTarget = item }) { Icon(Icons.Default.Delete, "刪除") }

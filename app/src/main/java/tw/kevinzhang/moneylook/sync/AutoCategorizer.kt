@@ -9,6 +9,7 @@ import tw.kevinzhang.core.data.db.AutoCategoryRuleWithTags
 import tw.kevinzhang.core.data.db.TransferAnnotationDao
 import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.model.AssignmentSource
+import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -86,7 +87,14 @@ internal fun AutoCategoryRuleWithTags.matches(transfer: Transfer): Boolean {
     val candidateAmount = abs(transfer.amount)
     val descriptionMatches = rule.descriptionContains
         ?.takeIf(String::isNotBlank)
-        ?.let { transfer.description.contains(it, ignoreCase = true) }
+        ?.let { expected ->
+            when (rule.descriptionMatchMode) {
+                AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
+                    transfer.description.contains(expected, ignoreCase = true)
+                AutoCategoryRuleDescriptionMatchMode.EXACT ->
+                    transfer.description.trim().equals(expected.trim(), ignoreCase = true)
+            }
+        }
         ?: true
     val directionMatches =
         when (rule.direction) {

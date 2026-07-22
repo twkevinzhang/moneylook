@@ -402,3 +402,15 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         )
     }
 }
+
+/** Adds display metadata and exact-description matching without changing existing rule behaviour. */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `categories` ADD COLUMN `emoji` TEXT NOT NULL DEFAULT '🏷️'")
+        db.execSQL("ALTER TABLE `categories` ADD COLUMN `kind` TEXT NOT NULL DEFAULT 'EXPENSE'")
+        db.execSQL(
+            "ALTER TABLE `auto_category_rules` ADD COLUMN `descriptionMatchMode` TEXT NOT NULL DEFAULT 'CONTAINS'",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_categories_kind` ON `categories` (`kind`)")
+    }
+}

@@ -16,6 +16,7 @@ import tw.kevinzhang.core.data.db.AutoCategoryRuleWithTags
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AutoCategoryRule
+import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.Tag
@@ -159,6 +160,22 @@ class AutoCategorizerTest {
         assertEquals(false, matching.matches(transfer("income", "shop", 100.0)))
         assertEquals(false, matching.matches(transfer("amount", "shop", -101.0)))
         assertEquals(false, matching.matches(transfer("description", "market", -100.0)))
+    }
+
+    @Test
+    fun `exact description matching accepts normalized full description only`() {
+        val matching = ruleWithTags(
+            AutoCategoryRule(
+                id = "exact",
+                name = "exact",
+                descriptionContains = "捷運扣款",
+                descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.EXACT,
+                categoryId = "category",
+            ),
+        )
+
+        assertEquals(true, matching.matches(transfer("trimmed", "  捷運扣款  ", -50.0)))
+        assertEquals(false, matching.matches(transfer("fragment", "捷運扣款 超商", -50.0)))
     }
 
     private fun ruleWithTags(rule: AutoCategoryRule) = AutoCategoryRuleWithTags(rule, null, emptyList())

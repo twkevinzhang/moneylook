@@ -21,9 +21,7 @@ fun TransactionDetailScreen(
         TransactionDetailContent(
             state = detail,
             onNavigateUp = onNavigateUp,
-            onSave = viewModel::saveDetail,
-            onCreateTag = viewModel::createTag,
-            onResumeAutomatic = viewModel::resumeAutomatic,
+            onSave = { draft -> viewModel.saveDetail(draft, onNavigateUp) },
         )
     }
 }

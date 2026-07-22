@@ -4,6 +4,8 @@ import androidx.room.TypeConverter
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.CategoryKind
 
 class AssetKindConverters {
     @TypeConverter
@@ -24,4 +26,17 @@ class AssetKindConverters {
     @TypeConverter
     fun toAutoCategoryRuleDirection(value: String): AutoCategoryRuleDirection =
         AutoCategoryRuleDirection.valueOf(value)
+
+    @TypeConverter
+    fun fromAutoCategoryRuleDescriptionMatchMode(value: AutoCategoryRuleDescriptionMatchMode): String = value.name
+
+    @TypeConverter
+    fun toAutoCategoryRuleDescriptionMatchMode(value: String): AutoCategoryRuleDescriptionMatchMode =
+        AutoCategoryRuleDescriptionMatchMode.valueOf(value)
+
+    @TypeConverter
+    fun fromCategoryKind(value: CategoryKind): String = value.name
+
+    @TypeConverter
+    fun toCategoryKind(value: String): CategoryKind = CategoryKind.valueOf(value)
 }
