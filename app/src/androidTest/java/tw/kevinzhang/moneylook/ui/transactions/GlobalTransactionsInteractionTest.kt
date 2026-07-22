@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -52,6 +53,10 @@ class GlobalTransactionsInteractionTest {
                     state = state.value,
                     onNavigateToTransaction = {},
                     onSelectDateRange = { range -> state.value = state.value.copy(dateRange = range) },
+                    onResetToThisMonth = {
+                        val thisMonth = GlobalDateRange.thisMonth(today)
+                        state.value = state.value.copy(dateRange = thisMonth, datePagerAnchor = thisMonth)
+                    },
                     onSetDateRange = { _, _ -> true },
                     onSetQuery = { query -> state.value = state.value.copy(filter = state.value.filter.copy(query = query)) },
                     onUpdateFilter = {},
@@ -113,10 +118,22 @@ class GlobalTransactionsInteractionTest {
         composeRule.onNodeWithTag("date-period-pager").performTouchInput { swipeLeft() }
         composeRule.waitForIdle()
         composeRule.runOnIdle { assertEquals(anchor, state.value.dateRange) }
-
         composeRule.onNodeWithTag("date-period-${nextRange.startKey}").performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) { state.value.dateRange == nextRange }
         composeRule.onNodeWithTag("date-period-${nextRange.startKey}").assertIsSelected()
+
+        composeRule.onNodeWithContentDescription("回到本月").assertExists().performClick()
+        val thisMonth = GlobalDateRange.thisMonth(today)
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            state.value.dateRange == thisMonth && state.value.datePagerAnchor == thisMonth
+        }
+        composeRule.onNodeWithContentDescription("回到本月").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("date-period-pager").performTouchInput { swipeRight() }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("回到本月").assertExists().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("回到本月").assertDoesNotExist()
     }
 
     @Test
@@ -136,6 +153,7 @@ class GlobalTransactionsInteractionTest {
                     state = state,
                     onNavigateToTransaction = {},
                     onSelectDateRange = {},
+                    onResetToThisMonth = {},
                     onSetDateRange = { _, _ -> true },
                     onSetQuery = {},
                     onUpdateFilter = {},
