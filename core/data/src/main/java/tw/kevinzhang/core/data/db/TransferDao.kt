@@ -1,10 +1,17 @@
 package tw.kevinzhang.core.data.db
 
 import androidx.room.Dao
+import androidx.room.Embedded
 import androidx.room.Query
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 import tw.kevinzhang.core.data.model.Transfer
+
+/** Redaction-safe facts required to compare transactions across the user's local accounts. */
+data class TransferClassificationCandidate(
+    @Embedded val transfer: Transfer,
+    val currency: String,
+)
 
 @Dao
 interface TransferDao : TransferCursorStore {
@@ -21,6 +28,19 @@ interface TransferDao : TransferCursorStore {
     /** Explicit user action can apply enabled rules to the full local transaction history. */
     @Query("SELECT * FROM transfers")
     suspend fun getAll(): List<Transfer>
+
+    /**
+     * Internal-transfer detection needs the account currency but deliberately excludes account
+     * numbers, source keys, balances, and every other account field.
+     */
+    @Query(
+        """
+        SELECT t.*, a.currency AS currency
+        FROM transfers AS t
+        INNER JOIN accounts AS a ON a.id = t.accountId
+        """,
+    )
+    suspend fun getAllClassificationCandidates(): List<TransferClassificationCandidate>
 
     @Query(
         """

@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.moneylook.schedule.SchedulerManager
+import tw.kevinzhang.moneylook.sync.AutoCategorizer
 import tw.kevinzhang.moneylook.ui.navigation.AppNavHost
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
 import javax.inject.Inject
@@ -24,12 +25,20 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var schedulerManager: SchedulerManager
     @Inject lateinit var credentialProfileDao: CredentialProfileDao
+    @Inject lateinit var autoCategorizer: AutoCategorizer
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         CoroutineScope(Dispatchers.IO).launch {
+            val preferences = getSharedPreferences(CLASSIFICATION_PREFERENCES, MODE_PRIVATE)
+            if (
+                !preferences.getBoolean(INTERNAL_TRANSFER_BACKFILL_COMPLETE, false) &&
+                autoCategorizer.applyInternalTransferBackfill()
+            ) {
+                preferences.edit().putBoolean(INTERNAL_TRANSFER_BACKFILL_COMPLETE, true).apply()
+            }
             schedulerManager.rescheduleAll(credentialProfileDao.getRunnableSchedules())
         }
 
@@ -44,5 +53,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private companion object {
+        const val CLASSIFICATION_PREFERENCES = "classification"
+        const val INTERNAL_TRANSFER_BACKFILL_COMPLETE = "internal_transfer_backfill_v1"
     }
 }
