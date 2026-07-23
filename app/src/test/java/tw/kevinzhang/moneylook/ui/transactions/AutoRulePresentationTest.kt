@@ -63,6 +63,19 @@ class AutoRulePresentationTest {
         assertFalse(rule.matches(candidate.copy(description = "全聯福利中心 台北店")))
     }
 
+    @Test fun `preview normalizes all transaction text fields without joining them`() {
+        val contains = AutoRuleDraft(descriptionContains = "ＣＯＦＦＥＥ－ＳＨＯＰ")
+        val exact = AutoRuleDraft(
+            descriptionContains = "薪資入帳",
+            descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.EXACT,
+        )
+
+        assertTrue(contains.matches(candidate.copy(description = "一般扣款", memo = "Coffee shop 台北店")))
+        assertTrue(exact.matches(candidate.copy(description = "一般扣款", type = "薪資－入帳")))
+        assertFalse(contains.matches(candidate.copy(description = "Coffee", memo = "shop")))
+        assertFalse(exact.matches(candidate.copy(description = "薪資", memo = "入帳")))
+    }
+
     @Test fun `only matching income or expense kind is enabled while transfer always remains available`() {
         assertEquals(setOf(CategoryKind.EXPENSE, CategoryKind.TRANSFER), allowedKinds(-20.0))
         assertEquals(setOf(CategoryKind.INCOME, CategoryKind.TRANSFER), allowedKinds(20.0))

@@ -188,7 +188,7 @@ fun AutoRuleEditorDialog(
             Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(draft.name, { draft = draft.copy(name = it) }, label = { Text("規則名稱") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Text("符合以下所有條件", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                OutlinedTextField(draft.descriptionContains, { draft = draft.copy(descriptionContains = it) }, label = { Text("明細描述包含") }, placeholder = { Text("例如：全聯") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(draft.descriptionContains, { draft = draft.copy(descriptionContains = it) }, label = { Text("交易文字包含") }, placeholder = { Text("例如：全聯") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 if (draft.descriptionContains.isNotBlank()) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
@@ -260,7 +260,7 @@ internal fun AutoRuleDraft.isValidForSave(): Boolean {
 internal fun ruleSummary(rule: AutoRuleDraft, categories: List<CategoryOption>, tags: List<TagOption>): String {
     val conditions = buildList {
         rule.descriptionContains.takeIf(String::isNotBlank)?.let {
-            add(if (rule.descriptionMatchMode == AutoCategoryRuleDescriptionMatchMode.EXACT) "描述完全是「$it」" else "描述含「$it」")
+            add(if (rule.descriptionMatchMode == AutoCategoryRuleDescriptionMatchMode.EXACT) "交易文字完全是「$it」" else "交易文字含「$it」")
         }
         rule.direction?.let { add(if (it == TransactionDirection.INCOME) "收入" else "支出") }
         rule.minAbsoluteAmount.takeIf(String::isNotBlank)?.let { add("≥ $it") }

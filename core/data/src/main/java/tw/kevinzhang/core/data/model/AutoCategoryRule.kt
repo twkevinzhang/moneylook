@@ -4,6 +4,8 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import java.text.Normalizer
+import java.util.Locale
 
 enum class AutoCategoryRuleDirection {
     ANY,
@@ -11,11 +13,23 @@ enum class AutoCategoryRuleDirection {
     EXPENSE,
 }
 
-/** Determines whether a rule matches a fragment of, or the whole normalized, bank description. */
+/** Determines whether a rule matches a fragment of, or the whole normalized, transaction text. */
 enum class AutoCategoryRuleDescriptionMatchMode {
     CONTAINS,
     EXACT,
 }
+
+/**
+ * Canonical text form used by automatic-category rules.
+ *
+ * Bank descriptions, counterparties, memos, and transaction types often differ only in Unicode
+ * width, case, or punctuation. Keep letters and digits only so matching has the same semantics
+ * across all transaction-text fields.
+ */
+fun normalizeAutoCategoryRuleText(value: String): String =
+    Normalizer.normalize(value, Normalizer.Form.NFKC)
+        .lowercase(Locale.ROOT)
+        .filter(Char::isLetterOrDigit)
 
 /** Gmail-style user rule. Rules are global; [accountId] optionally narrows the scope. */
 @Entity(
@@ -38,6 +52,7 @@ enum class AutoCategoryRuleDescriptionMatchMode {
 data class AutoCategoryRule(
     @PrimaryKey val id: String,
     val name: String,
+    /** Matches each normalized transaction-text field: description, memo, and type. */
     val descriptionContains: String? = null,
     val direction: AutoCategoryRuleDirection = AutoCategoryRuleDirection.ANY,
     val minAbsoluteAmount: Double? = null,
