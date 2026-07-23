@@ -21,6 +21,13 @@ fun interface TransferAutoCategorizer {
     suspend fun categorizeTransferIds(transferIds: List<String>)
 }
 
+/** Aggregate-only outcome for a bulk application; it intentionally contains no transaction data. */
+data class AutoCategoryApplicationResult(
+    val processedTransferCount: Int,
+    val matchedTransferCount: Int,
+    val preservedManualOverrideCount: Int,
+)
+
 /** Applies the first enabled matching rule while preserving every manual transaction edit. */
 @Singleton
 class AutoCategorizer @Inject constructor(
@@ -34,9 +41,7 @@ class AutoCategorizer @Inject constructor(
         categorize(transferDao.getByIds(transferIds.distinct()))
     }
 
-    suspend fun applyToExistingTransactions() {
-        categorize(transferDao.getAll())
-    }
+    suspend fun applyToExistingTransactions(): AutoCategoryApplicationResult = categorize(transferDao.getAll())
 
     suspend fun resumeAutomaticCategorization(transferId: String) {
         val existing = annotationDao.getByTransferIds(listOf(transferId)).singleOrNull()
@@ -52,18 +57,30 @@ class AutoCategorizer @Inject constructor(
         categorizeTransferIds(listOf(transferId))
     }
 
-    private suspend fun categorize(transfers: List<Transfer>) {
-        if (transfers.isEmpty()) return
+    private suspend fun categorize(transfers: List<Transfer>): AutoCategoryApplicationResult {
+        if (transfers.isEmpty()) {
+            return AutoCategoryApplicationResult(
+                processedTransferCount = 0,
+                matchedTransferCount = 0,
+                preservedManualOverrideCount = 0,
+            )
+        }
         val rules = ruleDao.getEnabledInPriorityOrder().filter(::isUsableRule)
         val annotations = annotationDao.getByTransferIds(transfers.map(Transfer::id))
             .associateBy(TransferAnnotation::transferId)
+        var matchedTransferCount = 0
+        var preservedManualOverrideCount = 0
 
         transfers.forEach { transfer ->
             val existing = annotations[transfer.id]
-            if (existing?.manualOverride == true) return@forEach
+            if (existing?.manualOverride == true) {
+                preservedManualOverrideCount += 1
+                return@forEach
+            }
 
             val match = rules.firstOrNull { it.matches(transfer) }
             if (match == null && existing == null) return@forEach
+            if (match != null) matchedTransferCount += 1
 
             annotationDao.upsert(
                 TransferAnnotation(
@@ -80,6 +97,11 @@ class AutoCategorizer @Inject constructor(
                 tagIds = match?.tags?.mapTo(mutableSetOf()) { it.id }.orEmpty(),
             )
         }
+        return AutoCategoryApplicationResult(
+            processedTransferCount = transfers.size,
+            matchedTransferCount = matchedTransferCount,
+            preservedManualOverrideCount = preservedManualOverrideCount,
+        )
     }
 }
 

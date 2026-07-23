@@ -141,6 +141,57 @@ class AutoCategorizerTest {
     }
 
     @Test
+    fun `applying all existing transactions reports safe counts and preserves manual edits`() = runBlocking {
+        val category = Category("food", "餐飲", "#2E7D32")
+        val automaticTag = Tag("automatic", "自動", "#1565C0")
+        val manualTag = Tag("manual", "手動", "#6A1B9A")
+        database.categoryDao().upsert(category)
+        database.tagDao().upsert(automaticTag)
+        database.tagDao().upsert(manualTag)
+        database.autoCategoryRuleDao().upsertWithTags(
+            AutoCategoryRule(
+                id = "coffee",
+                name = "咖啡",
+                descriptionContains = "COFFEE",
+                categoryId = category.id,
+            ),
+            setOf(automaticTag.id),
+        )
+        val automatic = transfer("automatic", "Coffee shop", -100.0)
+        val manual = transfer("manual", "Coffee shop", -200.0)
+        val unmatched = transfer("unmatched", "Other shop", -300.0)
+        database.transferDao().upsertAll(listOf(automatic, manual, unmatched))
+        database.transferAnnotationDao().saveManualAnnotation(
+            TransferAnnotation(
+                transferId = manual.id,
+                extensionId = manual.extensionId,
+                categoryId = null,
+                note = "保留備註",
+                categoryAssignment = AssignmentSource.MANUAL,
+                manualOverride = true,
+            ),
+            setOf(manualTag.id),
+        )
+
+        val result = categorizer.applyToExistingTransactions()
+
+        assertEquals(3, result.processedTransferCount)
+        assertEquals(1, result.matchedTransferCount)
+        assertEquals(1, result.preservedManualOverrideCount)
+        database.transferAnnotationDao().observeDetail(automatic.id).first()!!.also { detail ->
+            assertEquals(category.id, detail.annotation?.categoryId)
+            assertEquals(listOf(automaticTag.id), detail.tags.map(Tag::id))
+        }
+        database.transferAnnotationDao().observeDetail(manual.id).first()!!.also { detail ->
+            assertEquals("保留備註", detail.annotation?.note)
+            assertEquals(AssignmentSource.MANUAL, detail.annotation?.categoryAssignment)
+            assertEquals(listOf(manualTag.id), detail.tags.map(Tag::id))
+        }
+        assertNull(database.transferAnnotationDao().observeDetail(unmatched.id).first()!!.annotation)
+        Unit
+    }
+
+    @Test
     fun `matcher uses case insensitive AND conditions absolute inclusive bounds and excludes zero direction`() {
         val matching = ruleWithTags(
             AutoCategoryRule(
