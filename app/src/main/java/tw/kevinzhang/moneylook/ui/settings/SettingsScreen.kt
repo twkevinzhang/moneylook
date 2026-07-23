@@ -41,7 +41,7 @@ fun SettingsScreen(
             HorizontalDivider()
             SettingsRow("標籤管理", "建立可套用至多筆交易的標籤", onNavigateToTags)
             HorizontalDivider()
-            SettingsRow("自動分類規則", "依交易描述、收支、金額及帳戶自動套用", onNavigateToRules)
+            SettingsRow("自動分類規則", "依交易文字、收支、金額及帳戶自動套用", onNavigateToRules)
         }
     }
 }

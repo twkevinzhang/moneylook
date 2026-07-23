@@ -16,6 +16,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
 import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
+import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleText
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -295,11 +296,15 @@ internal fun AutoCategoryRuleWithTags.matches(transfer: Transfer): Boolean {
     val descriptionMatches = rule.descriptionContains
         ?.takeIf(String::isNotBlank)
         ?.let { expected ->
+            val normalizedExpected = normalizeAutoCategoryRuleText(expected)
+            if (normalizedExpected.isEmpty()) return@let false
+            val normalizedFields = listOf(transfer.description, transfer.memo, transfer.type.orEmpty())
+                .map(::normalizeAutoCategoryRuleText)
             when (rule.descriptionMatchMode) {
                 AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
-                    transfer.description.contains(expected, ignoreCase = true)
+                    normalizedFields.any { it.contains(normalizedExpected) }
                 AutoCategoryRuleDescriptionMatchMode.EXACT ->
-                    transfer.description.trim().equals(expected.trim(), ignoreCase = true)
+                    normalizedFields.any { it == normalizedExpected }
             }
         }
         ?: true

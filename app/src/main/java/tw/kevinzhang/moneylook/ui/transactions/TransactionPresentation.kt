@@ -2,6 +2,7 @@ package tw.kevinzhang.moneylook.ui.transactions
 
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleText
 
 /** UI-owned values keep rule matching independently testable from Room and Compose. */
 data class CategoryOption(
@@ -26,6 +27,8 @@ data class TransactionRuleCandidate(
     val direction: TransactionDirection,
     val absoluteAmount: Double,
     val accountId: String,
+    val memo: String = "",
+    val type: String? = null,
 )
 
 data class AutoRuleDraft(
@@ -71,9 +74,12 @@ internal fun AutoRuleDraft.matches(candidate: TransactionRuleCandidate): Boolean
     val min = minAbsoluteAmount.toDoubleOrNull()
     val max = maxAbsoluteAmount.toDoubleOrNull()
     return descriptionContains.trim().let { query ->
-        query.isEmpty() || when (descriptionMatchMode) {
-            AutoCategoryRuleDescriptionMatchMode.CONTAINS -> candidate.description.contains(query, ignoreCase = true)
-            AutoCategoryRuleDescriptionMatchMode.EXACT -> candidate.description.trim().equals(query, ignoreCase = true)
+        val normalizedQuery = normalizeAutoCategoryRuleText(query)
+        query.isEmpty() || normalizedQuery.isNotEmpty() && when (descriptionMatchMode) {
+            AutoCategoryRuleDescriptionMatchMode.CONTAINS -> candidate.transactionTextFields()
+                .any { it.contains(normalizedQuery) }
+            AutoCategoryRuleDescriptionMatchMode.EXACT -> candidate.transactionTextFields()
+                .any { it == normalizedQuery }
         }
     } &&
         (direction == null || direction == candidate.direction) &&
@@ -81,6 +87,9 @@ internal fun AutoRuleDraft.matches(candidate: TransactionRuleCandidate): Boolean
         (max == null || candidate.absoluteAmount <= max) &&
         (accountId == null || accountId == candidate.accountId)
 }
+
+private fun TransactionRuleCandidate.transactionTextFields(): List<String> =
+    listOf(description, memo, type.orEmpty()).map(::normalizeAutoCategoryRuleText)
 
 internal fun orderedMatchingRules(
     rules: List<AutoRuleDraft>,

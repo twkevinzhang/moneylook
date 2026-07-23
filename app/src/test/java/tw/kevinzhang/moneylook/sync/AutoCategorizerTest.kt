@@ -209,7 +209,7 @@ class AutoCategorizerTest {
     }
 
     @Test
-    fun `matcher uses case insensitive AND conditions absolute inclusive bounds and excludes zero direction`() {
+    fun `matcher normalizes transaction text and keeps direction amount and account conditions`() {
         val matching = ruleWithTags(
             AutoCategoryRule(
                 id = "matching",
@@ -223,7 +223,7 @@ class AutoCategorizerTest {
             ),
         )
 
-        assertEquals(true, matching.matches(transfer("one", "shop", -100.0)))
+        assertEquals(true, matching.matches(transfer("one", "Ｓｈｏｐ－１２", -100.0)))
         assertEquals(false, matching.matches(transfer("zero", "shop", 0.0)))
         assertEquals(false, matching.matches(transfer("income", "shop", 100.0)))
         assertEquals(false, matching.matches(transfer("amount", "shop", -101.0)))
@@ -231,7 +231,32 @@ class AutoCategorizerTest {
     }
 
     @Test
-    fun `exact description matching accepts normalized full description only`() {
+    fun `matcher checks normalized description memo and type independently without cross-field joining`() {
+        val contains = ruleWithTags(
+            AutoCategoryRule(
+                id = "counterparty",
+                name = "counterparty",
+                descriptionContains = "ＣＯＦＦＥＥ—ＳＨＯＰ",
+                categoryId = "category",
+            ),
+        )
+        val exact = ruleWithTags(
+            AutoCategoryRule(
+                id = "type",
+                name = "type",
+                descriptionContains = "薪資入帳",
+                descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.EXACT,
+                categoryId = "category",
+            ),
+        )
+
+        assertTrue(contains.matches(transfer("memo", "一般扣款", -50.0, memo = "Coffee shop 台北店")))
+        assertTrue(exact.matches(transfer("type", "一般扣款", 50.0, type = "薪資－入帳")))
+        assertFalse(contains.matches(transfer("split", "Coffee", -50.0, memo = "shop")))
+    }
+
+    @Test
+    fun `exact transaction text matching accepts a normalized individual field only`() {
         val matching = ruleWithTags(
             AutoCategoryRule(
                 id = "exact",
@@ -242,8 +267,10 @@ class AutoCategorizerTest {
             ),
         )
 
-        assertEquals(true, matching.matches(transfer("trimmed", "  捷運扣款  ", -50.0)))
+        assertEquals(true, matching.matches(transfer("description", "  捷運－扣款  ", -50.0)))
+        assertEquals(true, matching.matches(transfer("memo", "其他", -50.0, memo = "捷運 扣款")))
         assertEquals(false, matching.matches(transfer("fragment", "捷運扣款 超商", -50.0)))
+        assertFalse(matching.matches(transfer("split", "捷運", -50.0, memo = "扣款")))
     }
 
     @Test
@@ -522,6 +549,8 @@ class AutoCategorizerTest {
         amount: Double,
         txnDateTime: String = "2026-07-22",
         accountId: String = "account",
+        memo: String = "",
+        type: String? = null,
     ) = Transfer(
         id = id,
         accountId = accountId,
@@ -530,7 +559,8 @@ class AutoCategorizerTest {
         description = description,
         amount = amount,
         balance = null,
-        memo = "",
+        memo = memo,
+        type = type,
     )
 
     private fun classificationCandidate(
