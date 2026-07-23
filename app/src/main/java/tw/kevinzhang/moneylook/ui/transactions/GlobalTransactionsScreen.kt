@@ -466,11 +466,10 @@ private fun CategorySummaryRow(item: GlobalCategorySummary, currency: String, on
 
 @Composable
 private fun GlobalTransactionRow(item: GlobalTransactionItem, onClick: () -> Unit) {
-    val direction = globalTransactionDirection(item)
-    val amountColor = when (direction) {
-        GlobalTransactionDirection.INCOME -> MaterialTheme.colorScheme.primary
-        GlobalTransactionDirection.EXPENSE -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.onSurface
+    val amountColor = when (globalTransactionAmountTone(item)) {
+        GlobalTransactionAmountTone.POSITIVE -> MaterialTheme.colorScheme.primary
+        GlobalTransactionAmountTone.NEGATIVE -> MaterialTheme.colorScheme.error
+        GlobalTransactionAmountTone.MUTED -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {

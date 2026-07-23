@@ -148,6 +148,24 @@ class GlobalTransactionsPresentationTest {
     }
 
     @Test
+    fun `amount tone is muted only for non-reporting rows`() {
+        assertEquals(
+            GlobalTransactionAmountTone.MUTED,
+            globalTransactionAmountTone(item("transfer", -100.0, categoryKind = CategoryKind.TRANSFER)),
+        )
+        assertEquals(GlobalTransactionAmountTone.MUTED, globalTransactionAmountTone(item("zero", 0.0)))
+        assertEquals(GlobalTransactionAmountTone.MUTED, globalTransactionAmountTone(item("missing-rate", 10.0, currency = "USD")))
+        assertEquals(
+            GlobalTransactionAmountTone.POSITIVE,
+            globalTransactionAmountTone(item("converted-income", 3.0, currency = "USD").copy(amountTwd = 100.0)),
+        )
+        assertEquals(
+            GlobalTransactionAmountTone.NEGATIVE,
+            globalTransactionAmountTone(item("converted-expense", -500.0, currency = "JPY").copy(amountTwd = -110.0)),
+        )
+    }
+
+    @Test
     fun `category share uses report direction and unclassified fallback`() {
         val items = listOf(
             item("food-a", -70.0, categoryId = "food", categoryName = "餐飲"),

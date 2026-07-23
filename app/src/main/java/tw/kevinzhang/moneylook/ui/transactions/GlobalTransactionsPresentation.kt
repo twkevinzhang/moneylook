@@ -40,6 +40,14 @@ data class GlobalTransactionItem(
 data class GlobalTag(val id: String, val name: String)
 
 enum class GlobalTransactionDirection { INCOME, EXPENSE, TRANSFER }
+/**
+ * Visual treatment for a transaction amount in the detail ledger.
+ *
+ * Muted rows are intentionally excluded from the income/expense report, either
+ * because they represent an internal transfer/zero-value record or because a
+ * reporting exchange rate is currently unavailable.
+ */
+enum class GlobalTransactionAmountTone { POSITIVE, NEGATIVE, MUTED }
 enum class GlobalCategoryAssignment { ALL, CATEGORIZED, UNCATEGORIZED }
 /** Tabs live inside the single global-ledger destination, not in bottom navigation. */
 enum class GlobalTransactionsTab { CATEGORY, DETAILS, ANALYSIS }
@@ -263,6 +271,19 @@ fun globalCategorySummaries(
 
 fun GlobalTransactionItem.reportingAmountTwd(): Double? = amountTwd
     ?: amount.takeIf { currency.trim().equals("TWD", ignoreCase = true) && it.isFinite() }
+
+/**
+ * Keeps the ledger's amount colour consistent with whether the row contributes
+ * to reports. Successfully converted foreign-currency rows retain their
+ * signed colour; only unavailable reporting amounts are muted.
+ */
+fun globalTransactionAmountTone(item: GlobalTransactionItem): GlobalTransactionAmountTone = when {
+    item.categoryKind == CategoryKind.TRANSFER -> GlobalTransactionAmountTone.MUTED
+    item.amount == 0.0 -> GlobalTransactionAmountTone.MUTED
+    item.reportingAmountTwd() == null -> GlobalTransactionAmountTone.MUTED
+    item.amount > 0.0 -> GlobalTransactionAmountTone.POSITIVE
+    else -> GlobalTransactionAmountTone.NEGATIVE
+}
 
 fun missingExchangeCurrencies(items: List<GlobalTransactionItem>): List<String> = items.asSequence()
     .filter { globalTransactionDirection(it) !in setOf(null, GlobalTransactionDirection.TRANSFER) }
