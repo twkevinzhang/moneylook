@@ -13,9 +13,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -25,6 +27,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,9 +40,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 
@@ -54,10 +61,13 @@ fun AutoRuleListContent(
     onNavigateUp: () -> Unit,
     onSave: (AutoRuleDraft) -> Unit,
     onDelete: (String) -> Unit,
-    onApplyExisting: (String) -> Unit,
+    isApplyingAllRules: Boolean,
+    onApplyAllRules: () -> Unit,
+    snackbarHostState: SnackbarHostState,
 ) {
     var editing by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
+    var confirmApplyAllRules by remember { mutableStateOf(false) }
     editing?.let { draft ->
         AutoRuleEditorDialog(
             initial = draft,
@@ -76,9 +86,51 @@ fun AutoRuleListContent(
             dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } },
         )
     }
+    if (confirmApplyAllRules) {
+        AlertDialog(
+            onDismissRequest = { confirmApplyAllRules = false },
+            title = { Text("套用所有規則？") },
+            text = {
+                Text(
+                    "會依優先順序，將所有已啟用規則套用到全部交易明細。" +
+                        "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirmApplyAllRules = false
+                    onApplyAllRules()
+                }) { Text("套用") }
+            },
+            dismissButton = { TextButton(onClick = { confirmApplyAllRules = false }) { Text("取消") } },
+        )
+    }
     Scaffold(
-        topBar = { TopAppBar(title = { Text("自動分類規則") }, navigationIcon = { BackButton(onNavigateUp) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("自動分類規則") },
+                navigationIcon = { BackButton(onNavigateUp) },
+                actions = {
+                    IconButton(
+                        onClick = { confirmApplyAllRules = true },
+                        enabled = rules.any(AutoRuleDraft::enabled) && !isApplyingAllRules,
+                    ) {
+                        if (isApplyingAllRules) {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .semantics { contentDescription = "正在套用所有規則" },
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Default.Refresh, "套用所有規則到所有交易明細")
+                        }
+                    }
+                },
+            )
+        },
         floatingActionButton = { FloatingActionButton(onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) }) { Icon(Icons.Default.Add, "新增規則") } },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         if (rules.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -87,7 +139,7 @@ fun AutoRuleListContent(
             }
         } else LazyColumn(modifier = Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(rules.sortedWith(autoRuleDraftComparator), key = { it.id }) { rule ->
-                RuleCard(rule, categories, tags, onToggle = { onSave(rule.copy(enabled = it)) }, onEdit = { editing = rule }, onDelete = { deleteId = rule.id }, onApplyExisting = { onApplyExisting(rule.id) })
+                RuleCard(rule, categories, tags, onToggle = { onSave(rule.copy(enabled = it)) }, onEdit = { editing = rule }, onDelete = { deleteId = rule.id })
             }
         }
     }
@@ -101,7 +153,6 @@ private fun RuleCard(
     onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onApplyExisting: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -115,7 +166,6 @@ private fun RuleCard(
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "刪除") }
             }
             Text(ruleSummary(rule, categories, tags), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = onApplyExisting, enabled = rule.enabled) { Text("依所有規則重新套用") }
         }
     }
 }

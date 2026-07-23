@@ -6,9 +6,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -52,6 +56,8 @@ class ClassificationViewModel @Inject constructor(
     private val autoCategorizer: AutoCategorizer,
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
+    private val isApplyingAllRules = MutableStateFlow(false)
+    private val _autoRuleApplicationMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
 
     init {
         viewModelScope.launch { ensureDefaultCategories() }
@@ -67,6 +73,8 @@ class ClassificationViewModel @Inject constructor(
     val rules: StateFlow<List<AutoRuleDraft>> = autoCategoryRuleDao.observeAll().map { rules ->
         rules.map(AutoCategoryRuleWithTags::toDraft)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val applyingAllRules: StateFlow<Boolean> = isApplyingAllRules
+    val autoRuleApplicationMessages: SharedFlow<String> = _autoRuleApplicationMessages.asSharedFlow()
 
     private val transferId: String = URLDecoder.decode(savedStateHandle.get<String>("transferId").orEmpty(), "UTF-8")
     val detail: StateFlow<TransactionDetailUiState?> = combine(
@@ -157,9 +165,22 @@ class ClassificationViewModel @Inject constructor(
 
     fun deleteRule(id: String) = viewModelScope.launch { autoCategoryRuleDao.deleteById(id) }
 
-    fun applyRuleToExisting(@Suppress("UNUSED_PARAMETER") ruleId: String) {
+    fun applyAllRulesToExistingTransactions() {
+        if (isApplyingAllRules.value) return
         viewModelScope.launch {
-            autoCategorizer.applyToExistingTransactions()
+            isApplyingAllRules.value = true
+            try {
+                val result = autoCategorizer.applyToExistingTransactions()
+                _autoRuleApplicationMessages.emit(
+                    "套用完成：處理 ${result.processedTransferCount} 筆，符合 ${result.matchedTransferCount} 筆，保留手動調整 ${result.preservedManualOverrideCount} 筆。",
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _autoRuleApplicationMessages.emit("套用規則失敗，請稍後再試。")
+            } finally {
+                isApplyingAllRules.value = false
+            }
         }
     }
 
