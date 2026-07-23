@@ -10,4 +10,6 @@ data class TransferData(
     val status: String? = null,
     /** Bank-provided immutable transaction identifier, when the source exposes one. */
     val id: String? = null,
+    /** Bank-provided posting / settlement date-time, when distinct from the transaction date. */
+    val postingDateTime: String? = null,
 )

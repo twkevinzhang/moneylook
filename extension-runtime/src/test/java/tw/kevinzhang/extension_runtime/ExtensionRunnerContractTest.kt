@@ -154,7 +154,7 @@ class ExtensionRunnerContractTest {
     fun `parses range based transfer sync and rejects malformed transfer amounts`() {
         val parsed = parseAccounts(
             """{"accounts":[{"name":"Checking","balance":12.5,"transfers":[
-                {"id":"source-1","txnDateTime":"2026-07-21T11:25:30","amount":-2.0,"balance":10.5,"type":"transfer","status":"posted"}
+                {"id":"source-1","txnDateTime":"2026-07-21T11:25:30","postingDateTime":"2026-07-22T09:00:00","amount":-2.0,"balance":10.5,"type":"transfer","status":"posted"}
             ],"transferSync":{"requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
               "completedRanges":[{"start":"2025-07-21","end":"2026-07-21"}],"complete":true},"sourceAccountKey":"${"a".repeat(64)}"}]}""".trimIndent(),
             Gson(),
@@ -163,6 +163,7 @@ class ExtensionRunnerContractTest {
         assertEquals(sourceKey, parsed.accounts.single().sourceAccountKey)
         assertEquals("transfer", parsed.accounts.single().transfers.single().type)
         assertEquals("posted", parsed.accounts.single().transfers.single().status)
+        assertEquals("2026-07-22T09:00:00", parsed.accounts.single().transfers.single().postingDateTime)
         assertEquals(10.5, parsed.accounts.single().transfers.single().balance!!, 0.0)
         assertTrue(parsed.accounts.single().transferSync!!.complete)
 
@@ -181,6 +182,12 @@ class ExtensionRunnerContractTest {
         val infiniteRunningBalance = parseAccounts(
             """{"accounts":[{"name":"Checking","balance":1,"transfers":[
                 {"txnDateTime":"20260721","amount":1,"balance":1e999}
+            ]}]}""".trimIndent(),
+            Gson(),
+        )
+        val malformedPostingDate = parseAccounts(
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","transfers":[
+                {"txnDateTime":"2026-07-21T11:25:30","postingDateTime":"not-a-date","amount":-1}
             ]}]}""".trimIndent(),
             Gson(),
         )
@@ -213,6 +220,7 @@ class ExtensionRunnerContractTest {
 
         assertTrue(missingAmount is SyncResult.Error)
         assertTrue(infiniteRunningBalance is SyncResult.Error)
+        assertTrue(malformedPostingDate is SyncResult.Error)
         assertTrue(incompleteMarkedComplete is SyncResult.Error)
         assertTrue(legacyHistoryWithoutSourceKey is SyncResult.Success)
         assertTrue(rawAccountNumberAsSourceKey is SyncResult.Error)

@@ -87,6 +87,7 @@ class SyncResultPersister @Inject constructor(
                     memo = transfer.memo,
                     type = transfer.type,
                     status = transfer.status,
+                    postingDateTime = transfer.postingDateTime,
                 )
             }
         }

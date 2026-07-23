@@ -49,6 +49,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -473,7 +474,18 @@ private fun GlobalTransactionRow(item: GlobalTransactionItem, onClick: () -> Uni
     }
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(item.description.ifBlank { "未提供交易說明" }, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    item.description.ifBlank { "未提供交易說明" },
+                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                globalCreditCardTransactionStatus(item)?.let { status ->
+                    CreditCardTransactionStatusChip(status)
+                }
+            }
             Text(listOfNotNull(item.categoryName ?: "尚未分類", item.accountName, item.extensionName.takeIf(String::isNotBlank)).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (item.tags.isNotEmpty()) Text(item.tags.joinToString(" · ") { "#${it.name}" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -484,6 +496,26 @@ private fun GlobalTransactionRow(item: GlobalTransactionItem, onClick: () -> Uni
         }
     }
     HorizontalDivider()
+}
+
+@Composable
+fun CreditCardTransactionStatusChip(status: GlobalCreditCardTransactionStatus) {
+    val (containerColor, contentColor) = when (status) {
+        GlobalCreditCardTransactionStatus.POSTED -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+        GlobalCreditCardTransactionStatus.PENDING -> Color(0xFFFFE0B2) to Color(0xFF7A4100)
+    }
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(6.dp),
+    ) {
+        Text(
+            text = status.label,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
 }
 
 @Composable

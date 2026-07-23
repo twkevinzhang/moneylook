@@ -25,4 +25,6 @@ data class Transfer(
     val type: String? = null,
     /** Bank-provided posting / settlement status, when available. */
     val status: String? = null,
+    /** Bank-provided posting / settlement date-time, when distinct from [txnDateTime]. */
+    val postingDateTime: String? = null,
 )

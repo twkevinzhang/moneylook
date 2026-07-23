@@ -1,5 +1,6 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.CategoryKind
 import java.time.LocalDate
 import java.time.YearMonth
@@ -33,6 +34,12 @@ data class GlobalTransactionItem(
     val extensionId: String,
     val extensionName: String,
     val currency: String,
+    /** Account product semantics are used only for the credit-card settlement label. */
+    val accountKind: AssetKind = AssetKind.DEPOSIT,
+    /** Extension-provided card settlement status; only exact known values receive a label. */
+    val status: String? = null,
+    /** Bank-provided settlement date for a posted credit-card transaction. */
+    val postingDateTime: String? = null,
     /** Latest-rate reporting amount in TWD; null means this currency could not be converted. */
     val amountTwd: Double? = null,
 )
@@ -48,6 +55,10 @@ enum class GlobalTransactionDirection { INCOME, EXPENSE, TRANSFER }
  * reporting exchange rate is currently unavailable.
  */
 enum class GlobalTransactionAmountTone { POSITIVE, NEGATIVE, MUTED }
+enum class GlobalCreditCardTransactionStatus(val label: String) {
+    POSTED("已出帳"),
+    PENDING("未出帳"),
+}
 enum class GlobalCategoryAssignment { ALL, CATEGORIZED, UNCATEGORIZED }
 /** Tabs live inside the single global-ledger destination, not in bottom navigation. */
 enum class GlobalTransactionsTab { CATEGORY, DETAILS, ANALYSIS }
@@ -231,9 +242,30 @@ fun globalTransactionDirection(item: GlobalTransactionItem): GlobalTransactionDi
     }
 }
 
+/**
+ * Status is deliberately fail-closed: a stale or bank-specific value must not
+ * be represented as a settlement fact in the ledger.
+ */
+fun globalCreditCardTransactionStatus(
+    accountKind: AssetKind,
+    status: String?,
+): GlobalCreditCardTransactionStatus? = when {
+    accountKind != AssetKind.CREDIT_CARD -> null
+    status == "posted" -> GlobalCreditCardTransactionStatus.POSTED
+    status == "pending" -> GlobalCreditCardTransactionStatus.PENDING
+    else -> null
+}
+
+fun globalCreditCardTransactionStatus(item: GlobalTransactionItem): GlobalCreditCardTransactionStatus? =
+    globalCreditCardTransactionStatus(item.accountKind, item.status)
+
+/** Pending card authorizations stay visible and editable, but are not financial reports yet. */
+fun globalReportableTransactions(items: List<GlobalTransactionItem>): List<GlobalTransactionItem> =
+    items.filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
+
 /** Report totals exclude intentional transfers and zero-value rows. */
 fun globalTransactionsSummary(items: List<GlobalTransactionItem>): GlobalTransactionsSummary {
-    val reportable = items.mapNotNull { item ->
+    val reportable = globalReportableTransactions(items).mapNotNull { item ->
         val direction = globalTransactionDirection(item)
         val amountTwd = item.reportingAmountTwd()
         if (direction == null || direction == GlobalTransactionDirection.TRANSFER || amountTwd == null) null
@@ -250,7 +282,7 @@ fun globalCategorySummaries(
     direction: GlobalTransactionDirection,
 ): List<GlobalCategorySummary> {
     if (direction == GlobalTransactionDirection.TRANSFER) return emptyList()
-    val grouped = items
+    val grouped = globalReportableTransactions(items)
         .filter { globalTransactionDirection(it) == direction && it.reportingAmountTwd() != null }
         .groupBy { it.categoryId }
     val total = grouped.values.flatten().sumOf { abs(requireNotNull(it.reportingAmountTwd())) }
@@ -286,6 +318,7 @@ fun globalTransactionAmountTone(item: GlobalTransactionItem): GlobalTransactionA
 }
 
 fun missingExchangeCurrencies(items: List<GlobalTransactionItem>): List<String> = items.asSequence()
+    .filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
     .filter { globalTransactionDirection(it) !in setOf(null, GlobalTransactionDirection.TRANSFER) }
     .filter { it.reportingAmountTwd() == null }
     .map { it.currency.trim().uppercase(Locale.ROOT) }

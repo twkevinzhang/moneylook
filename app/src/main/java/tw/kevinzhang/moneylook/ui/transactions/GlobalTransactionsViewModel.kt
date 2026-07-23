@@ -75,7 +75,7 @@ class GlobalTransactionsViewModel @Inject constructor(
         val allItems = itemSets.first.map { it.toGlobalTransactionItem(rates.ratesPerTwd) }
         val trendItems = itemSets.second.map { it.toGlobalTransactionItem(rates.ratesPerTwd) }
         val sharedFilter = currentFilter.copy(direction = null)
-        val reportItems = filterGlobalTransactions(allItems, sharedFilter)
+        val reportItems = globalReportableTransactions(filterGlobalTransactions(allItems, sharedFilter))
         val visibleItems = filterGlobalTransactions(allItems, currentFilter)
         val selectedDirection = currentFilter.direction
             ?.takeIf { it != GlobalTransactionDirection.TRANSFER }
@@ -90,7 +90,7 @@ class GlobalTransactionsViewModel @Inject constructor(
             items = visibleItems,
             // The analysis chart always needs both income and expense series;
             // it shares every other filter with this screen.
-            trendItems = filterGlobalTransactions(trendItems, sharedFilter),
+            trendItems = globalReportableTransactions(filterGlobalTransactions(trendItems, sharedFilter)),
             summary = globalTransactionsSummary(reportItems),
             categories = globalCategorySummaries(reportItems, selectedDirection),
             missingExchangeCurrencies = missingExchangeCurrencies(reportItems),
@@ -181,6 +181,9 @@ private fun GlobalTransferListItem.toGlobalTransactionItem(ratesPerTwd: Map<Stri
     extensionId = transfer.extensionId,
     extensionName = extensionName,
     currency = currency,
+    accountKind = accountKind,
+    status = transfer.status,
+    postingDateTime = transfer.postingDateTime,
     amountTwd = transfer.amount.toTwd(currency, ratesPerTwd),
 )
 

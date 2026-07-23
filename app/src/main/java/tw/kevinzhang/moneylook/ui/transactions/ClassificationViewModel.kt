@@ -30,8 +30,9 @@ import tw.kevinzhang.core.data.db.TransactionDetailDraftSave
 import tw.kevinzhang.core.data.db.PendingTag
 import tw.kevinzhang.core.data.db.AutoCategoryRuleSave
 import tw.kevinzhang.core.data.db.TransferDetail
-import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.Category
@@ -231,7 +232,7 @@ private fun TransferDetail.toDetailUi(
         amount = transfer.amount,
         accountName = account?.accountName ?: "已移除帳戶",
         transactionDate = transfer.txnDateTime.take(10),
-        postingDate = null,
+        postingDate = transfer.postingDateTime?.take(10),
         description = transfer.description,
         bankMemo = transfer.memo,
         selectedCategoryId = annotation?.categoryId,
@@ -239,6 +240,8 @@ private fun TransferDetail.toDetailUi(
         userNote = annotation?.note.orEmpty(),
         categories = asCategoryOptions(categories),
         tags = asTagOptions(tags),
+        accountKind = account?.kind ?: AssetKind.DEPOSIT,
+        status = transfer.status,
         isManualOverride = annotation?.manualOverride == true,
         isSaving = isSaving,
     )

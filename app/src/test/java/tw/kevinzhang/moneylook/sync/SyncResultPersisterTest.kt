@@ -44,6 +44,7 @@ class SyncResultPersisterTest {
                             "2026-01-01", "", 1.0, 101.0, "",
                             type = "transfer",
                             status = "posted",
+                            postingDateTime = "2026-01-02T09:00:00",
                         ),
                     ),
                 ),
@@ -72,6 +73,7 @@ class SyncResultPersisterTest {
         assertEquals("deposit-opaque-1", store.accounts[0].sourceAccountKey)
         assertEquals("transfer", store.transfers.single().type)
         assertEquals("posted", store.transfers.single().status)
+        assertEquals("2026-01-02T09:00:00", store.transfers.single().postingDateTime)
         assertNull(store.refreshes[0].completedRanges)
     }
 
