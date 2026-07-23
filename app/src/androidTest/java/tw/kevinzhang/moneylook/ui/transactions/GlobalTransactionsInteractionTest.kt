@@ -3,11 +3,15 @@ package tw.kevinzhang.moneylook.ui.transactions
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
@@ -209,6 +213,9 @@ class GlobalTransactionsInteractionTest {
         }
 
         composeRule.onNodeWithText("已出帳").assertExists()
+        composeRule
+            .onNode(hasScrollAction() and hasAnyDescendant(hasText("已出帳")))
+            .performScrollToNode(hasText("未出帳"))
         composeRule.onNodeWithText("未出帳").assertExists()
     }
 
