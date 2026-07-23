@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.CategoryKind
 
 data class TransactionDetailUiState(
@@ -63,6 +64,8 @@ data class TransactionDetailUiState(
     val userNote: String,
     val categories: List<CategoryOption>,
     val tags: List<TagOption>,
+    val accountKind: AssetKind = AssetKind.DEPOSIT,
+    val status: String? = null,
     val isManualOverride: Boolean = false,
     val isSaving: Boolean = false,
 )
@@ -244,7 +247,17 @@ private fun TransactionSummary(
                 contentAlignment = Alignment.Center,
             ) { Text(category?.emoji ?: "🏷️", style = MaterialTheme.typography.headlineMedium) }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(category?.name ?: "尚未分類", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        category?.name ?: "尚未分類",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    globalCreditCardTransactionStatus(state.accountKind, state.status)?.let { status ->
+                        CreditCardTransactionStatusChip(status)
+                    }
+                }
                 Text(state.amountText, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             }
             IconButton(onClick = onCategoryClick) { Icon(Icons.Default.Edit, contentDescription = "更改分類") }
@@ -257,7 +270,9 @@ private fun ReadOnlyFacts(state: TransactionDetailUiState) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ReadOnlyFact("帳戶", state.accountName)
         ReadOnlyFact("交易日", state.transactionDate)
-        state.postingDate?.takeIf(String::isNotBlank)?.let { ReadOnlyFact("入帳日", it) }
+        state.postingDate?.takeIf(String::isNotBlank)
+            ?.takeIf { globalCreditCardTransactionStatus(state.accountKind, state.status) == GlobalCreditCardTransactionStatus.POSTED }
+            ?.let { ReadOnlyFact("入帳日", it) }
         ReadOnlyFact("明細描述", state.description.ifBlank { "未提供交易說明" })
         state.bankMemo?.takeIf(String::isNotBlank)?.let { ReadOnlyFact("銀行備註", it) }
     }

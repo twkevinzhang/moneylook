@@ -433,3 +433,10 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
         DefaultClassificationSeeder.seedRulesForExistingCategories(db)
     }
 }
+
+/** Retains a bank's settlement date separately from the consumer's transaction date. */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `postingDateTime` TEXT")
+    }
+}

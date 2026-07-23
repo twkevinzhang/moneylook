@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.CategoryKind
 import java.time.LocalDate
 import java.time.YearMonth
@@ -145,6 +146,50 @@ class GlobalTransactionsPresentationTest {
 
         assertEquals(GlobalTransactionsSummary(income = 100.0, expense = 140.0), globalTransactionsSummary(items))
         assertEquals(listOf("EUR"), missingExchangeCurrencies(items))
+    }
+
+    @Test
+    fun `only exact credit card posted and pending statuses receive a display status`() {
+        assertEquals(
+            GlobalCreditCardTransactionStatus.POSTED,
+            globalCreditCardTransactionStatus(item("posted", -100.0).copy(
+                accountKind = AssetKind.CREDIT_CARD,
+                status = "posted",
+            )),
+        )
+        assertEquals(
+            GlobalCreditCardTransactionStatus.PENDING,
+            globalCreditCardTransactionStatus(item("pending", -100.0).copy(
+                accountKind = AssetKind.CREDIT_CARD,
+                status = "pending",
+            )),
+        )
+        assertNull(globalCreditCardTransactionStatus(item("unknown", -100.0).copy(
+            accountKind = AssetKind.CREDIT_CARD,
+            status = "POSTED",
+        )))
+        assertNull(globalCreditCardTransactionStatus(item("deposit", -100.0).copy(
+            accountKind = AssetKind.DEPOSIT,
+            status = "pending",
+        )))
+    }
+
+    @Test
+    fun `pending credit card items remain in details but are excluded from every report source`() {
+        val posted = item("posted", -100.0, categoryId = "food", categoryName = "餐飲").copy(
+            accountKind = AssetKind.CREDIT_CARD,
+            status = "posted",
+        )
+        val pending = item("pending", -50.0, currency = "EUR", categoryId = "food", categoryName = "餐飲").copy(
+            accountKind = AssetKind.CREDIT_CARD,
+            status = "pending",
+        )
+
+        assertEquals(listOf("posted", "pending"), filterGlobalTransactions(listOf(posted, pending), GlobalTransactionsFilter()).map { it.transferId })
+        assertEquals(listOf("posted"), globalReportableTransactions(listOf(posted, pending)).map { it.transferId })
+        assertEquals(GlobalTransactionsSummary(expense = 100.0), globalTransactionsSummary(listOf(posted, pending)))
+        assertEquals(1, globalCategorySummaries(listOf(posted, pending), GlobalTransactionDirection.EXPENSE).single().transactionCount)
+        assertTrue(missingExchangeCurrencies(listOf(posted, pending)).isEmpty())
     }
 
     @Test

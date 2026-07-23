@@ -10,6 +10,7 @@ import androidx.room.Relation
 import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
@@ -71,6 +72,7 @@ data class GlobalTransferListItem(
     val accountName: String,
     val extensionName: String,
     val currency: String,
+    val accountKind: AssetKind,
 )
 
 @Dao
@@ -225,7 +227,8 @@ abstract class TransferAnnotationDao {
                 c.kind AS category_kind,
                 account.accountName AS accountName,
                 account.extensionName AS extensionName,
-                account.currency AS currency
+                account.currency AS currency,
+                account.kind AS accountKind
             FROM transfers AS t
             INNER JOIN accounts AS account ON account.id = t.accountId
             LEFT JOIN transfer_annotations AS a ON a.transferId = t.id

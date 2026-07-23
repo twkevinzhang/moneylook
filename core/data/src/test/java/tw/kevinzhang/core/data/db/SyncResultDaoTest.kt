@@ -91,14 +91,16 @@ class SyncResultDaoTest {
     }
 
     @Test
-    fun `range replacement with a stable transfer id preserves manual category tags and note`() = runBlocking {
+    fun `pending to posted upsert with a stable transfer id preserves manual category tags and note`() = runBlocking {
         val store = database.syncResultDao()
         val annotationDao = database.transferAnnotationDao()
         val account = account("account")
         store.replaceSnapshot(
             extensionId = "extension",
             accounts = listOf(account),
-            transfers = listOf(transfer("stable", "2026-07-21", -100.0)),
+            transfers = listOf(
+                transfer("stable", "2026-07-21", -100.0).copy(status = "pending"),
+            ),
             refreshes = listOf(AccountTransferRefresh("account", null)),
         )
         database.categoryDao().upsert(Category("food", "餐飲", "#2E7D32"))
@@ -118,7 +120,11 @@ class SyncResultDaoTest {
             extensionId = "extension",
             accounts = listOf(account),
             transfers = listOf(
-                transfer("stable", "2026-07-21", -100.0).copy(description = "銀行更新後的描述"),
+                transfer("stable", "2026-07-21", -100.0).copy(
+                    description = "銀行更新後的描述",
+                    status = "posted",
+                    postingDateTime = "2026-07-22T09:00:00",
+                ),
             ),
             refreshes = listOf(
                 AccountTransferRefresh("account", listOf(TransferDateRange("2026-07-21", "2026-07-21"))),
@@ -131,6 +137,8 @@ class SyncResultDaoTest {
             assertEquals("保留這個備註", detail.annotation?.note)
             assertEquals(AssignmentSource.MANUAL, detail.annotation?.categoryAssignment)
             assertEquals(listOf("work"), detail.tags.map(Tag::id))
+            assertEquals("posted", detail.transfer.status)
+            assertEquals("2026-07-22T09:00:00", detail.transfer.postingDateTime)
         }
         Unit
     }

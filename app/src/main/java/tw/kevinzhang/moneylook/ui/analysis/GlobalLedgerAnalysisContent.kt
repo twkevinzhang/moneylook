@@ -6,13 +6,16 @@ import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionItem
 import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionsUiState
 import tw.kevinzhang.moneylook.ui.transactions.filterGlobalTransactions
+import tw.kevinzhang.moneylook.ui.transactions.globalReportableTransactions
 import tw.kevinzhang.moneylook.ui.transactions.reportingAmountTwd
 
 /** Bridges the shared global-ledger state into the embeddable Analysis tab. */
 @Composable
 fun GlobalLedgerAnalysisContent(state: GlobalTransactionsUiState) {
     val reportItems = remember(state.allItems, state.filter) {
-        filterGlobalTransactions(state.allItems, state.filter.copy(direction = null))
+        globalReportableTransactions(
+            filterGlobalTransactions(state.allItems, state.filter.copy(direction = null)),
+        )
     }
     val presentation = remember(reportItems, state.trendItems, state.dateRange) {
         analysisPresentation(

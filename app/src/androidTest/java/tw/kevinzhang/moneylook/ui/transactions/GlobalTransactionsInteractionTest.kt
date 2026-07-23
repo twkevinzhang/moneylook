@@ -15,6 +15,7 @@ import androidx.compose.ui.test.swipeRight
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
 import java.time.LocalDate
 
@@ -167,6 +168,48 @@ class GlobalTransactionsInteractionTest {
 
         composeRule.onNodeWithText("USD -10.00").assertExists()
         composeRule.onNodeWithText("JPY -500.00").assertExists()
+    }
+
+    @Test
+    fun creditCardDetailsShowPostedAndPendingChipsBesideTheirDescriptions() {
+        val range = GlobalDateRange.thisMonth(LocalDate.now())
+        val state = GlobalTransactionsUiState(
+            dateRange = range,
+            filter = GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE),
+            activeTab = GlobalTransactionsTab.DETAILS,
+            items = listOf(
+                item("posted", -100.0, "TWD").copy(
+                    accountKind = AssetKind.CREDIT_CARD,
+                    status = "posted",
+                ),
+                item("pending", -50.0, "TWD").copy(
+                    accountKind = AssetKind.CREDIT_CARD,
+                    status = "pending",
+                ),
+            ),
+            exchangeRatesLoading = false,
+        )
+
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                GlobalTransactionsContent(
+                    state = state,
+                    onNavigateToTransaction = {},
+                    onSelectDateRange = {},
+                    onResetToThisMonth = {},
+                    onSetDateRange = { _, _ -> true },
+                    onSetQuery = {},
+                    onUpdateFilter = {},
+                    onClearFilters = {},
+                    onSelectTab = {},
+                    onSelectReportDirection = {},
+                    onCategoryClick = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("已出帳").assertExists()
+        composeRule.onNodeWithText("未出帳").assertExists()
     }
 
     private fun item(id: String, amount: Double, currency: String) = GlobalTransactionItem(

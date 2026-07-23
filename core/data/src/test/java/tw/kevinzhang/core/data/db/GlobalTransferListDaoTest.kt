@@ -12,6 +12,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CategoryKind
@@ -41,7 +42,14 @@ class GlobalTransferListDaoTest {
         database.accountDao().upsertAll(
             listOf(
                 account(id = "account-a", extensionId = "extension-a", extensionName = "銀行 A", accountName = "活存", currency = "TWD"),
-                account(id = "account-b", extensionId = "extension-b", extensionName = "銀行 B", accountName = "外幣", currency = "USD"),
+                account(
+                    id = "account-b",
+                    extensionId = "extension-b",
+                    extensionName = "銀行 B",
+                    accountName = "信用卡",
+                    currency = "USD",
+                    kind = AssetKind.CREDIT_CARD,
+                ),
             ),
         )
         database.transferDao().upsertAll(
@@ -72,15 +80,19 @@ class GlobalTransferListDaoTest {
             .first()
 
         assertEquals(listOf("unclassified", "same-b", "same-a", "income"), rows.map { it.transfer.id })
-        assertEquals("外幣", rows[0].accountName)
+        assertEquals("信用卡", rows[0].accountName)
         assertEquals("銀行 B", rows[0].extensionName)
         assertEquals("USD", rows[0].currency)
+        assertEquals(AssetKind.CREDIT_CARD, rows[0].accountKind)
         assertEquals("food", rows[1].category?.id)
         assertEquals(listOf("receipt"), rows[1].tags.map { it.id })
         assertNull(rows.first { it.transfer.id == "unclassified" }.annotation)
         val projectionFields = GlobalTransferListItem::class.java.declaredFields.map { it.name }.toSet()
         assertEquals(
-            setOf("transfer", "annotation", "category", "tags", "accountName", "extensionName", "currency"),
+            setOf(
+                "transfer", "annotation", "category", "tags", "accountName", "extensionName",
+                "currency", "accountKind",
+            ),
             projectionFields,
         )
     }
@@ -91,6 +103,7 @@ class GlobalTransferListDaoTest {
         extensionName: String,
         accountName: String,
         currency: String,
+        kind: AssetKind = AssetKind.DEPOSIT,
     ) = Account(
         id = id,
         extensionId = extensionId,
@@ -99,6 +112,7 @@ class GlobalTransferListDaoTest {
         balance = 0.0,
         currency = currency,
         lastSyncAt = 0,
+        kind = kind,
     )
 
     private fun transfer(

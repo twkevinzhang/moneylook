@@ -502,6 +502,10 @@ private fun parseTransfers(account: Map<*, *>, requireIsoDate: Boolean): List<Tr
         if (id != null && id.isBlank()) return null
         val type = optionalNonBlankString(transfer, "type") ?: return null
         val status = optionalNonBlankString(transfer, "status") ?: return null
+        val postingDateTime = optionalNonBlankString(transfer, "postingDateTime") ?: return null
+        if (postingDateTime.value != null && parseTransferDate(postingDateTime.value) == null) {
+            return null
+        }
         TransferData(
             txnDateTime = txnDateTime,
             description = description.value ?: "",
@@ -511,6 +515,7 @@ private fun parseTransfers(account: Map<*, *>, requireIsoDate: Boolean): List<Tr
             type = type.value,
             status = status.value,
             id = id,
+            postingDateTime = postingDateTime.value,
         )
     }
 }
