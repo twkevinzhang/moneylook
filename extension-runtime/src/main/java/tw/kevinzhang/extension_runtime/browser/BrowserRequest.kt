@@ -16,11 +16,15 @@ internal data class BrowserOpenRequest(
     val timeoutMs: Long,
     val settleMs: Long,
     val userAgent: String?,
+    val returnAtDocumentStartUrl: String?,
 )
 
 internal data class BrowserOpenResponse(
     val url: String,
     val origin: String,
+    val documentUrl: String,
+    val documentUrls: List<String>,
+    val requestUrls: List<String>,
 )
 
 internal data class BrowserFormPostRequest(
@@ -96,6 +100,7 @@ internal object BrowserRequestJsonParser {
             timeoutMs = root.long("timeoutMs", DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
             settleMs = root.long("settleMs", 0, 0, MAX_SETTLE_MS),
             userAgent = userAgent,
+            returnAtDocumentStartUrl = root.string("returnAtDocumentStartUrl")?.also(::validateAbsoluteHttpUrl),
         )
     }
 

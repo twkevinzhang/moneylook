@@ -19,7 +19,8 @@ class BrowserRequestTest {
                 "url":"https://example.com/login",
                 "timeoutMs":1234,
                 "settleMs":500,
-                "userAgent":"Mozilla/5.0 Moneylook-Test/1.0"
+                "userAgent":"Mozilla/5.0 Moneylook-Test/1.0",
+                "returnAtDocumentStartUrl":"https://example.com/portal"
             }""".trimIndent(),
             gson,
         )
@@ -27,6 +28,7 @@ class BrowserRequestTest {
         assertEquals(1234L, open.timeoutMs)
         assertEquals(500L, open.settleMs)
         assertEquals("Mozilla/5.0 Moneylook-Test/1.0", open.userAgent)
+        assertEquals("https://example.com/portal", open.returnAtDocumentStartUrl)
 
         val request = BrowserRequestJsonParser.parseRequest(
             """{
@@ -56,6 +58,7 @@ class BrowserRequestTest {
             gson,
         )
         assertEquals(null, absent.userAgent)
+        assertEquals(null, absent.returnAtDocumentStartUrl)
 
         listOf(" ", "A".repeat(512)).forEach { userAgent ->
             assertEquals(
@@ -123,6 +126,17 @@ class BrowserRequestTest {
             val openError = assertThrows(SafeBrowserException::class.java) {
                 BrowserRequestJsonParser.parseOpen(gson.toJson(mapOf("url" to url)), gson)
             }
+            val documentStartError = assertThrows(SafeBrowserException::class.java) {
+                BrowserRequestJsonParser.parseOpen(
+                    gson.toJson(
+                        mapOf(
+                            "url" to "https://example.com/login",
+                            "returnAtDocumentStartUrl" to url,
+                        ),
+                    ),
+                    gson,
+                )
+            }
             val requestError = assertThrows(SafeBrowserException::class.java) {
                 BrowserRequestJsonParser.parseRequest(gson.toJson(mapOf("url" to url)), gson)
             }
@@ -130,6 +144,7 @@ class BrowserRequestTest {
                 BrowserRequestJsonParser.parsePost(gson.toJson(mapOf("url" to url, "body" to "a=b")), gson)
             }
             assertEquals("INVALID_URL", openError.code)
+            assertEquals("INVALID_URL", documentStartError.code)
             assertEquals("INVALID_URL", requestError.code)
             assertEquals("INVALID_URL", postError.code)
         }
@@ -316,18 +331,33 @@ class BrowserRequestTest {
     }
 
     @Test
-    fun navigationResponseContainsOnlyFinalUrlAndOrigin() {
+    fun navigationResponseKeepsCommittedDocumentUrlWithoutPageContent() {
         val json = gson.toJson(
             BrowserOpenResponse(
-                url = "https://example.com/account",
+                url = "https://example.com/account/summary",
                 origin = "https://example.com",
+                documentUrl = "https://example.com/account?sid=fictional-session-id",
+                documentUrls = listOf(
+                    "https://example.com/oauth/authorize?code=fictional",
+                    "https://example.com/account?sid=fictional-session-id",
+                    "https://example.com/account/summary",
+                ),
+                requestUrls = listOf(
+                    "https://example.com/assets/app.js",
+                    "https://example.com/api/session/renew?sid=fictional-session-id",
+                ),
             ),
         )
 
+        val root = gson.fromJson(json, com.google.gson.JsonObject::class.java)
+        assertEquals("https://example.com/account/summary", root.get("url").asString)
+        assertEquals("https://example.com", root.get("origin").asString)
         assertEquals(
-            """{"url":"https://example.com/account","origin":"https://example.com"}""",
-            json,
+            "https://example.com/account?sid=fictional-session-id",
+            root.get("documentUrl").asString,
         )
+        assertEquals(3, root.getAsJsonArray("documentUrls").size())
+        assertEquals(2, root.getAsJsonArray("requestUrls").size())
         assertFalse(json.contains("body"))
         assertFalse(json.contains("html"))
     }
