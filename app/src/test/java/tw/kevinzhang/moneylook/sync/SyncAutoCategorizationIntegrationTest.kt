@@ -7,6 +7,7 @@ import tw.kevinzhang.core.data.db.AccountTransferRefresh
 import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Transfer
@@ -67,6 +68,8 @@ class SyncAutoCategorizationIntegrationTest {
             accounts: List<Account>,
             transfers: List<Transfer>,
             refreshes: List<AccountTransferRefresh>,
+            cardInstruments: List<CreditCardInstrument>,
+            replaceCardAccountIds: Set<String>,
             legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
             replaceKinds: Set<AssetKind>?,
         ) {

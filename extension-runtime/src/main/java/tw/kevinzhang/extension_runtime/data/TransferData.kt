@@ -12,4 +12,6 @@ data class TransferData(
     val id: String? = null,
     /** Bank-provided posting / settlement date-time, when distinct from the transaction date. */
     val postingDateTime: String? = null,
+    /** Result-local [CardData.ref], never a PAN or a persisted identifier. */
+    val cardRef: String? = null,
 )

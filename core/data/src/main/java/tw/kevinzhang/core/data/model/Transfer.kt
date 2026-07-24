@@ -27,4 +27,6 @@ data class Transfer(
     val status: String? = null,
     /** Bank-provided posting / settlement date-time, when distinct from [txnDateTime]. */
     val postingDateTime: String? = null,
+    /** Null when the bank cannot reliably associate this transaction with a physical card. */
+    val cardInstrumentId: String? = null,
 )

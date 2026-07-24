@@ -1,13 +1,13 @@
 package tw.kevinzhang.moneylook
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.fragment.app.FragmentActivity
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -21,7 +21,8 @@ import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+/** FragmentActivity hosts AndroidX BiometricPrompt for the short-lived PAN reveal flow. */
+class MainActivity : FragmentActivity() {
 
     @Inject lateinit var schedulerManager: SchedulerManager
     @Inject lateinit var credentialProfileDao: CredentialProfileDao

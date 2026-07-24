@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tw.kevinzhang.core.data.db.AccountDao
+import tw.kevinzhang.core.data.db.CreditCardInstrumentDao
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.TransferDao
@@ -88,6 +89,7 @@ class HomeViewModel @Inject constructor(
     @ApplicationContext context: Context,
     private val installedExtensionDao: InstalledExtensionDao,
     private val accountDao: AccountDao,
+    private val creditCardInstrumentDao: CreditCardInstrumentDao,
     private val transferDao: TransferDao,
     private val credentialProfileDao: CredentialProfileDao,
     private val syncCoordinator: BankSyncCoordinator,
@@ -104,6 +106,13 @@ class HomeViewModel @Inject constructor(
 
     val accounts = accountDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Home receives only per-account counts; card metadata and PAN-related fields stay off it. */
+    val creditCardCounts = creditCardInstrumentDao.observeCountsByAccount()
+        .map { counts -> counts.associate { it.accountId to it.count } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    fun creditCardsForAccount(accountId: String) = creditCardInstrumentDao.observeByAccount(accountId)
 
     val extensions = installedExtensionDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

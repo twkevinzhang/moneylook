@@ -252,6 +252,49 @@ class ExtensionRunnerContractTest {
     }
 
     @Test
+    fun `parses physical cards and maps transfers only by result local ref`() {
+        val pan = "4242424242424242" // Explicit fictional Luhn-valid test vector.
+        val parsed = parseAccounts(
+            """{"accounts":[{"name":"Card statement","balance":1200,"kind":"credit_card",
+                "cardsComplete":true,"cards":[
+                  {"ref":"main","sourceCardKey":"${"c".repeat(64)}","pan":"$pan","lastFour":"4242","displayName":"Main","network":"Visa","holderRole":"primary","expiryMonth":12,"expiryYear":2030,"creditLimit":10000,"availableCredit":8800},
+                  {"ref":"supplementary","maskedPan":"****-****-****-0002","lastFour":"0002","holderRole":"supplementary"}
+                ],
+                "transfers":[{"txnDateTime":"2026-07-21","amount":-1,"cardRef":"main"}]
+            }]}""".trimIndent(),
+            Gson(),
+        ) as SyncResult.Success
+
+        val account = parsed.accounts.single()
+        assertEquals(2, account.cards.size)
+        assertEquals(true, account.cardsComplete)
+        assertEquals("4242", account.cards.first().lastFour)
+        assertEquals("main", account.transfers.single().cardRef)
+        assertFalse(account.cards.first().toString().contains(pan))
+    }
+
+    @Test
+    fun `rejects unsafe or dangling physical card data`() {
+        val invalidResults = listOf(
+            // Cards are valid only for aggregated credit-card accounts.
+            """{"accounts":[{"name":"Deposit","balance":1,"cards":[]}]}""",
+            """{"accounts":[{"name":"Deposit","balance":1,"cardsComplete":true}]}""",
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","cardsComplete":true}]}""",
+            // Complete card numbers must be 12–19 digits and pass Luhn.
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","cards":[{"ref":"main","pan":"4242424242424241"}]}]}""",
+            // A transfer cannot guess an unreturned card.
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","cards":[{"ref":"main"}],"transfers":[{"txnDateTime":"2026-07-21","amount":-1,"cardRef":"unknown"}]}]}""",
+            // Sensitive card authentication/magstripe material is never an extension result field.
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","cards":[{"ref":"main","cvv":"123"}]}]}""",
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","cards":[{"ref":"main","holderRole":"owner"}]}]}""",
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","cards":[{"ref":"main","expiryMonth":12}]}]}""",
+            """{"accounts":[{"name":"Card","balance":1,"kind":"credit_card","cards":[{"ref":"main","pan":"4242424242424242"},{"ref":"other","pan":"4242424242424242"}]}]}""",
+        )
+
+        invalidResults.forEach { json -> assertTrue(parseAccounts(json, Gson()) is SyncResult.Error) }
+    }
+
+    @Test
     fun `parses complete and failed per-kind sync results with time deposits`() {
         val parsed = parseAccounts(
             """{"accounts":[

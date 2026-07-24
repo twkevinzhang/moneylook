@@ -6,6 +6,7 @@ import androidx.room.Transaction
 import androidx.room.Upsert
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.Transfer
 
 /**
@@ -20,11 +21,14 @@ abstract class SyncResultDao : TransferSyncStore {
         accounts: List<Account>,
         transfers: List<Transfer>,
         refreshes: List<AccountTransferRefresh>,
+        cardInstruments: List<CreditCardInstrument>,
+        replaceCardAccountIds: Set<String>,
         legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
         replaceKinds: Set<AssetKind>?,
     ) {
         if (replaceKinds == null && accounts.isEmpty()) {
             deleteTransfersByExtensionId(extensionId)
+            deleteCardInstrumentsByExtensionId(extensionId)
             deleteAccountsByExtensionId(extensionId)
             return
         }
@@ -47,22 +51,48 @@ abstract class SyncResultDao : TransferSyncStore {
         val resolvedRefreshes = refreshes.map { refresh ->
             refresh.copy(accountId = idRewrites[refresh.accountId] ?: refresh.accountId)
         }
+        val resolvedCardInstruments = cardInstruments.map { instrument ->
+            instrument.copy(accountId = idRewrites[instrument.accountId] ?: instrument.accountId)
+        }
+        val resolvedReplaceCardAccountIds =
+            replaceCardAccountIds.mapTo(mutableSetOf()) { idRewrites[it] ?: it }
         if (replaceKinds == null) {
             val accountIds = resolvedAccounts.map(Account::id)
             deleteTransfersForRemovedAccounts(extensionId, accountIds)
+            deleteCardInstrumentsForRemovedAccounts(extensionId, accountIds)
             deleteAccountsByExtensionId(extensionId)
         } else {
             replaceKinds.forEach { kind ->
                 val accountIds = resolvedAccounts.filter { it.kind == kind }.map(Account::id)
                 if (accountIds.isEmpty()) {
                     deleteTransfersByExtensionIdAndKind(extensionId, kind)
+                    if (kind == AssetKind.CREDIT_CARD) {
+                        deleteCardInstrumentsByExtensionIdAndKind(extensionId, kind)
+                    }
                 } else {
                     deleteTransfersForRemovedAccountsByKind(extensionId, kind, accountIds)
+                    if (kind == AssetKind.CREDIT_CARD) {
+                        deleteCardInstrumentsForRemovedAccountsByKind(extensionId, kind, accountIds)
+                    }
                 }
                 deleteAccountsByExtensionIdAndKind(extensionId, kind)
             }
         }
         if (resolvedAccounts.isNotEmpty()) upsertAccounts(resolvedAccounts)
+
+        if (resolvedCardInstruments.isNotEmpty()) upsertCardInstruments(resolvedCardInstruments)
+        resolvedReplaceCardAccountIds.forEach { accountId ->
+            val retainedIds = resolvedCardInstruments
+                .filter { it.accountId == accountId }
+                .map(CreditCardInstrument::id)
+            if (retainedIds.isEmpty()) {
+                clearTransferCardLinksByAccountId(accountId)
+                deleteCardInstrumentsByAccountId(accountId)
+            } else {
+                clearStaleTransferCardLinks(accountId, retainedIds)
+                deleteStaleCardInstruments(accountId, retainedIds)
+            }
+        }
 
         resolvedRefreshes.forEach { refresh ->
             val completedRanges = refresh.completedRanges
@@ -82,6 +112,9 @@ abstract class SyncResultDao : TransferSyncStore {
 
     @Upsert
     protected abstract suspend fun upsertTransfers(transfers: List<Transfer>)
+
+    @Upsert
+    protected abstract suspend fun upsertCardInstruments(instruments: List<CreditCardInstrument>)
 
     @Query("DELETE FROM accounts WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteAccountsByExtensionId(extensionId: String)
@@ -125,6 +158,9 @@ abstract class SyncResultDao : TransferSyncStore {
     @Query("DELETE FROM transfers WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteTransfersByExtensionId(extensionId: String)
 
+    @Query("DELETE FROM credit_card_instruments WHERE extensionId = :extensionId")
+    protected abstract suspend fun deleteCardInstrumentsByExtensionId(extensionId: String)
+
     @Query(
         """
         DELETE FROM transfers
@@ -140,6 +176,12 @@ abstract class SyncResultDao : TransferSyncStore {
 
     @Query("DELETE FROM transfers WHERE extensionId = :extensionId AND accountId NOT IN (:accountIds)")
     protected abstract suspend fun deleteTransfersForRemovedAccounts(
+        extensionId: String,
+        accountIds: List<String>,
+    )
+
+    @Query("DELETE FROM credit_card_instruments WHERE extensionId = :extensionId AND accountId NOT IN (:accountIds)")
+    protected abstract suspend fun deleteCardInstrumentsForRemovedAccounts(
         extensionId: String,
         accountIds: List<String>,
     )
@@ -161,8 +203,68 @@ abstract class SyncResultDao : TransferSyncStore {
         accountIds: List<String>,
     )
 
+    @Query(
+        """
+        DELETE FROM credit_card_instruments
+        WHERE accountId IN (
+            SELECT id FROM accounts
+            WHERE extensionId = :extensionId AND kind = :kind AND id NOT IN (:accountIds)
+        )
+        """,
+    )
+    protected abstract suspend fun deleteCardInstrumentsForRemovedAccountsByKind(
+        extensionId: String,
+        kind: AssetKind,
+        accountIds: List<String>,
+    )
+
+    @Query(
+        """
+        DELETE FROM credit_card_instruments
+        WHERE accountId IN (
+            SELECT id FROM accounts WHERE extensionId = :extensionId AND kind = :kind
+        )
+        """,
+    )
+    protected abstract suspend fun deleteCardInstrumentsByExtensionIdAndKind(
+        extensionId: String,
+        kind: AssetKind,
+    )
+
     @Query("DELETE FROM transfers WHERE accountId = :accountId")
     protected abstract suspend fun deleteTransfersByAccountId(accountId: String)
+
+    @Query("DELETE FROM credit_card_instruments WHERE accountId = :accountId")
+    protected abstract suspend fun deleteCardInstrumentsByAccountId(accountId: String)
+
+    @Query("UPDATE transfers SET cardInstrumentId = NULL WHERE accountId = :accountId")
+    protected abstract suspend fun clearTransferCardLinksByAccountId(accountId: String)
+
+    @Query(
+        """
+        UPDATE transfers
+        SET cardInstrumentId = NULL
+        WHERE accountId = :accountId
+          AND cardInstrumentId IS NOT NULL
+          AND cardInstrumentId NOT IN (:retainedIds)
+        """,
+    )
+    protected abstract suspend fun clearStaleTransferCardLinks(
+        accountId: String,
+        retainedIds: List<String>,
+    )
+
+    @Query(
+        """
+        DELETE FROM credit_card_instruments
+        WHERE accountId = :accountId
+          AND id NOT IN (:retainedIds)
+        """,
+    )
+    protected abstract suspend fun deleteStaleCardInstruments(
+        accountId: String,
+        retainedIds: List<String>,
+    )
 
     @Query(
         """

@@ -7,28 +7,33 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.AutoCategoryRuleDao
+import tw.kevinzhang.core.data.db.AutoCategoryRuleSave
 import tw.kevinzhang.core.data.db.AutoCategoryRuleWithTags
 import tw.kevinzhang.core.data.db.CategoryDao
+import tw.kevinzhang.core.data.db.CreditCardInstrumentDao
+import tw.kevinzhang.core.data.db.CreditCardInstrumentMetadata
 import tw.kevinzhang.core.data.db.DefaultClassificationCatalog
-import tw.kevinzhang.core.data.db.TagDao
-import tw.kevinzhang.core.data.db.TransferAnnotationDao
-import tw.kevinzhang.core.data.db.TransactionDetailDraftStore
-import tw.kevinzhang.core.data.db.TransactionDetailDraftSave
 import tw.kevinzhang.core.data.db.PendingTag
-import tw.kevinzhang.core.data.db.AutoCategoryRuleSave
+import tw.kevinzhang.core.data.db.TagDao
+import tw.kevinzhang.core.data.db.TransactionDetailDraftSave
+import tw.kevinzhang.core.data.db.TransactionDetailDraftStore
+import tw.kevinzhang.core.data.db.TransferAnnotationDao
 import tw.kevinzhang.core.data.db.TransferDetail
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
@@ -40,15 +45,17 @@ import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.moneylook.sync.AutoCategorizer
-import java.util.UUID
 import java.net.URLDecoder
+import java.util.UUID
 import javax.inject.Inject
 
 @HiltViewModel
+@OptIn(ExperimentalCoroutinesApi::class)
 class ClassificationViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val savedStateHandle: SavedStateHandle,
     private val accountDao: AccountDao,
+    private val creditCardInstrumentDao: CreditCardInstrumentDao,
     private val categoryDao: CategoryDao,
     private val tagDao: TagDao,
     private val transferAnnotationDao: TransferAnnotationDao,
@@ -78,14 +85,27 @@ class ClassificationViewModel @Inject constructor(
     val autoRuleApplicationMessages: SharedFlow<String> = _autoRuleApplicationMessages.asSharedFlow()
 
     private val transferId: String = URLDecoder.decode(savedStateHandle.get<String>("transferId").orEmpty(), "UTF-8")
+    private val detailWithCard = transferAnnotationDao.observeDetail(transferId)
+        .flatMapLatest { detail ->
+            val cardId = detail?.transfer?.cardInstrumentId
+            if (cardId == null) flowOf(detail to null)
+            else creditCardInstrumentDao.observeByIds(listOf(cardId)).map { cards -> detail to cards.firstOrNull() }
+        }
+
     val detail: StateFlow<TransactionDetailUiState?> = combine(
-        transferAnnotationDao.observeDetail(transferId),
+        detailWithCard,
         categoryDao.observeAll(),
         tagDao.observeAll(),
         accountDao.observeAll(),
         isDetailSaving,
-    ) { transfer, categories, tags, accounts, saving ->
-        transfer?.toDetailUi(categories, tags, accounts.associateBy(Account::id), saving)
+    ) { detailAndCard, categories, tags, accounts, saving ->
+        detailAndCard.first?.toDetailUi(
+            categories,
+            tags,
+            accounts.associateBy(Account::id),
+            detailAndCard.second,
+            saving,
+        )
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
@@ -220,6 +240,7 @@ private fun TransferDetail.toDetailUi(
     categories: List<Category>,
     tags: List<Tag>,
     accounts: Map<String, Account>,
+    card: CreditCardInstrumentMetadata?,
     isSaving: Boolean,
 ): TransactionDetailUiState {
     val account = accounts[transfer.accountId]
@@ -231,6 +252,13 @@ private fun TransferDetail.toDetailUi(
         ),
         amount = transfer.amount,
         accountName = account?.accountName ?: "已移除帳戶",
+        cardDisplayLabel = card?.let { instrument ->
+            listOfNotNull(
+                instrument.displayName?.trim()?.takeIf(String::isNotBlank) ?: "信用卡",
+                instrument.maskedPan?.trim()?.takeIf(String::isNotBlank)
+                    ?: instrument.lastFour?.takeIf { it.matches(Regex("\\d{4}")) }?.let { "•••• $it" },
+            ).joinToString(" · ")
+        },
         transactionDate = transfer.txnDateTime.take(10),
         postingDate = transfer.postingDateTime?.take(10),
         description = transfer.description,

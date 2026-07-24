@@ -79,6 +79,7 @@ fun HomeScreen(
 ) {
     val extensions by viewModel.extensions.collectAsStateWithLifecycle()
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val creditCardCounts by viewModel.creditCardCounts.collectAsStateWithLifecycle()
     val syncStatuses by viewModel.syncStatuses.collectAsStateWithLifecycle()
     val credentialSummaries by viewModel.credentialSummaries.collectAsStateWithLifecycle()
     val scheduleStatuses by viewModel.scheduleStatuses.collectAsStateWithLifecycle()
@@ -172,6 +173,7 @@ fun HomeScreen(
                     ExtensionCard(
                         extension = ext,
                         accounts = extAccounts,
+                        creditCardCounts = creditCardCounts,
                         syncState = status?.syncState ?: SyncState.IDLE,
                         hasCredentials = status?.hasCredentials ?: false,
                         credentialSummary = credentialSummaries[ext.id],
@@ -326,6 +328,7 @@ private fun OverviewAmountRow(
 private fun ExtensionCard(
     extension: InstalledExtension,
     accounts: List<Account>,
+    creditCardCounts: Map<String, Int>,
     syncState: SyncState,
     hasCredentials: Boolean,
     credentialSummary: CredentialSummary?,
@@ -428,6 +431,7 @@ private fun ExtensionCard(
                     HorizontalDivider()
                     AccountRow(
                         account = account,
+                        creditCardCount = creditCardCounts[account.id] ?: 0,
                         onClick = { onViewLedger(account.id) },
                     )
                 }
@@ -576,6 +580,7 @@ private fun ExtensionIcon(extension: InstalledExtension) {
 @Composable
 private fun AccountRow(
     account: Account,
+    creditCardCount: Int,
     onClick: () -> Unit,
 ) {
     val presentation = accountRowPresentation(
@@ -605,6 +610,15 @@ private fun AccountRow(
                 text = account.accountName,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (account.kind == AssetKind.CREDIT_CARD) {
+                creditCardCountLabel(creditCardCount)?.let { label ->
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             presentation.supportingText?.let { supportingText ->
                 Text(
                     text = supportingText,

@@ -55,6 +55,8 @@ data class TransactionDetailUiState(
     val amountText: String,
     val amount: Double,
     val accountName: String,
+    /** Redaction-safe bank-provided card name/mask; complete PANs never enter this state. */
+    val cardDisplayLabel: String? = null,
     val transactionDate: String,
     val postingDate: String?,
     val description: String,
@@ -269,6 +271,7 @@ private fun TransactionSummary(
 private fun ReadOnlyFacts(state: TransactionDetailUiState) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ReadOnlyFact("帳戶", state.accountName)
+        state.cardDisplayLabel?.takeIf(String::isNotBlank)?.let { ReadOnlyFact("信用卡", it) }
         ReadOnlyFact("交易日", state.transactionDate)
         state.postingDate?.takeIf(String::isNotBlank)
             ?.takeIf { globalCreditCardTransactionStatus(state.accountKind, state.status) == GlobalCreditCardTransactionStatus.POSTED }
