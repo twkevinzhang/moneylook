@@ -1,6 +1,7 @@
 package tw.kevinzhang.core.data.model
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -19,6 +20,49 @@ enum class AutoCategoryRuleDescriptionMatchMode {
     EXACT,
 }
 
+/** Who supplied a rule. Public and legacy rows are retained for explainable classification. */
+enum class AutoCategoryRuleOrigin {
+    LEGACY,
+    PUBLIC_DEFAULT,
+    USER_CONFIRMED,
+    PRIVATE_LEARNED,
+    IMPORTED,
+}
+
+/** Whether a matching rule may write a category or must ask the user first. */
+enum class AutoCategoryRuleAction {
+    AUTO_APPLY,
+    SUGGEST,
+    ABSTAIN,
+}
+
+/** Stable fields that a v2 structured rule may inspect. */
+enum class AutoCategoryRuleConditionField {
+    /** Preserves v1 behaviour: description, memo, and bank transaction type are all candidates. */
+    LEGACY_ANY_TEXT,
+    DESCRIPTION,
+    MEMO,
+    TYPE,
+    STATUS,
+    MERCHANT_NAME,
+    MERCHANT_CATEGORY_CODE,
+    COUNTERPARTY_NAME,
+    PURPOSE,
+}
+
+enum class AutoCategoryRuleConditionMatchMode {
+    CONTAINS,
+    EXACT,
+    TOKEN,
+}
+
+/** Conditions in the same group are ORed; groups can be added without changing the row key. */
+enum class AutoCategoryRuleConditionGroup {
+    INCLUDE_ANY,
+    INCLUDE_ALL,
+    EXCLUDE_ANY,
+}
+
 /**
  * Canonical text form used by automatic-category rules.
  *
@@ -30,6 +74,15 @@ fun normalizeAutoCategoryRuleText(value: String): String =
     Normalizer.normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT)
         .filter(Char::isLetterOrDigit)
+
+/** V2 canonicalization retains word boundaries so token matching cannot concatenate words. */
+fun normalizeAutoCategoryRuleTextV2(value: String): String =
+    Normalizer.normalize(value, Normalizer.Form.NFKC)
+        .lowercase(Locale.ROOT)
+        .map { if (it.isLetterOrDigit()) it else ' ' }
+        .joinToString("")
+        .trim()
+        .replace(Regex("\\s+"), " ")
 
 /** Gmail-style user rule. Rules are global; [accountId] optionally narrows the scope. */
 @Entity(
@@ -47,6 +100,10 @@ fun normalizeAutoCategoryRuleText(value: String): String =
         Index(value = ["isDefault", "enabled", "priority", "id"]),
         Index(value = ["accountId"]),
         Index(value = ["categoryId"]),
+        Index(value = ["ruleSetId"]),
+        Index(value = ["extensionId"]),
+        Index(value = ["accountKind", "extensionId"]),
+        Index(value = ["origin", "action", "enabled", "priority", "id"]),
     ],
 )
 data class AutoCategoryRule(
@@ -67,6 +124,20 @@ data class AutoCategoryRule(
         AutoCategoryRuleDescriptionMatchMode.CONTAINS,
     /** Bundled rules remain identifiable so user-created rules always run before them. */
     val isDefault: Boolean = false,
+    /** Nullable on purpose: RuleSet imports are additive and may be removed independently. */
+    val ruleSetId: String? = null,
+    /** Narrows a rule to one installed extension without creating a dependency on installed data. */
+    val extensionId: String? = null,
+    /** Narrows a rule to an account product kind when a bank supplies structured metadata. */
+    val accountKind: AssetKind? = null,
+    @ColumnInfo(defaultValue = "'LEGACY'")
+    val origin: AutoCategoryRuleOrigin = if (isDefault) {
+        AutoCategoryRuleOrigin.PUBLIC_DEFAULT
+    } else {
+        AutoCategoryRuleOrigin.LEGACY
+    },
+    @ColumnInfo(defaultValue = "'AUTO_APPLY'")
+    val action: AutoCategoryRuleAction = AutoCategoryRuleAction.AUTO_APPLY,
 ) {
     init {
         require(name == name.trim() && name.isNotEmpty()) { "rule name must be non-blank and trimmed" }
@@ -78,6 +149,55 @@ data class AutoCategoryRule(
         require(minAbsoluteAmount == null || maxAbsoluteAmount == null || minAbsoluteAmount <= maxAbsoluteAmount) {
             "min amount must not exceed max amount"
         }
+    }
+}
+
+/**
+ * Versioned public/private rule collection metadata. AutoCategoryRule deliberately has no
+ * foreign key to this entity so importing or deleting a collection cannot delete user rules.
+ */
+@Entity(
+    tableName = "auto_category_rule_sets",
+    indices = [Index(value = ["origin"]), Index(value = ["isActive"])],
+)
+data class AutoCategoryRuleSet(
+    @PrimaryKey val id: String,
+    val name: String,
+    val origin: AutoCategoryRuleOrigin,
+    val version: String,
+    val canonicalizerVersion: String,
+    val contentSha256: String,
+    val isActive: Boolean = true,
+)
+
+/**
+ * A structured matching clause. [position] provides deterministic evaluation and is scoped to a
+ * rule so an imported ruleset can retain its source ordering without globally allocated IDs.
+ */
+@Entity(
+    tableName = "auto_category_rule_conditions",
+    primaryKeys = ["ruleId", "position"],
+    foreignKeys = [
+        ForeignKey(
+            entity = AutoCategoryRule::class,
+            parentColumns = ["id"],
+            childColumns = ["ruleId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["field", "matchMode"]), Index(value = ["ruleId", "conditionGroup", "position"])],
+)
+data class AutoCategoryRuleCondition(
+    val ruleId: String,
+    val position: Int,
+    val conditionGroup: AutoCategoryRuleConditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+    val field: AutoCategoryRuleConditionField,
+    val matchMode: AutoCategoryRuleConditionMatchMode,
+    val pattern: String,
+) {
+    init {
+        require(position >= 0) { "condition position must be non-negative" }
+        require(pattern == pattern.trim() && pattern.isNotEmpty()) { "condition pattern must be non-blank and trimmed" }
     }
 }
 

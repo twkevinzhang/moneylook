@@ -29,4 +29,10 @@ data class Transfer(
     val postingDateTime: String? = null,
     /** Null when the bank cannot reliably associate this transaction with a physical card. */
     val cardInstrumentId: String? = null,
+    /** Structured merchant data supplied by an extension; legacy descriptions remain untouched. */
+    val merchantName: String? = null,
+    /** ISO 18245 merchant category code, stored as text to preserve leading zeroes. */
+    val merchantCategoryCode: String? = null,
+    val counterpartyName: String? = null,
+    val purpose: String? = null,
 )

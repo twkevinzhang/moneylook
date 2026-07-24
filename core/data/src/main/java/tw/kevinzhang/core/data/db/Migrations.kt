@@ -476,3 +476,113 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
         db.execSQL("ALTER TABLE `transfers` ADD COLUMN `cardInstrumentId` TEXT")
     }
 }
+
+/**
+ * Adds Rules v2 without rebuilding historical tables. Existing v1 rules remain executable through
+ * their legacy columns and receive a semantically equivalent LEGACY_ANY_TEXT condition.
+ */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `merchantName` TEXT")
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `merchantCategoryCode` TEXT")
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `counterpartyName` TEXT")
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `purpose` TEXT")
+
+        db.execSQL("ALTER TABLE `auto_category_rules` ADD COLUMN `ruleSetId` TEXT")
+        db.execSQL("ALTER TABLE `auto_category_rules` ADD COLUMN `extensionId` TEXT")
+        db.execSQL("ALTER TABLE `auto_category_rules` ADD COLUMN `accountKind` TEXT")
+        db.execSQL(
+            "ALTER TABLE `auto_category_rules` ADD COLUMN `origin` TEXT NOT NULL DEFAULT 'LEGACY'",
+        )
+        db.execSQL(
+            "ALTER TABLE `auto_category_rules` ADD COLUMN `action` TEXT NOT NULL DEFAULT 'AUTO_APPLY'",
+        )
+        db.execSQL(
+            "UPDATE `auto_category_rules` SET `origin` = " +
+                "CASE WHEN `isDefault` = 1 THEN 'PUBLIC_DEFAULT' ELSE 'LEGACY' END",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_ruleSetId` " +
+                "ON `auto_category_rules` (`ruleSetId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_extensionId` " +
+                "ON `auto_category_rules` (`extensionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_accountKind_extensionId` " +
+                "ON `auto_category_rules` (`accountKind`, `extensionId`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rules_origin_action_enabled_priority_id` " +
+                "ON `auto_category_rules` (`origin`, `action`, `enabled`, `priority`, `id`)",
+        )
+
+        // RuleSet deliberately has no foreign-key relationship from auto_category_rules.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `auto_category_rule_sets` (
+                `id` TEXT NOT NULL,
+                `name` TEXT NOT NULL,
+                `origin` TEXT NOT NULL,
+                `version` TEXT NOT NULL,
+                `canonicalizerVersion` TEXT NOT NULL,
+                `contentSha256` TEXT NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rule_sets_origin` " +
+                "ON `auto_category_rule_sets` (`origin`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rule_sets_isActive` " +
+                "ON `auto_category_rule_sets` (`isActive`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `auto_category_rule_conditions` (
+                `ruleId` TEXT NOT NULL,
+                `position` INTEGER NOT NULL,
+                `conditionGroup` TEXT NOT NULL,
+                `field` TEXT NOT NULL,
+                `matchMode` TEXT NOT NULL,
+                `pattern` TEXT NOT NULL,
+                PRIMARY KEY(`ruleId`, `position`),
+                FOREIGN KEY(`ruleId`) REFERENCES `auto_category_rules`(`id`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rule_conditions_field_matchMode` " +
+                "ON `auto_category_rule_conditions` (`field`, `matchMode`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_auto_category_rule_conditions_ruleId_conditionGroup_position` " +
+                "ON `auto_category_rule_conditions` (`ruleId`, `conditionGroup`, `position`)",
+        )
+        db.execSQL(
+            """
+            INSERT INTO `auto_category_rule_conditions`
+                (`ruleId`, `position`, `conditionGroup`, `field`, `matchMode`, `pattern`)
+            SELECT `id`, 0, 'INCLUDE_ANY', 'LEGACY_ANY_TEXT', `descriptionMatchMode`, `descriptionContains`
+            FROM `auto_category_rules`
+            WHERE `descriptionContains` IS NOT NULL AND length(trim(`descriptionContains`)) > 0
+            """.trimIndent(),
+        )
+
+        db.execSQL("ALTER TABLE `transfer_annotations` ADD COLUMN `autoRuleId` TEXT")
+        db.execSQL("ALTER TABLE `transfer_annotations` ADD COLUMN `autoRuleSetId` TEXT")
+        db.execSQL("ALTER TABLE `transfer_annotations` ADD COLUMN `autoMatchScore` INTEGER")
+        db.execSQL("ALTER TABLE `transfer_annotations` ADD COLUMN `classifierVersion` TEXT")
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_transfer_annotations_autoRuleId` " +
+                "ON `transfer_annotations` (`autoRuleId`)",
+        )
+
+        DefaultClassificationSeeder.seedRulesV2ForExistingCategories(db)
+    }
+}

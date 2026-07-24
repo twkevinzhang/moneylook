@@ -90,6 +90,10 @@ class SyncResultPersisterTest {
                             type = "transfer",
                             status = "posted",
                             postingDateTime = "2026-01-02T09:00:00",
+                            merchantName = "Fictional Grocery",
+                            merchantCategoryCode = "5411",
+                            counterpartyName = "Example Counterparty",
+                            purpose = "Household supplies",
                         ),
                     ),
                 ),
@@ -119,6 +123,10 @@ class SyncResultPersisterTest {
         assertEquals("transfer", store.transfers.single().type)
         assertEquals("posted", store.transfers.single().status)
         assertEquals("2026-01-02T09:00:00", store.transfers.single().postingDateTime)
+        assertEquals("Fictional Grocery", store.transfers.single().merchantName)
+        assertEquals("5411", store.transfers.single().merchantCategoryCode)
+        assertEquals("Example Counterparty", store.transfers.single().counterpartyName)
+        assertEquals("Household supplies", store.transfers.single().purpose)
         assertNull(store.refreshes[0].completedRanges)
     }
 

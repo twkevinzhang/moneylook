@@ -1,8 +1,13 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleText
+import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleTextV2
 
 /** UI-owned values keep rule matching independently testable from Room and Compose. */
 data class CategoryOption(
@@ -47,6 +52,16 @@ data class AutoRuleDraft(
     val priority: Int = 0,
     val isDefault: Boolean = false,
     val applyExisting: Boolean = false,
+    /** Marks a single DESCRIPTION clause that the legacy editor can safely update. */
+    val createExactDescriptionCondition: Boolean = false,
+    /** Marks a migrated single LEGACY_ANY_TEXT clause that the legacy editor can safely update. */
+    val updateLegacyAnyTextCondition: Boolean = false,
+    val conditions: List<AutoCategoryRuleCondition> = emptyList(),
+    val ruleSetId: String? = null,
+    val accountKind: AssetKind? = null,
+    val extensionId: String? = null,
+    val origin: AutoCategoryRuleOrigin = AutoCategoryRuleOrigin.USER_CONFIRMED,
+    val action: AutoCategoryRuleAction = AutoCategoryRuleAction.AUTO_APPLY,
 )
 
 /**
@@ -73,15 +88,31 @@ data class TransactionDetailDraft(
 internal fun AutoRuleDraft.matches(candidate: TransactionRuleCandidate): Boolean {
     val min = minAbsoluteAmount.toDoubleOrNull()
     val max = maxAbsoluteAmount.toDoubleOrNull()
-    return descriptionContains.trim().let { query ->
-        val normalizedQuery = normalizeAutoCategoryRuleText(query)
-        query.isEmpty() || normalizedQuery.isNotEmpty() && when (descriptionMatchMode) {
-            AutoCategoryRuleDescriptionMatchMode.CONTAINS -> candidate.transactionTextFields()
-                .any { it.contains(normalizedQuery) }
-            AutoCategoryRuleDescriptionMatchMode.EXACT -> candidate.transactionTextFields()
-                .any { it == normalizedQuery }
+    val textMatches = when {
+        createExactDescriptionCondition -> {
+            val normalizedQuery = normalizeAutoCategoryRuleTextV2(descriptionContains.trim())
+            val normalizedDescription = normalizeAutoCategoryRuleTextV2(candidate.description)
+            normalizedQuery.isNotEmpty() && when (descriptionMatchMode) {
+                AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
+                    normalizedDescription.contains(normalizedQuery)
+                AutoCategoryRuleDescriptionMatchMode.EXACT ->
+                    normalizedDescription == normalizedQuery
+            }
         }
-    } &&
+        conditions.isNotEmpty() && !updateLegacyAnyTextCondition -> false
+        else -> {
+            descriptionContains.trim().let { query ->
+                val normalizedQuery = normalizeAutoCategoryRuleText(query)
+                query.isEmpty() || normalizedQuery.isNotEmpty() && when (descriptionMatchMode) {
+                    AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
+                        candidate.transactionTextFields().any { it.contains(normalizedQuery) }
+                    AutoCategoryRuleDescriptionMatchMode.EXACT ->
+                        candidate.transactionTextFields().any { it == normalizedQuery }
+                }
+            }
+        }
+    }
+    return textMatches &&
         (direction == null || direction == candidate.direction) &&
         (min == null || candidate.absoluteAmount >= min) &&
         (max == null || candidate.absoluteAmount <= max) &&

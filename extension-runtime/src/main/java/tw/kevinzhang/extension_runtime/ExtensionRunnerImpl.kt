@@ -455,6 +455,7 @@ private val SOURCE_ACCOUNT_KEY_PATTERN = Regex("[0-9a-f]{64}")
 private val KIND_SYNC_CODE_PATTERN = Regex("[A-Z0-9_]{1,32}")
 private val CARD_REF_PATTERN = Regex("[A-Za-z][A-Za-z0-9_.:-]{0,127}")
 private val LAST_FOUR_PATTERN = Regex("[0-9]{4}")
+private val MERCHANT_CATEGORY_CODE_PATTERN = Regex("[0-9]{4}")
 
 private fun parseKindSync(
     root: Map<String, Any>,
@@ -542,6 +543,15 @@ private fun parseTransfers(
         }
         val cardRef = optionalNonBlankString(transfer, "cardRef") ?: return null
         if (cardRef.value != null && cardRef.value !in cards.map(CardData::ref).toSet()) return null
+        val merchantName = optionalNonBlankString(transfer, "merchantName") ?: return null
+        val merchantCategoryCode = optionalNonBlankString(transfer, "merchantCategoryCode") ?: return null
+        if (merchantCategoryCode.value != null &&
+            !MERCHANT_CATEGORY_CODE_PATTERN.matches(merchantCategoryCode.value)
+        ) {
+            return null
+        }
+        val counterpartyName = optionalNonBlankString(transfer, "counterpartyName") ?: return null
+        val purpose = optionalNonBlankString(transfer, "purpose") ?: return null
         TransferData(
             txnDateTime = txnDateTime,
             description = description.value ?: "",
@@ -553,6 +563,10 @@ private fun parseTransfers(
             id = id,
             postingDateTime = postingDateTime.value,
             cardRef = cardRef.value,
+            merchantName = merchantName.value,
+            merchantCategoryCode = merchantCategoryCode.value,
+            counterpartyName = counterpartyName.value,
+            purpose = purpose.value,
         )
     }
 }

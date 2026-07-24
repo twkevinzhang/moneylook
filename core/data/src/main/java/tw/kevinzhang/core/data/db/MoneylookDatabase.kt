@@ -7,10 +7,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AutoCategoryRule
 import tw.kevinzhang.core.data.model.AutoCategoryRuleTagCrossRef
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.InstalledExtension
+import tw.kevinzhang.core.data.model.AutoCategoryRuleSet
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -21,22 +23,25 @@ import tw.kevinzhang.core.data.model.TransferTagCrossRef
         Account::class,
         AutoCategoryRule::class,
         AutoCategoryRuleTagCrossRef::class,
+        AutoCategoryRuleCondition::class,
         Category::class,
         CredentialProfile::class,
         CreditCardInstrument::class,
         InstalledExtension::class,
+        AutoCategoryRuleSet::class,
         Tag::class,
         Transfer::class,
         TransferAnnotation::class,
         TransferTagCrossRef::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
 abstract class MoneylookDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun autoCategoryRuleDao(): AutoCategoryRuleDao
+    abstract fun autoCategoryRuleSetDao(): AutoCategoryRuleSetDao
     abstract fun categoryDao(): CategoryDao
     abstract fun credentialProfileDao(): CredentialProfileDao
     abstract fun creditCardInstrumentDao(): CreditCardInstrumentDao

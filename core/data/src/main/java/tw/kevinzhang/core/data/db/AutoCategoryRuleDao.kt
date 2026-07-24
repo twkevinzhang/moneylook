@@ -11,7 +11,9 @@ import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 import tw.kevinzhang.core.data.model.AutoCategoryRule
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
 import tw.kevinzhang.core.data.model.AutoCategoryRuleTagCrossRef
+import tw.kevinzhang.core.data.model.AutoCategoryRuleSet
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.Tag
 
@@ -28,6 +30,16 @@ data class AutoCategoryRuleWithTags(
         ),
     )
     val tags: List<Tag>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "ruleId",
+    )
+    val conditions: List<AutoCategoryRuleCondition> = emptyList(),
+    @Relation(
+        parentColumn = "ruleSetId",
+        entityColumn = "id",
+    )
+    val ruleSet: AutoCategoryRuleSet? = null,
 )
 
 @Dao
@@ -53,6 +65,32 @@ abstract class AutoCategoryRuleDao {
         replaceTags(rule.id, tagIds)
     }
 
+    /** Atomically persists the rule together with its structured clauses and tags. */
+    @Transaction
+    open suspend fun upsertWithDetails(
+        rule: AutoCategoryRule,
+        conditions: List<AutoCategoryRuleCondition>,
+        tagIds: Set<String>,
+    ) {
+        require(conditions.all { it.ruleId == rule.id }) { "conditions must belong to the rule" }
+        require(conditions.map { it.position }.distinct().size == conditions.size) {
+            "condition positions must be unique per rule"
+        }
+        upsert(rule)
+        replaceConditions(rule.id, conditions)
+        replaceTags(rule.id, tagIds)
+    }
+
+    @Transaction
+    open suspend fun replaceConditions(ruleId: String, conditions: List<AutoCategoryRuleCondition>) {
+        require(conditions.all { it.ruleId == ruleId }) { "conditions must belong to the rule" }
+        require(conditions.map { it.position }.distinct().size == conditions.size) {
+            "condition positions must be unique per rule"
+        }
+        deleteConditions(ruleId)
+        if (conditions.isNotEmpty()) upsertConditions(conditions)
+    }
+
     @Transaction
     open suspend fun replaceTags(ruleId: String, tagIds: Set<String>) {
         deleteTagCrossRefs(ruleId)
@@ -64,6 +102,12 @@ abstract class AutoCategoryRuleDao {
 
     @Upsert
     protected abstract suspend fun upsertTagCrossRefs(crossRefs: List<AutoCategoryRuleTagCrossRef>)
+
+    @Query("DELETE FROM auto_category_rule_conditions WHERE ruleId = :ruleId")
+    protected abstract suspend fun deleteConditions(ruleId: String)
+
+    @Upsert
+    protected abstract suspend fun upsertConditions(conditions: List<AutoCategoryRuleCondition>)
 
     @Query("DELETE FROM auto_category_rules WHERE id = :id")
     abstract suspend fun deleteById(id: String)

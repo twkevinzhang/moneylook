@@ -11,17 +11,24 @@ import tw.kevinzhang.core.data.db.TransferAnnotationDao
 import tw.kevinzhang.core.data.db.TransferClassificationCandidate
 import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.model.AssignmentSource
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
-import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleText
+import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleTextV2
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeParseException
+import java.text.Normalizer
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,7 +47,7 @@ data class AutoCategoryApplicationResult(
     val preservedManualOverrideCount: Int,
 )
 
-/** Applies the first enabled matching rule while preserving every manual transaction edit. */
+/** Evaluates enabled rules conservatively while preserving every explicit user transaction edit. */
 @Singleton
 class AutoCategorizer @Inject constructor(
     private val transferDao: TransferDao,
@@ -60,10 +67,7 @@ class AutoCategorizer @Inject constructor(
                 seedIds.mapNotNullTo(this) { context.internalTransferCounterparts[it] }
             }
             categorize(
-                transfers = context.candidates.asSequence()
-                    .map(TransferClassificationCandidate::transfer)
-                    .filter { it.id in targetIds }
-                    .toList(),
+                candidates = context.candidates.filter { it.transfer.id in targetIds },
                 internalTransferIds = context.internalTransferCounterparts.keys,
                 existingAnnotations = context.annotations,
             )
@@ -82,10 +86,7 @@ class AutoCategorizer @Inject constructor(
         if (!context.internalTransferCategoryAvailable) return@withLock false
         val targetIds = context.internalTransferCounterparts.keys + context.automaticInternalTransferIds()
         categorize(
-            transfers = context.candidates.asSequence()
-                .map(TransferClassificationCandidate::transfer)
-                .filter { it.id in targetIds }
-                .toList(),
+            candidates = context.candidates.filter { it.transfer.id in targetIds },
             internalTransferIds = context.internalTransferCounterparts.keys,
             existingAnnotations = context.annotations,
         )
@@ -96,7 +97,7 @@ class AutoCategorizer @Inject constructor(
         categorizationMutex.withLock {
             val context = loadClassificationContext()
             categorize(
-                transfers = context.candidates.map(TransferClassificationCandidate::transfer),
+                candidates = context.candidates,
                 internalTransferIds = context.internalTransferCounterparts.keys,
                 existingAnnotations = context.annotations,
             )
@@ -131,11 +132,11 @@ class AutoCategorizer @Inject constructor(
     }
 
     private suspend fun categorize(
-        transfers: List<Transfer>,
+        candidates: List<TransferClassificationCandidate>,
         internalTransferIds: Set<String>,
         existingAnnotations: Map<String, TransferAnnotation>,
     ): AutoCategoryApplicationResult {
-        if (transfers.isEmpty()) {
+        if (candidates.isEmpty()) {
             return AutoCategoryApplicationResult(
                 processedTransferCount = 0,
                 matchedTransferCount = 0,
@@ -146,7 +147,8 @@ class AutoCategorizer @Inject constructor(
         var matchedTransferCount = 0
         var preservedManualOverrideCount = 0
 
-        transfers.forEach { transfer ->
+        candidates.forEach { candidate ->
+            val transfer = candidate.transfer
             val existing = existingAnnotations[transfer.id]
             if (existing?.manualOverride == true) {
                 preservedManualOverrideCount += 1
@@ -154,7 +156,11 @@ class AutoCategorizer @Inject constructor(
             }
 
             val isInternalTransfer = transfer.id in internalTransferIds
-            val match = if (isInternalTransfer) null else rules.firstOrNull { it.matches(transfer) }
+            val decision = if (isInternalTransfer) null else rules.classificationDecision(candidate)
+            if (decision is ClassificationDecision.Suggest || decision is ClassificationDecision.Abstain) {
+                return@forEach
+            }
+            val match = decision as? ClassificationDecision.AutoApply
             if (!isInternalTransfer && match == null && existing == null) return@forEach
             if (isInternalTransfer || match != null) matchedTransferCount += 1
 
@@ -165,11 +171,15 @@ class AutoCategorizer @Inject constructor(
                     categoryId = if (isInternalTransfer) {
                         INTERNAL_TRANSFER_CATEGORY_ID
                     } else {
-                        match?.rule?.categoryId
+                        match?.evaluation?.ruleWithTags?.rule?.categoryId
                     },
                     note = existing?.note.orEmpty(),
                     categoryAssignment = AssignmentSource.AUTO,
                     manualOverride = false,
+                    autoRuleId = match?.evaluation?.ruleWithTags?.rule?.id,
+                    autoRuleSetId = match?.evaluation?.ruleWithTags?.rule?.ruleSetId,
+                    autoMatchScore = match?.evaluation?.score,
+                    classifierVersion = match?.let { CLASSIFIER_VERSION },
                 ),
             )
             annotationDao.replaceAutoTags(
@@ -177,12 +187,12 @@ class AutoCategorizer @Inject constructor(
                 tagIds = if (isInternalTransfer) {
                     emptySet()
                 } else {
-                    match?.tags?.mapTo(mutableSetOf()) { it.id }.orEmpty()
+                    match?.evaluation?.ruleWithTags?.tags?.mapTo(mutableSetOf()) { it.id }.orEmpty()
                 },
             )
         }
         return AutoCategoryApplicationResult(
-            processedTransferCount = transfers.size,
+            processedTransferCount = candidates.size,
             matchedTransferCount = matchedTransferCount,
             preservedManualOverrideCount = preservedManualOverrideCount,
         )
@@ -291,15 +301,215 @@ private inline fun parseDateTimeOrNull(parse: () -> LocalDateTime): LocalDateTim
 private const val INTERNAL_TRANSFER_CATEGORY_ID = "transfer-account"
 private val INTERNAL_TRANSFER_WINDOW: Duration = Duration.ofSeconds(30)
 
-internal fun AutoCategoryRuleWithTags.matches(transfer: Transfer): Boolean {
+/**
+ * Evaluates every matching rule before selecting an automatic action.  Rule priority only breaks
+ * ties inside one category; it must never hide materially conflicting classifications.
+ */
+internal fun List<AutoCategoryRuleWithTags>.classificationDecision(
+    candidate: TransferClassificationCandidate,
+): ClassificationDecision? {
+    val evaluations = asSequence()
+        .mapNotNull { it.evaluate(candidate) }
+        .filter { it.ruleWithTags.categoryIsCompatibleWith(candidate.transfer) }
+        .toList()
+    if (evaluations.isEmpty()) return null
+    if (evaluations.any { it.ruleWithTags.rule.action == AutoCategoryRuleAction.ABSTAIN }) {
+        return ClassificationDecision.Abstain
+    }
+
+    val bestByCategory = evaluations
+        .groupBy { it.ruleWithTags.rule.categoryId ?: "__tags:${it.ruleWithTags.rule.id}" }
+        .values
+        .map { choices -> choices.sortedWith(ruleEvaluationComparator).first() }
+        .sortedWith(ruleEvaluationComparator)
+    val winning = bestByCategory.first()
+    val categoryChoices = bestByCategory.filter { it.ruleWithTags.rule.categoryId != null }
+    if (
+        categoryChoices.size > 1 &&
+        categoryChoices[0].score - categoryChoices[1].score < MIN_CATEGORY_MARGIN
+    ) {
+        return ClassificationDecision.Abstain
+    }
+    return when (winning.ruleWithTags.rule.action) {
+        AutoCategoryRuleAction.AUTO_APPLY -> ClassificationDecision.AutoApply(winning)
+        AutoCategoryRuleAction.SUGGEST -> ClassificationDecision.Suggest(winning)
+        AutoCategoryRuleAction.ABSTAIN -> ClassificationDecision.Abstain
+    }
+}
+
+internal sealed interface ClassificationDecision {
+    data class AutoApply(val evaluation: RuleEvaluation) : ClassificationDecision
+    data class Suggest(val evaluation: RuleEvaluation) : ClassificationDecision
+    data object Abstain : ClassificationDecision
+}
+
+internal data class RuleEvaluation(
+    val ruleWithTags: AutoCategoryRuleWithTags,
+    val score: Int,
+)
+
+private val ruleEvaluationComparator = compareByDescending<RuleEvaluation> { it.score }
+    .thenBy { it.ruleWithTags.rule.priority }
+    .thenBy { it.ruleWithTags.rule.id }
+
+private fun AutoCategoryRuleWithTags.evaluate(
+    candidate: TransferClassificationCandidate,
+): RuleEvaluation? {
+    val rule = this.rule
+    if (!scopeMatches(candidate)) return null
+    val conditionList = this.conditions
+    val conditionScore = if (conditionList.isEmpty()) {
+        legacyMatchScore(candidate.transfer) ?: return null
+    } else {
+        conditionList.matchScore(candidate) ?: return null
+    }
+    return RuleEvaluation(this, conditionScore + rule.scopeScore() + rule.originScore())
+}
+
+private fun AutoCategoryRuleWithTags.scopeMatches(candidate: TransferClassificationCandidate): Boolean {
+    val rule = rule
+    val transfer = candidate.transfer
+    val directionMatches = when (rule.direction) {
+        AutoCategoryRuleDirection.ANY -> true
+        AutoCategoryRuleDirection.INCOME -> transfer.amount > 0.0
+        AutoCategoryRuleDirection.EXPENSE -> transfer.amount < 0.0
+    }
+    val absoluteAmount = abs(transfer.amount)
+    return directionMatches &&
+        (rule.minAbsoluteAmount?.let { absoluteAmount >= it } ?: true) &&
+        (rule.maxAbsoluteAmount?.let { absoluteAmount <= it } ?: true) &&
+        (rule.accountId == null || transfer.accountId == rule.accountId) &&
+        (rule.accountKind == null || rule.accountKind == candidate.accountKind) &&
+        (rule.extensionId == null || rule.extensionId == transfer.extensionId)
+}
+
+private fun AutoCategoryRuleWithTags.categoryIsCompatibleWith(transfer: Transfer): Boolean {
+    val categoryId = rule.categoryId ?: return true
+    val category = category ?: return false
+    return when {
+        transfer.amount > 0.0 -> category.kind == CategoryKind.INCOME || category.kind == CategoryKind.TRANSFER
+        transfer.amount < 0.0 -> category.kind == CategoryKind.EXPENSE || category.kind == CategoryKind.TRANSFER
+        else -> category.kind == CategoryKind.TRANSFER
+    }
+}
+
+private fun List<AutoCategoryRuleCondition>.matchScore(
+    candidate: TransferClassificationCandidate,
+): Int? {
+    val byGroup = groupBy(AutoCategoryRuleCondition::conditionGroup)
+    val includeAll = byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ALL].orEmpty()
+    val includeAny = byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ANY].orEmpty()
+    val excludeAny = byGroup[AutoCategoryRuleConditionGroup.EXCLUDE_ANY].orEmpty()
+    val allMatches = includeAll.map { condition -> condition.matches(candidate) }
+    if (allMatches.any { !it.matched }) return null
+    val anyMatches = includeAny.map { condition -> condition.matches(candidate) }
+    if (includeAny.isNotEmpty() && anyMatches.none { it.matched }) return null
+    if (excludeAny.any { it.matches(candidate).matched }) return null
+
+    val positiveMatches = allMatches + anyMatches.filter(ConditionMatch::matched)
+    if (positiveMatches.isEmpty()) return null
+    val evidence = positiveMatches.maxOf(ConditionMatch::score)
+    val includeAllBonus = ((allMatches.count(ConditionMatch::matched) - 1).coerceAtLeast(0) * 5)
+        .coerceAtMost(MAX_INCLUDE_ALL_BONUS)
+    return evidence + includeAllBonus
+}
+
+private data class ConditionMatch(val matched: Boolean, val score: Int = 0)
+
+private fun AutoCategoryRuleCondition.matches(candidate: TransferClassificationCandidate): ConditionMatch {
+    val normalize = if (field == AutoCategoryRuleConditionField.LEGACY_ANY_TEXT) {
+        ::normalizeLegacyAutoCategoryRuleText
+    } else {
+        ::normalizeAutoCategoryRuleTextV2
+    }
+    val expected = normalize(pattern)
+    if (expected.isBlank()) return ConditionMatch(false)
+    val matched = candidate.facts(field)
+        .asSequence()
+        .map(normalize)
+        .filter(String::isNotBlank)
+        .any { actual ->
+            when (matchMode) {
+                AutoCategoryRuleConditionMatchMode.EXACT -> actual == expected
+                AutoCategoryRuleConditionMatchMode.TOKEN -> actual.tokensContain(expected)
+                AutoCategoryRuleConditionMatchMode.CONTAINS -> actual.contains(expected)
+            }
+        }
+    return ConditionMatch(matched, if (matched) evidenceScore(field, matchMode) else 0)
+}
+
+private fun TransferClassificationCandidate.facts(field: AutoCategoryRuleConditionField): List<String> = when (field) {
+    AutoCategoryRuleConditionField.LEGACY_ANY_TEXT ->
+        listOf(transfer.description, transfer.memo, transfer.type.orEmpty())
+    AutoCategoryRuleConditionField.DESCRIPTION -> listOf(transfer.description)
+    AutoCategoryRuleConditionField.MEMO -> listOf(transfer.memo)
+    AutoCategoryRuleConditionField.TYPE -> listOf(transfer.type.orEmpty())
+    AutoCategoryRuleConditionField.STATUS -> listOf(transfer.status.orEmpty())
+    AutoCategoryRuleConditionField.MERCHANT_NAME -> listOf(transfer.merchantName.orEmpty())
+    AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE -> listOf(transfer.merchantCategoryCode.orEmpty())
+    AutoCategoryRuleConditionField.COUNTERPARTY_NAME -> listOf(transfer.counterpartyName.orEmpty())
+    AutoCategoryRuleConditionField.PURPOSE -> listOf(transfer.purpose.orEmpty())
+}
+
+private fun String.tokensContain(expected: String): Boolean {
+    val actualTokens = split(' ').filter(String::isNotBlank).toSet()
+    return expected.split(' ').filter(String::isNotBlank).all(actualTokens::contains)
+}
+
+private fun evidenceScore(
+    field: AutoCategoryRuleConditionField,
+    mode: AutoCategoryRuleConditionMatchMode,
+): Int = when (field) {
+    AutoCategoryRuleConditionField.MERCHANT_NAME,
+    AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE,
+    AutoCategoryRuleConditionField.COUNTERPARTY_NAME,
+    AutoCategoryRuleConditionField.PURPOSE,
+    -> when (mode) {
+        AutoCategoryRuleConditionMatchMode.EXACT -> 100
+        AutoCategoryRuleConditionMatchMode.TOKEN -> 80
+        AutoCategoryRuleConditionMatchMode.CONTAINS -> 70
+    }
+    AutoCategoryRuleConditionField.DESCRIPTION,
+    AutoCategoryRuleConditionField.MEMO,
+    AutoCategoryRuleConditionField.TYPE,
+    AutoCategoryRuleConditionField.STATUS,
+    -> when (mode) {
+        AutoCategoryRuleConditionMatchMode.EXACT -> 90
+        AutoCategoryRuleConditionMatchMode.TOKEN -> 70
+        AutoCategoryRuleConditionMatchMode.CONTAINS -> 60
+    }
+    AutoCategoryRuleConditionField.LEGACY_ANY_TEXT -> when (mode) {
+        AutoCategoryRuleConditionMatchMode.EXACT -> 65
+        AutoCategoryRuleConditionMatchMode.TOKEN,
+        AutoCategoryRuleConditionMatchMode.CONTAINS,
+        -> 50
+    }
+}
+
+private fun AutoCategoryRuleWithTags.legacyMatchScore(transfer: Transfer): Int? =
+    if (matchesLegacy(transfer)) {
+        if (rule.descriptionContains.isNullOrBlank()) {
+            0
+        } else {
+            when (rule.descriptionMatchMode) {
+                AutoCategoryRuleDescriptionMatchMode.EXACT -> 65
+                AutoCategoryRuleDescriptionMatchMode.CONTAINS -> 50
+            }
+        }
+    } else {
+        null
+    }
+
+/** Legacy rule rows preserve the historical description/memo/type matching contract. */
+private fun AutoCategoryRuleWithTags.matchesLegacy(transfer: Transfer): Boolean {
     val candidateAmount = abs(transfer.amount)
     val descriptionMatches = rule.descriptionContains
         ?.takeIf(String::isNotBlank)
         ?.let { expected ->
-            val normalizedExpected = normalizeAutoCategoryRuleText(expected)
+            val normalizedExpected = normalizeLegacyAutoCategoryRuleText(expected)
             if (normalizedExpected.isEmpty()) return@let false
             val normalizedFields = listOf(transfer.description, transfer.memo, transfer.type.orEmpty())
-                .map(::normalizeAutoCategoryRuleText)
+                .map(::normalizeLegacyAutoCategoryRuleText)
             when (rule.descriptionMatchMode) {
                 AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
                     normalizedFields.any { it.contains(normalizedExpected) }
@@ -308,12 +518,11 @@ internal fun AutoCategoryRuleWithTags.matches(transfer: Transfer): Boolean {
             }
         }
         ?: true
-    val directionMatches =
-        when (rule.direction) {
-            AutoCategoryRuleDirection.ANY -> true
-            AutoCategoryRuleDirection.INCOME -> transfer.amount > 0.0
-            AutoCategoryRuleDirection.EXPENSE -> transfer.amount < 0.0
-        }
+    val directionMatches = when (rule.direction) {
+        AutoCategoryRuleDirection.ANY -> true
+        AutoCategoryRuleDirection.INCOME -> transfer.amount > 0.0
+        AutoCategoryRuleDirection.EXPENSE -> transfer.amount < 0.0
+    }
     return descriptionMatches &&
         directionMatches &&
         (rule.minAbsoluteAmount?.let { candidateAmount >= it } ?: true) &&
@@ -321,16 +530,41 @@ internal fun AutoCategoryRuleWithTags.matches(transfer: Transfer): Boolean {
         (rule.accountId == null || transfer.accountId == rule.accountId)
 }
 
+/** Retained for the v1 unit tests and callers while persisted v1 rows are migrated lazily. */
+internal fun AutoCategoryRuleWithTags.matches(transfer: Transfer): Boolean = matchesLegacy(transfer)
+
+/** v1 punctuation-removal behaviour is frozen for persisted legacy rules. */
+internal fun normalizeLegacyAutoCategoryRuleText(value: String): String =
+    Normalizer.normalize(value, Normalizer.Form.NFKC)
+        .lowercase(Locale.ROOT)
+        .filter(Char::isLetterOrDigit)
+
 internal fun isUsableRule(ruleWithTags: AutoCategoryRuleWithTags): Boolean {
     val rule = ruleWithTags.rule
-    val hasCondition = !rule.descriptionContains.isNullOrBlank() ||
+    val hasCondition = ruleWithTags.conditions.isNotEmpty() || !rule.descriptionContains.isNullOrBlank() ||
         rule.direction != AutoCategoryRuleDirection.ANY ||
         rule.minAbsoluteAmount != null ||
         rule.maxAbsoluteAmount != null ||
-        rule.accountId != null
-    val hasAction = rule.categoryId != null || ruleWithTags.tags.isNotEmpty()
+        rule.accountId != null ||
+        rule.accountKind != null ||
+        rule.extensionId != null
+    val hasAction = rule.categoryId != null || ruleWithTags.tags.isNotEmpty() ||
+        rule.action == AutoCategoryRuleAction.ABSTAIN
     return rule.enabled && hasCondition && hasAction
 }
+
+private fun tw.kevinzhang.core.data.model.AutoCategoryRule.scopeScore(): Int =
+    listOf(direction != AutoCategoryRuleDirection.ANY, accountKind != null, extensionId != null).count { it } * 5
+
+private fun tw.kevinzhang.core.data.model.AutoCategoryRule.originScore(): Int = when (origin) {
+    AutoCategoryRuleOrigin.USER_CONFIRMED -> 30
+    AutoCategoryRuleOrigin.PRIVATE_LEARNED -> 10
+    else -> 0
+}
+
+private const val MIN_CATEGORY_MARGIN = 20
+private const val MAX_INCLUDE_ALL_BONUS = 15
+private const val CLASSIFIER_VERSION = "rules-v2"
 
 @Module
 @InstallIn(SingletonComponent::class)

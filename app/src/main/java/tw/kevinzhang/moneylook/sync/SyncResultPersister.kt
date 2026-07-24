@@ -133,6 +133,10 @@ class SyncResultPersister @Inject constructor(
                     type = transfer.type,
                     status = transfer.status,
                     postingDateTime = transfer.postingDateTime,
+                    merchantName = transfer.merchantName,
+                    merchantCategoryCode = transfer.merchantCategoryCode,
+                    counterpartyName = transfer.counterpartyName,
+                    purpose = transfer.purpose,
                     cardInstrumentId = transfer.cardRef?.let { ref ->
                         cardInstrumentIdsByAccountAndRef[accountId to ref]
                     },

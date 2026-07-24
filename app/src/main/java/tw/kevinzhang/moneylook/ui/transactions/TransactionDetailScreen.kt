@@ -47,7 +47,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
 import tw.kevinzhang.core.data.model.CategoryKind
 
 data class TransactionDetailUiState(
@@ -55,6 +57,7 @@ data class TransactionDetailUiState(
     val amountText: String,
     val amount: Double,
     val accountName: String,
+    val extensionId: String = "",
     /** Redaction-safe bank-provided card name/mask; complete PANs never enter this state. */
     val cardDisplayLabel: String? = null,
     val transactionDate: String,
@@ -123,6 +126,8 @@ fun TransactionDetailContent(
             selectedCategoryId = draft.categoryId,
             amount = state.amount,
             description = state.description,
+            accountKind = state.accountKind,
+            extensionId = state.extensionId,
             currentRule = draft.matchingRule,
             onDismiss = { showCategoryPicker = false },
             onSelectCategory = { categoryId ->
@@ -132,7 +137,15 @@ fun TransactionDetailContent(
                 )
             },
             onRuleChange = { rule -> draft = draft.copy(matchingRule = rule?.copy(categoryId = draft.categoryId)) },
-            onEditRule = { editingRule = draft.matchingRule ?: defaultExactDescriptionRule(state.description, draft.categoryId) },
+            onEditRule = {
+                editingRule = draft.matchingRule ?: defaultExactDescriptionRule(
+                    description = state.description,
+                    categoryId = draft.categoryId,
+                    direction = state.amount.toAutoRuleDirection(),
+                    accountKind = state.accountKind,
+                    extensionId = state.extensionId,
+                )
+            },
         )
     }
     editingRule?.let { rule ->
@@ -306,6 +319,8 @@ private fun CategoryPickerSheet(
     selectedCategoryId: String?,
     amount: Double,
     description: String,
+    accountKind: AssetKind,
+    extensionId: String,
     currentRule: AutoRuleDraft?,
     onDismiss: () -> Unit,
     onSelectCategory: (String?) -> Unit,
@@ -326,7 +341,17 @@ private fun CategoryPickerSheet(
                 appliesToMatches = appliesToMatches,
                 editEnabled = appliesToMatches,
                 onCurrentOnly = { onRuleChange(null) },
-                onSameDescription = { onRuleChange(currentRule ?: defaultExactDescriptionRule(description, selectedCategoryId)) },
+                onSameDescription = {
+                    onRuleChange(
+                        currentRule ?: defaultExactDescriptionRule(
+                            description = description,
+                            categoryId = selectedCategoryId,
+                            direction = amount.toAutoRuleDirection(),
+                            accountKind = accountKind,
+                            extensionId = extensionId,
+                        ),
+                    )
+                },
                 onEditRule = onEditRule,
             )
             HorizontalDivider()
@@ -457,13 +482,31 @@ internal fun CategoryKind.toDisplayName(): String = when (this) {
 internal const val UNCATEGORIZED_EMOJI = "🏷️"
 private const val UNCATEGORIZED_COLOR = 0xFF607D8B
 
-internal fun defaultExactDescriptionRule(description: String, categoryId: String?): AutoRuleDraft = AutoRuleDraft(
+internal fun defaultExactDescriptionRule(
+    description: String,
+    categoryId: String?,
+    direction: TransactionDirection? = null,
+    accountKind: AssetKind? = null,
+    extensionId: String? = null,
+): AutoRuleDraft = AutoRuleDraft(
     name = "${description.trim().take(24).ifBlank { "相同明細" }}分類",
     descriptionContains = description.trim(),
     descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.EXACT,
+    direction = direction,
+    accountKind = accountKind,
+    extensionId = extensionId,
+    origin = AutoCategoryRuleOrigin.USER_CONFIRMED,
+    action = AutoCategoryRuleAction.AUTO_APPLY,
+    createExactDescriptionCondition = true,
     categoryId = categoryId,
     applyExisting = true,
 )
+
+private fun Double.toAutoRuleDirection(): TransactionDirection? = when {
+    this > 0.0 -> TransactionDirection.INCOME
+    this < 0.0 -> TransactionDirection.EXPENSE
+    else -> null
+}
 
 internal fun draftTagId(name: String): String = "draft:$name"
 private fun Set<String>.toggle(id: String): Set<String> = if (id in this) this - id else this + id

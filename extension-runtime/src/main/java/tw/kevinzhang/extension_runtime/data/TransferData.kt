@@ -14,4 +14,12 @@ data class TransferData(
     val postingDateTime: String? = null,
     /** Result-local [CardData.ref], never a PAN or a persisted identifier. */
     val cardRef: String? = null,
+    /** Merchant display name supplied by the source, when distinct from the bank description. */
+    val merchantName: String? = null,
+    /** ISO 18245 four-digit merchant category code, when supplied by the source. */
+    val merchantCategoryCode: String? = null,
+    /** Structured counterparty name supplied by the source. */
+    val counterpartyName: String? = null,
+    /** Structured transaction purpose supplied by the source. */
+    val purpose: String? = null,
 )

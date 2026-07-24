@@ -9,6 +9,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.AutoCategoryRuleDao
+import tw.kevinzhang.core.data.db.AutoCategoryRuleSetDao
 import tw.kevinzhang.core.data.db.CategoryDao
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.CreditCardInstrumentDao
@@ -24,6 +25,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_12_13
 import tw.kevinzhang.core.data.db.MIGRATION_13_14
 import tw.kevinzhang.core.data.db.MIGRATION_14_15
 import tw.kevinzhang.core.data.db.MIGRATION_15_16
+import tw.kevinzhang.core.data.db.MIGRATION_16_17
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -52,9 +54,9 @@ object DataModule {
                 MIGRATION_13_14,
                 MIGRATION_14_15,
                 MIGRATION_15_16,
+                MIGRATION_16_17,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
-            .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 
     @Provides
@@ -62,6 +64,9 @@ object DataModule {
 
     @Provides
     fun provideAutoCategoryRuleDao(db: MoneylookDatabase): AutoCategoryRuleDao = db.autoCategoryRuleDao()
+
+    @Provides
+    fun provideAutoCategoryRuleSetDao(db: MoneylookDatabase): AutoCategoryRuleSetDao = db.autoCategoryRuleSetDao()
 
     @Provides
     fun provideCategoryDao(db: MoneylookDatabase): CategoryDao = db.categoryDao()
