@@ -64,7 +64,8 @@ class DefaultClassificationSeedTest {
         assertEquals(
             1 + DefaultClassificationCatalog.publicAutoCategoryRules.size +
                 DefaultClassificationCatalog.publicMccRules.size +
-                DefaultClassificationCatalog.publicStructuralRules.size,
+                DefaultClassificationCatalog.publicStructuralRules.size +
+                DefaultClassificationCatalog.publicGenericRules.size,
             ordered.size,
         )
         assertEquals(ordered.map { it.rule.id }, database.autoCategoryRuleDao().observeAll().first().map { it.rule.id })
@@ -126,5 +127,14 @@ class DefaultClassificationSeedTest {
             assertTrue(AutoCategoryRuleConditionField.MEMO in fields)
             assertTrue(AutoCategoryRuleConditionField.TYPE in fields)
         }
+        assertEquals(
+            publicRuleCollectionContentSha256(DefaultClassificationCatalog.publicGenericRules),
+            DefaultClassificationCatalog.publicGenericRuleSet.contentSha256,
+        )
+        assertTrue(
+            DefaultClassificationCatalog.publicGenericRuleSet.contentSha256.matches(
+                Regex("[0-9a-f]{64}"),
+            ),
+        )
     }
 }

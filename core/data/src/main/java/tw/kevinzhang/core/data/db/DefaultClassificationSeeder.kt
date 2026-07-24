@@ -4,6 +4,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteStatement
 import tw.kevinzhang.core.data.model.AutoCategoryRule
 import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.AutoCategoryRuleSet
 import tw.kevinzhang.core.data.model.Category
 
@@ -11,6 +12,7 @@ import tw.kevinzhang.core.data.model.Category
 object DefaultClassificationSeeder {
     fun seedFreshDatabase(db: SupportSQLiteDatabase) {
         seedFullPublicCatalogIfEmpty(db)
+        seedRulesV3ForExistingCategories(db)
     }
 
     /**
@@ -70,6 +72,30 @@ object DefaultClassificationSeeder {
         )
     }
 
+    /** Inserts the reviewed v3 public rules for a fresh catalog without replacing user rows. */
+    fun seedRulesV3ForExistingCategories(db: SupportSQLiteDatabase) {
+        seedPublicRuleCollection(
+            db,
+            DefaultClassificationCatalog.publicGenericRuleSet,
+            DefaultClassificationCatalog.publicGenericRules,
+        )
+    }
+
+    /**
+     * One-time v18-to-v19 upgrade seed. A pre-existing generic marker is deliberately terminal:
+     * it may mean a user removed a rule or intentionally replaced the collection.
+     */
+    fun seedRulesV3ForExistingPublicCatalog(db: SupportSQLiteDatabase) {
+        if (!ruleSetExists(
+                db,
+                DefaultClassificationCatalog.publicMccRuleSet.id,
+                AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+            ) || ruleSetExists(db, DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID)
+        ) return
+
+        seedRulesV3ForExistingCategories(db)
+    }
+
     private fun seedPublicRuleCollection(
         db: SupportSQLiteDatabase,
         ruleSet: AutoCategoryRuleSet,
@@ -118,6 +144,20 @@ object DefaultClassificationSeeder {
         db.query("SELECT EXISTS(SELECT 1 FROM `$tableName`)").use { cursor ->
             cursor.moveToFirst() && cursor.getInt(0) == 1
         }
+
+    private fun ruleSetExists(
+        db: SupportSQLiteDatabase,
+        ruleSetId: String,
+        origin: AutoCategoryRuleOrigin? = null,
+    ): Boolean {
+        val sql = if (origin == null) {
+            "SELECT EXISTS(SELECT 1 FROM `auto_category_rule_sets` WHERE `id` = ?)"
+        } else {
+            "SELECT EXISTS(SELECT 1 FROM `auto_category_rule_sets` WHERE `id` = ? AND `origin` = ?)"
+        }
+        val args = if (origin == null) arrayOf(ruleSetId) else arrayOf(ruleSetId, origin.name)
+        return db.query(sql, args).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 1 }
+    }
 
     private fun SupportSQLiteStatement.bindRule(rule: AutoCategoryRule) {
         bindString(1, rule.id)
