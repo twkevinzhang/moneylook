@@ -60,7 +60,7 @@ class Migration16To17Test {
     }
 
     @Test
-    fun `migration result passes the complete Room v17 schema validation`() {
+    fun `migration chain passes the complete Room v18 schema validation`() {
         val context = RuntimeEnvironment.getApplication()
         Room.databaseBuilder(context, MoneylookDatabase::class.java, databaseName)
             .allowMainThreadQueries()
@@ -73,7 +73,7 @@ class Migration16To17Test {
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(databaseName)
-                .callback(object : SupportSQLiteOpenHelper.Callback(17) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(18) {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(
                         db: SupportSQLiteDatabase,
@@ -83,16 +83,16 @@ class Migration16To17Test {
                 })
                 .build(),
         )
-        helper.writableDatabase.use(::downgradeV17SchemaToV16)
+        helper.writableDatabase.use(::downgradeCurrentSchemaToV16)
         helper.close()
 
         Room.databaseBuilder(context, MoneylookDatabase::class.java, databaseName)
-            .addMigrations(MIGRATION_16_17)
+            .addMigrations(MIGRATION_16_17, MIGRATION_17_18)
             .allowMainThreadQueries()
             .build()
             .also { database ->
                 val migrated = database.openHelper.writableDatabase
-                assertEquals(17, migrated.version)
+                assertEquals(18, migrated.version)
                 assertTrue(tableExists(migrated, "auto_category_rule_sets"))
                 assertTrue(tableExists(migrated, "auto_category_rule_conditions"))
                 database.close()
@@ -104,7 +104,7 @@ class Migration16To17Test {
      * changed tables and removing v17-only tables yields the exact v16 shape while retaining every
      * unrelated table, index, and foreign key for Room's end-to-end migration validation.
      */
-    private fun downgradeV17SchemaToV16(db: SupportSQLiteDatabase) {
+    private fun downgradeCurrentSchemaToV16(db: SupportSQLiteDatabase) {
         db.execSQL("PRAGMA foreign_keys = OFF")
         db.execSQL("DROP TABLE `auto_category_rule_conditions`")
         db.execSQL("DROP TABLE `auto_category_rule_sets`")

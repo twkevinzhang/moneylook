@@ -586,3 +586,13 @@ val MIGRATION_16_17 = object : Migration(16, 17) {
         DefaultClassificationSeeder.seedRulesV2ForExistingCategories(db)
     }
 }
+
+/**
+ * Restores the full public catalog for the legacy device state where both catalog tables were
+ * empty. Any non-empty state is treated as user-owned and deliberately left unchanged.
+ */
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        DefaultClassificationSeeder.seedFullPublicCatalogIfEmpty(db)
+    }
+}
