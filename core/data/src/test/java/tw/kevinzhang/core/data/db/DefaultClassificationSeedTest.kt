@@ -13,6 +13,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.model.AutoCategoryRule
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 
 @RunWith(RobolectricTestRunner::class)
 class DefaultClassificationSeedTest {
@@ -57,7 +61,12 @@ class DefaultClassificationSeedTest {
         assertFalse(ordered.first().rule.isDefault)
         assertTrue(ordered.last().rule.isDefault)
         assertEquals(defaultRule.name, ordered[1].rule.name)
-        assertEquals(17, ordered.size)
+        assertEquals(
+            1 + DefaultClassificationCatalog.publicAutoCategoryRules.size +
+                DefaultClassificationCatalog.publicMccRules.size +
+                DefaultClassificationCatalog.publicStructuralRules.size,
+            ordered.size,
+        )
         assertEquals(ordered.map { it.rule.id }, database.autoCategoryRuleDao().observeAll().first().map { it.rule.id })
 
         assertTrue(
@@ -71,5 +80,51 @@ class DefaultClassificationSeedTest {
                 .first { it.rule.id == "insert-if-absent" }
                 .rule.name,
         )
+
+        val publicStructural = DefaultClassificationCatalog.publicStructuralRules.first()
+        val userCondition = AutoCategoryRuleCondition(
+            ruleId = publicStructural.rule.id,
+            position = 0,
+            conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+            field = AutoCategoryRuleConditionField.DESCRIPTION,
+            matchMode = AutoCategoryRuleConditionMatchMode.EXACT,
+            pattern = "fictional public override",
+        )
+        database.autoCategoryRuleDao().upsertWithDetails(
+            publicStructural.rule.copy(name = "使用者保留名稱"),
+            listOf(userCondition),
+            emptySet(),
+        )
+        DefaultClassificationSeeder.seedRulesV2ForExistingCategories(
+            database.openHelper.writableDatabase,
+        )
+        val preserved = database.autoCategoryRuleDao().observeAll().first()
+            .first { it.rule.id == publicStructural.rule.id }
+        assertEquals("使用者保留名稱", preserved.rule.name)
+        assertEquals(listOf(userCondition), preserved.conditions)
+    }
+
+    @Test
+    fun `public v2 catalog is deterministic and structural phrases inspect separate fields`() {
+        assertEquals(25, DefaultClassificationCatalog.publicMccRules.size)
+        assertEquals(
+            154,
+            DefaultClassificationCatalog.publicMccRules.sumOf { it.conditions.size },
+        )
+        assertEquals(
+            publicRuleCollectionContentSha256(DefaultClassificationCatalog.publicStructuralRules),
+            DefaultClassificationCatalog.publicStructuralRuleSet.contentSha256,
+        )
+        assertTrue(
+            DefaultClassificationCatalog.publicStructuralRuleSet.contentSha256.matches(
+                Regex("[0-9a-f]{64}"),
+            ),
+        )
+        DefaultClassificationCatalog.publicStructuralRules.forEach { publicRule ->
+            val fields = publicRule.conditions.mapTo(mutableSetOf()) { it.field }
+            assertTrue(AutoCategoryRuleConditionField.DESCRIPTION in fields)
+            assertTrue(AutoCategoryRuleConditionField.MEMO in fields)
+            assertTrue(AutoCategoryRuleConditionField.TYPE in fields)
+        }
     }
 }

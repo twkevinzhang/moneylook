@@ -147,6 +147,10 @@ class ExtensionRunnerContractTest {
             assertEquals("", transfer.memo)
             assertEquals(-2.0, transfer.amount, 0.0)
             assertEquals(null, transfer.balance)
+            assertEquals(null, transfer.merchantName)
+            assertEquals(null, transfer.merchantCategoryCode)
+            assertEquals(null, transfer.counterpartyName)
+            assertEquals(null, transfer.purpose)
         }
     }
 
@@ -154,7 +158,7 @@ class ExtensionRunnerContractTest {
     fun `parses range based transfer sync and rejects malformed transfer amounts`() {
         val parsed = parseAccounts(
             """{"accounts":[{"name":"Checking","balance":12.5,"transfers":[
-                {"id":"source-1","txnDateTime":"2026-07-21T11:25:30","postingDateTime":"2026-07-22T09:00:00","amount":-2.0,"balance":10.5,"type":"transfer","status":"posted"}
+                {"id":"source-1","txnDateTime":"2026-07-21T11:25:30","postingDateTime":"2026-07-22T09:00:00","amount":-2.0,"balance":10.5,"type":"transfer","status":"posted","merchantName":"Fictional Grocery","merchantCategoryCode":"5411","counterpartyName":"Example Counterparty","purpose":"Household supplies"}
             ],"transferSync":{"requestedStart":"2025-07-21","requestedEnd":"2026-07-21",
               "completedRanges":[{"start":"2025-07-21","end":"2026-07-21"}],"complete":true},"sourceAccountKey":"${"a".repeat(64)}"}]}""".trimIndent(),
             Gson(),
@@ -165,6 +169,10 @@ class ExtensionRunnerContractTest {
         assertEquals("posted", parsed.accounts.single().transfers.single().status)
         assertEquals("2026-07-22T09:00:00", parsed.accounts.single().transfers.single().postingDateTime)
         assertEquals(10.5, parsed.accounts.single().transfers.single().balance!!, 0.0)
+        assertEquals("Fictional Grocery", parsed.accounts.single().transfers.single().merchantName)
+        assertEquals("5411", parsed.accounts.single().transfers.single().merchantCategoryCode)
+        assertEquals("Example Counterparty", parsed.accounts.single().transfers.single().counterpartyName)
+        assertEquals("Household supplies", parsed.accounts.single().transfers.single().purpose)
         assertTrue(parsed.accounts.single().transferSync!!.complete)
 
         val partialRangeCanStillReturnFetchedTransactions = parseAccounts(
@@ -227,6 +235,30 @@ class ExtensionRunnerContractTest {
         assertTrue(nonDigestSourceKey is SyncResult.Error)
         assertTrue(sourceKeyEqualToAccountNo is SyncResult.Error)
         assertTrue(partialRangeCanStillReturnFetchedTransactions is SyncResult.Success)
+    }
+
+    @Test
+    fun `rejects malformed structured classification facts without echoing their values`() {
+        val privateValue = "private-value-must-not-escape"
+        val malformed = listOf(
+            """{"merchantName":""}""",
+            """{"merchantName":1}""",
+            """{"merchantCategoryCode":"541"}""",
+            """{"merchantCategoryCode":"abcd"}""",
+            """{"counterpartyName":"   "}""",
+            """{"purpose":false}""",
+        )
+
+        malformed.forEach { extra ->
+            val fields = extra.removePrefix("{").removeSuffix("}")
+            val result = parseAccounts(
+                """{"accounts":[{"name":"Checking","balance":1,"transfers":[{"txnDateTime":"2026-07-21","amount":-1,$fields,"description":"$privateValue"}]}]}""",
+                Gson(),
+            )
+
+            assertTrue(result is SyncResult.Error)
+            assertFalse((result as SyncResult.Error).message.contains(privateValue))
+        }
     }
 
     @Test

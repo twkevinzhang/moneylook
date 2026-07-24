@@ -5,6 +5,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
+import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.CategoryKind
 
 class AutoRulePresentationTest {
@@ -55,12 +62,46 @@ class AutoRulePresentationTest {
     }
 
     @Test fun `same detail scope starts an exact description rule`() {
-        val rule = defaultExactDescriptionRule("  全聯福利中心  ", "food")
+        val rule = defaultExactDescriptionRule(
+            description = "  全聯福利中心  ",
+            categoryId = "food",
+            direction = TransactionDirection.EXPENSE,
+            accountKind = AssetKind.CREDIT_CARD,
+            extensionId = "extension",
+        )
         assertEquals(AutoCategoryRuleDescriptionMatchMode.EXACT, rule.descriptionMatchMode)
         assertEquals("全聯福利中心", rule.descriptionContains)
+        assertEquals(TransactionDirection.EXPENSE, rule.direction)
+        assertEquals(AssetKind.CREDIT_CARD, rule.accountKind)
+        assertEquals("extension", rule.extensionId)
+        assertEquals(AutoCategoryRuleOrigin.USER_CONFIRMED, rule.origin)
+        assertEquals(AutoCategoryRuleAction.AUTO_APPLY, rule.action)
+        assertTrue(rule.createExactDescriptionCondition)
         assertTrue(rule.applyExisting)
         assertTrue(rule.matches(candidate))
         assertFalse(rule.matches(candidate.copy(description = "全聯福利中心 台北店")))
+        assertFalse(rule.matches(candidate.copy(description = "一般扣款", memo = "全聯福利中心")))
+
+        val persisted = rule.normalizedOrNull()!!
+        assertEquals("extension", persisted.rule.extensionId)
+        assertEquals(AssetKind.CREDIT_CARD, persisted.rule.accountKind)
+        assertEquals(AutoCategoryRuleOrigin.USER_CONFIRMED, persisted.rule.origin)
+        assertEquals(1, persisted.conditions.size)
+        assertEquals(AutoCategoryRuleConditionField.DESCRIPTION, persisted.conditions.single().field)
+        assertEquals(AutoCategoryRuleConditionMatchMode.EXACT, persisted.conditions.single().matchMode)
+        assertEquals("全聯福利中心", persisted.conditions.single().pattern)
+
+        val edited = rule.copy(
+            id = persisted.rule.id,
+            conditions = persisted.conditions,
+            descriptionContains = "全聯福利中心 台北店",
+            descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.CONTAINS,
+        ).normalizedOrNull()!!
+        assertEquals(
+            AutoCategoryRuleConditionMatchMode.CONTAINS,
+            edited.conditions.single().matchMode,
+        )
+        assertEquals("全聯福利中心 台北店", edited.conditions.single().pattern)
     }
 
     @Test fun `preview normalizes all transaction text fields without joining them`() {
@@ -76,6 +117,39 @@ class AutoRulePresentationTest {
         assertFalse(exact.matches(candidate.copy(description = "薪資", memo = "入帳")))
     }
 
+    @Test
+    fun `migrated legacy condition remains editable and updates its stored pattern`() {
+        val migrated = AutoRuleDraft(
+            id = "legacy",
+            name = "舊規則",
+            descriptionContains = "全聯",
+            direction = TransactionDirection.EXPENSE,
+            categoryId = "food",
+            updateLegacyAnyTextCondition = true,
+            conditions = listOf(
+                AutoCategoryRuleCondition(
+                    ruleId = "legacy",
+                    position = 0,
+                    conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    field = AutoCategoryRuleConditionField.LEGACY_ANY_TEXT,
+                    matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    pattern = "全聯",
+                ),
+            ),
+        )
+
+        assertTrue(migrated.isEditableInLegacyEditor())
+        assertTrue(migrated.matches(candidate.copy(description = "一般扣款", memo = "全聯")))
+
+        val edited = migrated.copy(descriptionContains = "市場").normalizedOrNull()!!
+        assertEquals("市場", edited.rule.descriptionContains)
+        assertEquals(
+            AutoCategoryRuleConditionField.LEGACY_ANY_TEXT,
+            edited.conditions.single().field,
+        )
+        assertEquals("市場", edited.conditions.single().pattern)
+    }
+
     @Test fun `only matching income or expense kind is enabled while transfer always remains available`() {
         assertEquals(setOf(CategoryKind.EXPENSE, CategoryKind.TRANSFER), allowedKinds(-20.0))
         assertEquals(setOf(CategoryKind.INCOME, CategoryKind.TRANSFER), allowedKinds(20.0))
@@ -84,6 +158,28 @@ class AutoRulePresentationTest {
 
     @Test fun `uncategorized picker tile uses the agreed tag emoji`() {
         assertEquals("🏷️", UNCATEGORIZED_EMOJI)
+    }
+
+    @Test fun `structured public rules show a safe summary and cannot open the legacy editor`() {
+        val rule = AutoRuleDraft(
+            ruleSetId = "public-v2",
+            conditions = listOf(
+                AutoCategoryRuleCondition(
+                    ruleId = "rule",
+                    position = 0,
+                    conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    field = AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE,
+                    matchMode = AutoCategoryRuleConditionMatchMode.EXACT,
+                    pattern = "5411",
+                ),
+            ),
+            direction = TransactionDirection.EXPENSE,
+            accountKind = AssetKind.CREDIT_CARD,
+        )
+
+        assertFalse(rule.isEditableInLegacyEditor())
+        assertFalse(rule.matches(candidate))
+        assertEquals("結構化規則：MCC 1項／支出／信用卡", rule.structuredRuleSummary())
     }
 
     private fun detailState() = TransactionDetailUiState(

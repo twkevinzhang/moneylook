@@ -47,6 +47,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
+import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 
 data class AccountOption(val id: String, val name: String)
@@ -162,7 +164,9 @@ private fun RuleCard(
                     Text("優先順序 ${rule.priority + 1}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(checked = rule.enabled, onCheckedChange = onToggle)
-                IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, "編輯") }
+                IconButton(onClick = onEdit, enabled = rule.isEditableInLegacyEditor()) {
+                    Icon(Icons.Default.Edit, "編輯")
+                }
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "刪除") }
             }
             Text(ruleSummary(rule, categories, tags), style = MaterialTheme.typography.bodySmall)
@@ -246,18 +250,22 @@ fun AutoRuleEditorDialog(
 }
 
 internal fun AutoRuleDraft.isValidForSave(): Boolean {
+    if (createExactDescriptionCondition && descriptionContains.isBlank()) return false
     val min = minAbsoluteAmount.trim().takeIf(String::isNotEmpty)?.toDoubleOrNull()
     val max = maxAbsoluteAmount.trim().takeIf(String::isNotEmpty)?.toDoubleOrNull()
     val amountsAreValid =
         (minAbsoluteAmount.isBlank() || min?.isFinite() == true && min >= 0.0) &&
             (maxAbsoluteAmount.isBlank() || max?.isFinite() == true && max >= 0.0) &&
             (min == null || max == null || min <= max)
-    val hasCondition = descriptionContains.isNotBlank() || direction != null || min != null || max != null || accountId != null
+    val hasCondition = conditions.isNotEmpty() || descriptionContains.isNotBlank() ||
+        direction != null || min != null || max != null || accountId != null ||
+        accountKind != null || extensionId != null
     val hasAction = categoryId != null || tagIds.isNotEmpty()
     return name.isNotBlank() && amountsAreValid && hasCondition && hasAction
 }
 
 internal fun ruleSummary(rule: AutoRuleDraft, categories: List<CategoryOption>, tags: List<TagOption>): String {
+    if (!rule.isEditableInLegacyEditor()) return rule.structuredRuleSummary()
     val conditions = buildList {
         rule.descriptionContains.takeIf(String::isNotBlank)?.let {
             add(if (rule.descriptionMatchMode == AutoCategoryRuleDescriptionMatchMode.EXACT) "交易文字完全是「$it」" else "交易文字含「$it」")
@@ -271,4 +279,44 @@ internal fun ruleSummary(rule: AutoRuleDraft, categories: List<CategoryOption>, 
         tags.filter { it.id in rule.tagIds }.takeIf { it.isNotEmpty() }?.let { add("標籤：${it.joinToString { tag -> tag.name }}") }
     }.ifEmpty { listOf("不變更分類或標籤") }.joinToString("；")
     return "如果 $conditions，則 $actions"
+}
+
+/** Imported structured rules cannot safely be edited by the legacy single-text-field editor. */
+internal fun AutoRuleDraft.isEditableInLegacyEditor(): Boolean =
+    conditions.isEmpty() || createExactDescriptionCondition || updateLegacyAnyTextCondition
+
+internal fun AutoRuleDraft.structuredRuleSummary(): String {
+    val fieldSummary = buildList {
+        conditions.count { it.field == AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE }
+            .takeIf { it > 0 }
+            ?.let { add("MCC ${it}項") }
+        conditions.count { it.field == AutoCategoryRuleConditionField.MERCHANT_NAME }
+            .takeIf { it > 0 }
+            ?.let { add("商家 ${it}項") }
+        conditions.count { it.field == AutoCategoryRuleConditionField.COUNTERPARTY_NAME }
+            .takeIf { it > 0 }
+            ?.let { add("對手方 ${it}項") }
+        conditions.count { it.field == AutoCategoryRuleConditionField.PURPOSE }
+            .takeIf { it > 0 }
+            ?.let { add("用途 ${it}項") }
+        conditions.count {
+            it.field == AutoCategoryRuleConditionField.DESCRIPTION ||
+                it.field == AutoCategoryRuleConditionField.MEMO ||
+                it.field == AutoCategoryRuleConditionField.TYPE ||
+                it.field == AutoCategoryRuleConditionField.STATUS
+        }.takeIf { it > 0 }?.let { add("文字條件 ${it}項") }
+    }.ifEmpty { listOf("結構化條件") }
+    val scopes = buildList {
+        direction?.let { add(if (it == TransactionDirection.INCOME) "收入" else "支出") }
+        accountKind?.let { add(it.toDisplayName()) }
+        extensionId?.let { add("指定擴充功能") }
+    }
+    return (listOf("結構化規則：${fieldSummary.joinToString("、")}") + scopes).joinToString("／")
+}
+
+private fun AssetKind.toDisplayName(): String = when (this) {
+    AssetKind.DEPOSIT -> "活存"
+    AssetKind.TIME_DEPOSIT -> "定存"
+    AssetKind.CREDIT_CARD -> "信用卡"
+    AssetKind.LOAN -> "貸款"
 }

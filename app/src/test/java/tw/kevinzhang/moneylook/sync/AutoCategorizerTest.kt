@@ -18,9 +18,16 @@ import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferClassificationCandidate
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssignmentSource
+import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRule
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.core.data.model.Tag
@@ -64,7 +71,7 @@ class AutoCategorizerTest {
     }
 
     @Test
-    fun `first matching rule assigns category and tags while a manual save remains authoritative`() = runBlocking {
+    fun `stronger matching rule assigns category and provenance while manual save remains authoritative`() = runBlocking {
         val food = Category("food", "餐飲", "#2E7D32")
         val other = Category("other", "其他", "#1565C0")
         val work = Tag("work", "公司", "#6A1B9A")
@@ -103,6 +110,9 @@ class AutoCategorizerTest {
         database.transferAnnotationDao().observeDetail(transfer.id).first()!!.also { detail ->
             assertEquals(food.id, detail.annotation?.categoryId)
             assertEquals(AssignmentSource.AUTO, detail.annotation?.categoryAssignment)
+            assertEquals("coffee", detail.annotation?.autoRuleId)
+            assertEquals(55, detail.annotation?.autoMatchScore)
+            assertEquals("rules-v2", detail.annotation?.classifierVersion)
             assertEquals(listOf(work.id), detail.tags.map(Tag::id))
         }
 
@@ -123,6 +133,8 @@ class AutoCategorizerTest {
             assertEquals(other.id, detail.annotation?.categoryId)
             assertEquals("手動備註", detail.annotation?.note)
             assertEquals(AssignmentSource.MANUAL, detail.annotation?.categoryAssignment)
+            assertNull(detail.annotation?.autoRuleId)
+            assertNull(detail.annotation?.autoMatchScore)
             assertFalse(detail.tags.isNotEmpty())
         }
         Unit
@@ -271,6 +283,216 @@ class AutoCategorizerTest {
         assertEquals(true, matching.matches(transfer("memo", "其他", -50.0, memo = "捷運 扣款")))
         assertEquals(false, matching.matches(transfer("fragment", "捷運扣款 超商", -50.0)))
         assertFalse(matching.matches(transfer("split", "捷運", -50.0, memo = "扣款")))
+    }
+
+    @Test
+    fun `v2 matcher normalizes structured facts and honours include groups without joining fields`() {
+        val category = Category("food", "餐飲", "#2E7D32")
+        val rule = v2Rule(
+            id = "structured-food",
+            category = category,
+            conditions = listOf(
+                condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ALL, AutoCategoryRuleConditionField.MERCHANT_NAME, AutoCategoryRuleConditionMatchMode.EXACT, "ＡＣＭＥ—ＭＡＲＫＥＴ"),
+                condition(1, AutoCategoryRuleConditionGroup.INCLUDE_ALL, AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE, AutoCategoryRuleConditionMatchMode.EXACT, "５４１１"),
+                condition(2, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.PURPOSE, AutoCategoryRuleConditionMatchMode.TOKEN, "日常 消費"),
+                condition(3, AutoCategoryRuleConditionGroup.EXCLUDE_ANY, AutoCategoryRuleConditionField.STATUS, AutoCategoryRuleConditionMatchMode.EXACT, "撤銷"),
+            ),
+        )
+        val candidate = classificationCandidate(
+            transfer(
+                id = "structured",
+                description = "無關文字",
+                amount = -80.0,
+                merchantName = "Acme Market",
+                merchantCategoryCode = "5411",
+                purpose = "日常，消費",
+            ),
+        )
+
+        assertTrue(listOf(rule).classificationDecision(candidate) is ClassificationDecision.AutoApply)
+        assertNull(
+            listOf(rule).classificationDecision(
+                candidate.copy(transfer = candidate.transfer.copy(status = "撤銷")),
+            ),
+        )
+        assertNull(
+            listOf(rule).classificationDecision(
+                candidate.copy(
+                    transfer = candidate.transfer.copy(
+                        merchantName = "Acme",
+                        purpose = "Market 日常 消費",
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `v2 matcher abstains on cross category evidence ties and insufficient margins including legacy rules`() {
+        val food = Category("food", "餐飲", "#2E7D32")
+        val transport = Category("transport", "交通", "#1565C0")
+        val candidate = classificationCandidate(
+            transfer("collision", "ACME MARKET", -100.0, merchantName = "Acme Market"),
+        )
+        val structured = v2Rule(
+            id = "structured",
+            category = food,
+            conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.MERCHANT_NAME, AutoCategoryRuleConditionMatchMode.EXACT, "ACME MARKET")),
+        )
+        val text = v2Rule(
+            id = "text",
+            category = transport,
+            conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "ACME MARKET")),
+        )
+        assertTrue(listOf(structured, text).classificationDecision(candidate) is ClassificationDecision.Abstain)
+
+        val legacyFood = ruleWithTags(
+            AutoCategoryRule("legacy-food", "舊餐飲", descriptionContains = "ACME", categoryId = food.id),
+            food,
+        )
+        val legacyTransport = ruleWithTags(
+            AutoCategoryRule("legacy-transport", "舊交通", descriptionContains = "ACME", categoryId = transport.id),
+            transport,
+        )
+        assertTrue(listOf(legacyFood, legacyTransport).classificationDecision(candidate) is ClassificationDecision.Abstain)
+    }
+
+    @Test
+    fun `tag only rule does not create a false cross category collision`() {
+        val food = Category("food", "餐飲", "#2E7D32")
+        val candidate = classificationCandidate(transfer("tagged", "ACME", -100.0))
+        val condition = condition(
+            0,
+            AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+            AutoCategoryRuleConditionField.DESCRIPTION,
+            AutoCategoryRuleConditionMatchMode.EXACT,
+            "ACME",
+        )
+        val tagOnly = AutoCategoryRuleWithTags(
+            rule = AutoCategoryRule(
+                id = "a-tag-only",
+                name = "標籤",
+                origin = AutoCategoryRuleOrigin.USER_CONFIRMED,
+            ),
+            category = null,
+            tags = listOf(Tag("tag", "自動標籤", "#1565C0")),
+            conditions = listOf(condition),
+        )
+        val categorized = v2Rule(
+            id = "category",
+            category = food,
+            conditions = listOf(condition.copy(ruleId = "category")),
+        )
+
+        val decision = listOf(tagOnly, categorized).classificationDecision(candidate)
+
+        assertTrue(decision is ClassificationDecision.AutoApply)
+        assertEquals(
+            "a-tag-only",
+            (decision as ClassificationDecision.AutoApply).evaluation.ruleWithTags.rule.id,
+        )
+    }
+
+    @Test
+    fun `v2 matcher enforces action and direction account kind extension and category guards`() {
+        val expense = Category("expense", "餐飲", "#2E7D32")
+        val income = Category("income", "收入", "#1565C0", kind = CategoryKind.INCOME)
+        val candidate = classificationCandidate(
+            transfer("scoped", "薪資", 100.0, extensionId = "target-extension"),
+            accountKind = AssetKind.CREDIT_CARD,
+        )
+        val suggest = v2Rule(
+            id = "suggest",
+            category = income,
+            action = AutoCategoryRuleAction.SUGGEST,
+            direction = AutoCategoryRuleDirection.INCOME,
+            accountKind = AssetKind.CREDIT_CARD,
+            extensionId = "target-extension",
+            conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "薪資")),
+        )
+        assertTrue(listOf(suggest).classificationDecision(candidate) is ClassificationDecision.Suggest)
+        assertNull(listOf(suggest).classificationDecision(candidate.copy(accountKind = AssetKind.DEPOSIT)))
+        assertNull(listOf(suggest).classificationDecision(candidate.copy(transfer = candidate.transfer.copy(extensionId = "other-extension"))))
+
+        val wrongKind = v2Rule(
+            id = "wrong-kind",
+            category = expense,
+            direction = AutoCategoryRuleDirection.INCOME,
+            conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "薪資")),
+        )
+        assertNull(listOf(wrongKind).classificationDecision(candidate))
+    }
+
+    @Test
+    fun `matching abstain rule vetoes a stronger automatic classification`() {
+        val food = Category("food", "餐飲", "#2E7D32")
+        val candidate = classificationCandidate(transfer("veto", "ACME", -50.0, merchantName = "Acme"))
+        val automatic = v2Rule(
+            id = "automatic",
+            category = food,
+            conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.MERCHANT_NAME, AutoCategoryRuleConditionMatchMode.EXACT, "ACME")),
+        )
+        val veto = v2Rule(
+            id = "veto",
+            category = food,
+            action = AutoCategoryRuleAction.ABSTAIN,
+            conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "ACME")),
+        )
+
+        assertTrue(listOf(automatic, veto).classificationDecision(candidate) is ClassificationDecision.Abstain)
+    }
+
+    @Test
+    fun `suggestion leaves an existing automatic annotation untouched`() = runBlocking {
+        val income = Category("income", "收入", "#1565C0", kind = CategoryKind.INCOME)
+        val existing = Category("existing", "既有", "#2E7D32", kind = CategoryKind.INCOME)
+        database.categoryDao().upsert(income)
+        database.categoryDao().upsert(existing)
+        val rule = AutoCategoryRule(
+            id = "salary-suggestion",
+            name = "薪資建議",
+            direction = AutoCategoryRuleDirection.INCOME,
+            categoryId = income.id,
+            action = AutoCategoryRuleAction.SUGGEST,
+        )
+        database.autoCategoryRuleDao().upsertWithDetails(
+            rule,
+            listOf(
+                AutoCategoryRuleCondition(
+                    ruleId = rule.id,
+                    position = 0,
+                    conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    field = AutoCategoryRuleConditionField.DESCRIPTION,
+                    matchMode = AutoCategoryRuleConditionMatchMode.EXACT,
+                    pattern = "薪資入帳",
+                ),
+            ),
+            emptySet(),
+        )
+        val transfer = transfer("suggested", "薪資入帳", 100.0)
+        database.transferDao().upsertAll(listOf(transfer))
+        val annotation = TransferAnnotation(
+            transferId = transfer.id,
+            extensionId = transfer.extensionId,
+            categoryId = existing.id,
+        )
+        database.transferAnnotationDao().upsert(annotation)
+
+        categorizer.applyToExistingTransactions()
+
+        assertEquals(
+            annotation,
+            database.transferAnnotationDao().observeDetail(transfer.id).first()!!.annotation,
+        )
+    }
+
+    @Test
+    fun `legacy canonicalizer retains punctuation removal while v2 canonicalizer separates tokens`() {
+        assertEquals("coffeeshop", normalizeLegacyAutoCategoryRuleText("Ｃｏｆｆｅｅ—Ｓｈｏｐ"))
+        assertEquals(
+            "coffee shop",
+            tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleTextV2("Ｃｏｆｆｅｅ—Ｓｈｏｐ"),
+        )
     }
 
     @Test
@@ -531,7 +753,39 @@ class AutoCategorizerTest {
         )
     }
 
-    private fun ruleWithTags(rule: AutoCategoryRule) = AutoCategoryRuleWithTags(rule, null, emptyList())
+    private fun ruleWithTags(rule: AutoCategoryRule, category: Category? = null) = AutoCategoryRuleWithTags(rule, category, emptyList())
+
+    private fun v2Rule(
+        id: String,
+        category: Category,
+        conditions: List<AutoCategoryRuleCondition>,
+        action: AutoCategoryRuleAction = AutoCategoryRuleAction.AUTO_APPLY,
+        direction: AutoCategoryRuleDirection = AutoCategoryRuleDirection.ANY,
+        accountKind: AssetKind? = null,
+        extensionId: String? = null,
+    ) = AutoCategoryRuleWithTags(
+        rule = AutoCategoryRule(
+            id = id,
+            name = id,
+            categoryId = category.id,
+            action = action,
+            origin = AutoCategoryRuleOrigin.USER_CONFIRMED,
+            direction = direction,
+            accountKind = accountKind,
+            extensionId = extensionId,
+        ),
+        category = category,
+        tags = emptyList(),
+        conditions = conditions,
+    )
+
+    private fun condition(
+        position: Int,
+        group: AutoCategoryRuleConditionGroup,
+        field: AutoCategoryRuleConditionField,
+        mode: AutoCategoryRuleConditionMatchMode,
+        pattern: String,
+    ) = AutoCategoryRuleCondition("unused-in-direct-matcher-test", position, group, field, mode, pattern)
 
     private fun account(id: String, currency: String = "TWD") = Account(
         id = id,
@@ -551,20 +805,32 @@ class AutoCategorizerTest {
         accountId: String = "account",
         memo: String = "",
         type: String? = null,
+        status: String? = null,
+        merchantName: String? = null,
+        merchantCategoryCode: String? = null,
+        counterpartyName: String? = null,
+        purpose: String? = null,
+        extensionId: String = "extension",
     ) = Transfer(
         id = id,
         accountId = accountId,
-        extensionId = "extension",
+        extensionId = extensionId,
         txnDateTime = txnDateTime,
         description = description,
         amount = amount,
         balance = null,
         memo = memo,
         type = type,
+        status = status,
+        merchantName = merchantName,
+        merchantCategoryCode = merchantCategoryCode,
+        counterpartyName = counterpartyName,
+        purpose = purpose,
     )
 
     private fun classificationCandidate(
         transfer: Transfer,
         currency: String = "TWD",
-    ) = TransferClassificationCandidate(transfer, currency)
+        accountKind: AssetKind = AssetKind.DEPOSIT,
+    ) = TransferClassificationCandidate(transfer, currency, accountKind)
 }

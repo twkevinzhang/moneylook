@@ -24,7 +24,7 @@ enum class AssignmentSource {
             onDelete = ForeignKey.SET_NULL,
         ),
     ],
-    indices = [Index(value = ["extensionId"]), Index(value = ["categoryId"])],
+    indices = [Index(value = ["extensionId"]), Index(value = ["categoryId"]), Index(value = ["autoRuleId"])],
 )
 data class TransferAnnotation(
     @PrimaryKey val transferId: String,
@@ -35,6 +35,11 @@ data class TransferAnnotation(
     val categoryAssignment: AssignmentSource = AssignmentSource.AUTO,
     /** True also represents an intentional manual clear (categoryId == null). */
     val manualOverride: Boolean = categoryAssignment == AssignmentSource.MANUAL,
+    /** Rule evidence for an automatic/suggested classification; manual edits never need it. */
+    val autoRuleId: String? = null,
+    val autoRuleSetId: String? = null,
+    val autoMatchScore: Int? = null,
+    val classifierVersion: String? = null,
 ) {
     init {
         require(manualOverride == (categoryAssignment == AssignmentSource.MANUAL)) {

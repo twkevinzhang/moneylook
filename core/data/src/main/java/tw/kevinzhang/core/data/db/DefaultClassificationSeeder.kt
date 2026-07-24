@@ -3,13 +3,16 @@ package tw.kevinzhang.core.data.db
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteStatement
 import tw.kevinzhang.core.data.model.AutoCategoryRule
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleSet
 import tw.kevinzhang.core.data.model.Category
 
 /** Writes only absent public catalog rows; it never updates or recreates user-deleted data. */
 object DefaultClassificationSeeder {
     fun seedFreshDatabase(db: SupportSQLiteDatabase) {
         seedCategories(db, DefaultClassificationCatalog.categories)
-        seedRulesForExistingCategories(db)
+        seedRulesForExistingCategoriesV17(db)
+        seedRulesV2ForExistingCategories(db)
     }
 
     /** Used by the v13-to-v14 upgrade: categories remain user-owned and are never inserted here. */
@@ -17,12 +20,61 @@ object DefaultClassificationSeeder {
         db: SupportSQLiteDatabase,
         rules: List<AutoCategoryRule> = DefaultClassificationCatalog.publicAutoCategoryRules,
     ) {
-        db.compileStatement(INSERT_RULE_SQL).use { insert ->
+        db.compileStatement(INSERT_RULE_V1_SQL).use { insert ->
             for (rule in rules) {
+                if (!categoryExists(db, rule.categoryId)) continue
+                insert.clearBindings()
+                insert.bindRuleV1(rule)
+                insert.executeInsert()
+            }
+        }
+    }
+
+    private fun seedRulesForExistingCategoriesV17(db: SupportSQLiteDatabase) {
+        db.compileStatement(INSERT_RULE_SQL).use { insert ->
+            for (rule in DefaultClassificationCatalog.publicAutoCategoryRules) {
                 if (!categoryExists(db, rule.categoryId)) continue
                 insert.clearBindings()
                 insert.bindRule(rule)
                 insert.executeInsert()
+            }
+        }
+    }
+
+    /** Inserts only stable public MCC rules and never replaces a user edit or deleted rule. */
+    fun seedRulesV2ForExistingCategories(db: SupportSQLiteDatabase) {
+        seedPublicRuleCollection(
+            db,
+            DefaultClassificationCatalog.publicMccRuleSet,
+            DefaultClassificationCatalog.publicMccRules,
+        )
+        seedPublicRuleCollection(
+            db,
+            DefaultClassificationCatalog.publicStructuralRuleSet,
+            DefaultClassificationCatalog.publicStructuralRules,
+        )
+    }
+
+    private fun seedPublicRuleCollection(
+        db: SupportSQLiteDatabase,
+        ruleSet: AutoCategoryRuleSet,
+        rules: List<PublicMccRule>,
+    ) {
+        insertRuleSetIfAbsent(db, ruleSet)
+        db.compileStatement(INSERT_RULE_SQL).use { insertRule ->
+            db.compileStatement(INSERT_CONDITION_SQL).use { insertCondition ->
+                rules.forEach { publicRule ->
+                    if (!categoryExists(db, publicRule.rule.categoryId)) return@forEach
+                    insertRule.clearBindings()
+                    insertRule.bindRule(publicRule.rule)
+                    val inserted = insertRule.executeInsert() != -1L
+                    if (!inserted) return@forEach
+                    publicRule.conditions.forEach { condition ->
+                        insertCondition.clearBindings()
+                        insertCondition.bindCondition(condition)
+                        insertCondition.executeInsert()
+                    }
+                }
             }
         }
     }
@@ -59,7 +111,49 @@ object DefaultClassificationSeeder {
         bindLong(9, if (rule.enabled) 1 else 0)
         bindLong(10, rule.priority.toLong())
         bindString(11, rule.descriptionMatchMode.name)
-        bindLong(12, 1)
+        bindLong(12, if (rule.isDefault) 1 else 0)
+        bindNullableString(13, rule.ruleSetId)
+        bindNullableString(14, rule.extensionId)
+        bindNullableString(15, rule.accountKind?.name)
+        bindString(16, rule.origin.name)
+        bindString(17, rule.action.name)
+    }
+
+    private fun SupportSQLiteStatement.bindRuleV1(rule: AutoCategoryRule) {
+        bindString(1, rule.id)
+        bindString(2, rule.name)
+        bindNullableString(3, rule.descriptionContains)
+        bindString(4, rule.direction.name)
+        bindNullableDouble(5, rule.minAbsoluteAmount)
+        bindNullableDouble(6, rule.maxAbsoluteAmount)
+        bindNullableString(7, rule.accountId)
+        bindNullableString(8, rule.categoryId)
+        bindLong(9, if (rule.enabled) 1 else 0)
+        bindLong(10, rule.priority.toLong())
+        bindString(11, rule.descriptionMatchMode.name)
+        bindLong(12, if (rule.isDefault) 1 else 0)
+    }
+
+    private fun SupportSQLiteStatement.bindCondition(condition: AutoCategoryRuleCondition) {
+        bindString(1, condition.ruleId)
+        bindLong(2, condition.position.toLong())
+        bindString(3, condition.conditionGroup.name)
+        bindString(4, condition.field.name)
+        bindString(5, condition.matchMode.name)
+        bindString(6, condition.pattern)
+    }
+
+    private fun insertRuleSetIfAbsent(db: SupportSQLiteDatabase, ruleSet: AutoCategoryRuleSet) {
+        db.compileStatement(INSERT_RULE_SET_SQL).use { insert ->
+            insert.bindString(1, ruleSet.id)
+            insert.bindString(2, ruleSet.name)
+            insert.bindString(3, ruleSet.origin.name)
+            insert.bindString(4, ruleSet.version)
+            insert.bindString(5, ruleSet.canonicalizerVersion)
+            insert.bindString(6, ruleSet.contentSha256)
+            insert.bindLong(7, if (ruleSet.isActive) 1 else 0)
+            insert.executeInsert()
+        }
     }
 
     private fun SupportSQLiteStatement.bindNullableString(index: Int, value: String?) {
@@ -79,7 +173,28 @@ object DefaultClassificationSeeder {
         INSERT OR IGNORE INTO `auto_category_rules` (
             `id`, `name`, `descriptionContains`, `direction`, `minAbsoluteAmount`,
             `maxAbsoluteAmount`, `accountId`, `categoryId`, `enabled`, `priority`,
+            `descriptionMatchMode`, `isDefault`, `ruleSetId`, `extensionId`, `accountKind`,
+            `origin`, `action`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    private const val INSERT_RULE_V1_SQL = """
+        INSERT OR IGNORE INTO `auto_category_rules` (
+            `id`, `name`, `descriptionContains`, `direction`, `minAbsoluteAmount`,
+            `maxAbsoluteAmount`, `accountId`, `categoryId`, `enabled`, `priority`,
             `descriptionMatchMode`, `isDefault`
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    private const val INSERT_RULE_SET_SQL = """
+        INSERT OR IGNORE INTO `auto_category_rule_sets` (
+            `id`, `name`, `origin`, `version`, `canonicalizerVersion`, `contentSha256`, `isActive`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """
+
+    private const val INSERT_CONDITION_SQL = """
+        INSERT OR IGNORE INTO `auto_category_rule_conditions` (
+            `ruleId`, `position`, `conditionGroup`, `field`, `matchMode`, `pattern`
+        ) VALUES (?, ?, ?, ?, ?, ?)
     """
 }

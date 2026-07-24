@@ -3,6 +3,7 @@ package tw.kevinzhang.core.data.db
 import androidx.room.withTransaction
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AutoCategoryRule
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import java.util.Locale
@@ -28,6 +29,7 @@ data class PendingTag(
 /** An optional automatic rule saved together with the transaction detail that created it. */
 data class AutoCategoryRuleSave(
     val rule: AutoCategoryRule,
+    val conditions: List<AutoCategoryRuleCondition> = emptyList(),
     val tagIds: Set<String> = emptySet(),
     /** Names resolve against [TransactionDetailDraftSave.pendingTags], or create a default-colour tag. */
     val pendingTagNames: Set<String> = emptySet(),
@@ -97,7 +99,7 @@ class TransactionDetailDraftStore @Inject constructor(
                     tagsByName.getValue(name.trim().caseInsensitiveKey()).id
                 }
                 (ruleSave.tagIds + pendingRuleTagIds).also { tagIds ->
-                    autoCategoryRuleDao.upsertWithTags(ruleSave.rule, tagIds)
+                    autoCategoryRuleDao.upsertWithDetails(ruleSave.rule, ruleSave.conditions, tagIds)
                 }
             }
 

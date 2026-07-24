@@ -40,6 +40,10 @@ import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.core.data.model.Tag
@@ -119,11 +123,12 @@ class ClassificationViewModel @Inject constructor(
                 val existingTagIds = draft.tagIds.filterNot(::isDraftTagId).toSet()
                 val pendingTagIds = draft.tagIds.filter(::isDraftTagId)
                     .map { draftTagName(it) }.toSet()
-                val ruleSave = draft.matchingRule?.normalizedOrNull()?.let { (rule, ruleTagIds) ->
+                val ruleSave = draft.matchingRule?.normalizedOrNull()?.let { normalized ->
                     AutoCategoryRuleSave(
-                        rule = rule,
-                        tagIds = ruleTagIds.filterNot(::isDraftTagId).toSet(),
-                        pendingTagNames = ruleTagIds.filter(::isDraftTagId).map { draftTagName(it) }.toSet(),
+                        rule = normalized.rule,
+                        conditions = normalized.conditions,
+                        tagIds = normalized.tagIds.filterNot(::isDraftTagId).toSet(),
+                        pendingTagNames = normalized.tagIds.filter(::isDraftTagId).map { draftTagName(it) }.toSet(),
                     )
                 }
                 transactionDetailDraftStore.save(
@@ -179,7 +184,11 @@ class ClassificationViewModel @Inject constructor(
     fun saveRule(draft: AutoRuleDraft) {
         val normalized = draft.normalizedOrNull() ?: return
         viewModelScope.launch {
-            autoCategoryRuleDao.upsertWithTags(normalized.first, normalized.second)
+            autoCategoryRuleDao.upsertWithDetails(
+                rule = normalized.rule,
+                conditions = normalized.conditions,
+                tagIds = normalized.tagIds,
+            )
             if (draft.applyExisting) autoCategorizer.applyToExistingTransactions()
         }
     }
@@ -252,6 +261,7 @@ private fun TransferDetail.toDetailUi(
         ),
         amount = transfer.amount,
         accountName = account?.accountName ?: "已移除帳戶",
+        extensionId = transfer.extensionId,
         cardDisplayLabel = card?.let { instrument ->
             listOfNotNull(
                 instrument.displayName?.trim()?.takeIf(String::isNotBlank) ?: "信用卡",
@@ -279,8 +289,14 @@ private fun asCategoryOptions(items: List<Category>) = items.map {
     CategoryOption(it.id, it.name, it.color.parseColor(), it.emoji, it.kind)
 }
 private fun asTagOptions(items: List<Tag>) = items.map { TagOption(it.id, it.name, it.color.parseColor()) }
-private fun AutoCategoryRuleWithTags.toDraft() = rule.toDraft(tags.mapTo(mutableSetOf()) { it.id })
-private fun tw.kevinzhang.core.data.model.AutoCategoryRule.toDraft(tagIds: Set<String>) = AutoRuleDraft(
+private fun AutoCategoryRuleWithTags.toDraft() = rule.toDraft(
+    tagIds = tags.mapTo(mutableSetOf()) { it.id },
+    conditions = conditions,
+)
+private fun tw.kevinzhang.core.data.model.AutoCategoryRule.toDraft(
+    tagIds: Set<String>,
+    conditions: List<AutoCategoryRuleCondition>,
+) = AutoRuleDraft(
     id = id,
     name = name,
     descriptionContains = descriptionContains.orEmpty(),
@@ -298,20 +314,120 @@ private fun tw.kevinzhang.core.data.model.AutoCategoryRule.toDraft(tagIds: Set<S
     enabled = enabled,
     priority = priority,
     isDefault = isDefault,
+    createExactDescriptionCondition = conditions.isSingleDescriptionCondition(
+        descriptionContains,
+        descriptionMatchMode,
+    ),
+    updateLegacyAnyTextCondition = conditions.isSingleLegacyAnyTextCondition(
+        descriptionContains,
+        descriptionMatchMode,
+    ),
+    conditions = conditions,
+    ruleSetId = ruleSetId,
+    accountKind = accountKind,
+    extensionId = extensionId,
+    origin = origin,
+    action = action,
 )
 
-private fun AutoRuleDraft.normalizedOrNull(): Pair<tw.kevinzhang.core.data.model.AutoCategoryRule, Set<String>>? {
+internal data class NormalizedAutoRule(
+    val rule: tw.kevinzhang.core.data.model.AutoCategoryRule,
+    val tagIds: Set<String>,
+    val conditions: List<AutoCategoryRuleCondition>,
+)
+
+internal fun AutoRuleDraft.normalizedOrNull(): NormalizedAutoRule? {
     if (!isValidForSave()) return null
     val min = minAbsoluteAmount.trim().takeIf(String::isNotEmpty)?.toDoubleOrNull() ?: minAbsoluteAmount.takeIf(String::isNotBlank)?.let { return null }
     val max = maxAbsoluteAmount.trim().takeIf(String::isNotEmpty)?.toDoubleOrNull() ?: maxAbsoluteAmount.takeIf(String::isNotBlank)?.let { return null }
     if (min != null && max != null && min > max) return null
-    return tw.kevinzhang.core.data.model.AutoCategoryRule(
+    val normalizedRule = tw.kevinzhang.core.data.model.AutoCategoryRule(
         id = id.ifBlank { UUID.randomUUID().toString() }, name = name.trim(), descriptionContains = descriptionContains.trim().takeIf(String::isNotEmpty),
         direction = when (direction) { null -> AutoCategoryRuleDirection.ANY; TransactionDirection.INCOME -> AutoCategoryRuleDirection.INCOME; TransactionDirection.EXPENSE -> AutoCategoryRuleDirection.EXPENSE },
         minAbsoluteAmount = min, maxAbsoluteAmount = max, accountId = accountId, categoryId = categoryId, enabled = enabled, priority = priority,
         descriptionMatchMode = descriptionMatchMode,
         isDefault = isDefault,
-    ) to tagIds
+        ruleSetId = ruleSetId,
+        accountKind = accountKind,
+        extensionId = extensionId,
+        origin = origin,
+        action = action,
+    )
+    val exactDescriptionPattern = normalizedRule.descriptionContains
+    val normalizedConditions = when {
+        createExactDescriptionCondition && exactDescriptionPattern != null -> listOf(
+            AutoCategoryRuleCondition(
+                ruleId = normalizedRule.id,
+                position = 0,
+                conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                field = AutoCategoryRuleConditionField.DESCRIPTION,
+                matchMode = when (normalizedRule.descriptionMatchMode) {
+                    AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
+                        AutoCategoryRuleConditionMatchMode.CONTAINS
+                    AutoCategoryRuleDescriptionMatchMode.EXACT ->
+                        AutoCategoryRuleConditionMatchMode.EXACT
+                },
+                pattern = exactDescriptionPattern,
+            ),
+        )
+        updateLegacyAnyTextCondition -> exactDescriptionPattern?.let { pattern ->
+            listOf(
+                AutoCategoryRuleCondition(
+                    ruleId = normalizedRule.id,
+                    position = 0,
+                    conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    field = AutoCategoryRuleConditionField.LEGACY_ANY_TEXT,
+                    matchMode = when (normalizedRule.descriptionMatchMode) {
+                        AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
+                            AutoCategoryRuleConditionMatchMode.CONTAINS
+                        AutoCategoryRuleDescriptionMatchMode.EXACT ->
+                            AutoCategoryRuleConditionMatchMode.EXACT
+                    },
+                    pattern = pattern,
+                ),
+            )
+        }.orEmpty()
+        conditions.isNotEmpty() -> conditions.map { it.copy(ruleId = normalizedRule.id) }
+        else -> emptyList()
+    }
+    return NormalizedAutoRule(normalizedRule, tagIds, normalizedConditions)
+}
+
+private fun List<AutoCategoryRuleCondition>.isSingleDescriptionCondition(
+    descriptionContains: String?,
+    descriptionMatchMode: AutoCategoryRuleDescriptionMatchMode,
+): Boolean = isSingleEditableTextCondition(
+    descriptionContains = descriptionContains,
+    descriptionMatchMode = descriptionMatchMode,
+    field = AutoCategoryRuleConditionField.DESCRIPTION,
+)
+
+private fun List<AutoCategoryRuleCondition>.isSingleLegacyAnyTextCondition(
+    descriptionContains: String?,
+    descriptionMatchMode: AutoCategoryRuleDescriptionMatchMode,
+): Boolean = isSingleEditableTextCondition(
+    descriptionContains = descriptionContains,
+    descriptionMatchMode = descriptionMatchMode,
+    field = AutoCategoryRuleConditionField.LEGACY_ANY_TEXT,
+)
+
+private fun List<AutoCategoryRuleCondition>.isSingleEditableTextCondition(
+    descriptionContains: String?,
+    descriptionMatchMode: AutoCategoryRuleDescriptionMatchMode,
+    field: AutoCategoryRuleConditionField,
+): Boolean {
+    val condition = singleOrNull() ?: return false
+    val expectedMatchMode = when (descriptionMatchMode) {
+        AutoCategoryRuleDescriptionMatchMode.CONTAINS ->
+            AutoCategoryRuleConditionMatchMode.CONTAINS
+        AutoCategoryRuleDescriptionMatchMode.EXACT ->
+            AutoCategoryRuleConditionMatchMode.EXACT
+    }
+    return descriptionContains != null &&
+        condition.conditionGroup == AutoCategoryRuleConditionGroup.INCLUDE_ANY &&
+        condition.field == field &&
+        condition.matchMode == expectedMatchMode &&
+        condition.pattern == descriptionContains
 }
 
 private fun colorString(value: Long) = "#%06X".format(value and 0xFFFFFF)

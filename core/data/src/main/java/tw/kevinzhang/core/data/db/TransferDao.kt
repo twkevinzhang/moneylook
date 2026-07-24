@@ -5,12 +5,14 @@ import androidx.room.Embedded
 import androidx.room.Query
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
+import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.Transfer
 
 /** Redaction-safe facts required to compare transactions across the user's local accounts. */
 data class TransferClassificationCandidate(
     @Embedded val transfer: Transfer,
     val currency: String,
+    val accountKind: AssetKind,
 )
 
 @Dao
@@ -35,7 +37,7 @@ interface TransferDao : TransferCursorStore {
      */
     @Query(
         """
-        SELECT t.*, a.currency AS currency
+        SELECT t.*, a.currency AS currency, a.kind AS accountKind
         FROM transfers AS t
         INNER JOIN accounts AS a ON a.id = t.accountId
         """,
