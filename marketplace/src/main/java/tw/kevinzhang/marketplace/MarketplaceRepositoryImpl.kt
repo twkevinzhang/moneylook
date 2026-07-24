@@ -20,6 +20,8 @@ import java.io.IOException
 import java.net.URI
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.security.MessageDigest
+import java.io.FileOutputStream
 import javax.inject.Inject
 
 class MarketplaceRepositoryImpl @Inject constructor(
@@ -52,7 +54,7 @@ class MarketplaceRepositoryImpl @Inject constructor(
         repoUrl: String,
         path: String,
         extensionId: String,
-    ): String = withContext(Dispatchers.IO) {
+    ): DownloadedExtensionArtifact = withContext(Dispatchers.IO) {
         val rawBase = immutableRawBase(repoUrl)
         val safePath = requireSafeRelativePath(path, "index.path")
         val manifest = gson.fromJson(
@@ -62,13 +64,22 @@ class MarketplaceRepositoryImpl @Inject constructor(
         val scriptUrl = "$rawBase/$safePath/${manifest.syncTrigger.scriptPath}"
         val bytes = fetchBytes(scriptUrl)
         val extensionsRoot = File(context.filesDir, "extensions").canonicalFile
-        val scriptFile = File(extensionsRoot, "$extensionId/sync-trigger.js").canonicalFile
-        check(scriptFile.toPath().startsWith(extensionsRoot.toPath())) {
+        val expectedSha256 = bytes.sha256()
+        val scriptFile = File(
+            extensionsRoot,
+            "$extensionId/artifacts/$expectedSha256.js",
+        ).canonicalFile
+        check(scriptFile.path.startsWith(extensionsRoot.path + File.separator)) {
             "Script path escapes extensions directory"
         }
-        scriptFile.parentFile?.mkdirs()
-        scriptFile.writeBytes(bytes)
-        scriptFile.absolutePath
+        val parent = requireNotNull(scriptFile.parentFile)
+        check(parent.mkdirs() || parent.isDirectory) { "Unable to create extension directory" }
+        installAtomically(scriptFile, bytes, expectedSha256)
+        DownloadedExtensionArtifact(
+            path = scriptFile.absolutePath,
+            immutableRevision = rawBase.substringAfterLast('/'),
+            sha256 = expectedSha256,
+        )
     }
 
     // Converts a supported repository URL to its conventional branch-based Raw URL. Runtime
@@ -200,6 +211,42 @@ class MarketplaceRepositoryImpl @Inject constructor(
         if (source.buffer.size > limit) throw IOException("Response too large for $url")
         return source.buffer.clone().readByteArray()
     }
+
+    /**
+     * Writes and fsyncs a same-directory temporary file before rename. Content-addressed targets
+     * are immutable, so the InstalledExtension row continues pointing to its previous artifact
+     * until the caller successfully persists the returned path.
+     */
+    private fun installAtomically(target: File, bytes: ByteArray, expectedSha256: String) {
+        val parent = requireNotNull(target.parentFile)
+        if (target.exists()) {
+            check(target.readBytes().sha256() == expectedSha256) {
+                "Existing content-addressed artifact digest mismatch"
+            }
+            return
+        }
+        val temp = File.createTempFile(".sync-trigger-", ".tmp", parent)
+        try {
+            FileOutputStream(temp).use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            check(temp.readBytes().sha256() == expectedSha256) { "Downloaded artifact digest mismatch" }
+            if (!temp.renameTo(target)) {
+                // A concurrent installer may have won the same immutable digest.
+                check(target.exists() && target.readBytes().sha256() == expectedSha256) {
+                    "Unable to install content-addressed artifact"
+                }
+            }
+            check(target.readBytes().sha256() == expectedSha256) { "Installed artifact digest mismatch" }
+        } finally {
+            temp.delete()
+        }
+    }
+
+    private fun ByteArray.sha256(): String =
+        MessageDigest.getInstance("SHA-256").digest(this)
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     private companion object {
         const val DEFAULT_BRANCH = "main"

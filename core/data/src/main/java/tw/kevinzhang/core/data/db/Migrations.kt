@@ -606,3 +606,63 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
         DefaultClassificationSeeder.seedRulesV3ForExistingPublicCatalog(db)
     }
 }
+
+/** Makes every non-abstaining rule immediately actionable and adds private append-only provenance. */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("UPDATE auto_category_rules SET action = 'AUTO_APPLY' WHERE action = 'SUGGEST'")
+        db.execSQL(
+            "UPDATE auto_category_rule_sets SET contentSha256 = ? WHERE id = ?",
+            arrayOf(
+                DefaultClassificationCatalog.publicMccRuleSet.contentSha256,
+                DefaultClassificationCatalog.publicMccRuleSet.id,
+            ),
+        )
+        db.execSQL(
+            "UPDATE auto_category_rule_sets SET contentSha256 = ? WHERE id = ?",
+            arrayOf(
+                DefaultClassificationCatalog.publicStructuralRuleSet.contentSha256,
+                DefaultClassificationCatalog.publicStructuralRuleSet.id,
+            ),
+        )
+        db.execSQL("ALTER TABLE installed_extensions ADD COLUMN artifactRevision TEXT")
+        db.execSQL("ALTER TABLE installed_extensions ADD COLUMN artifactSha256 TEXT")
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS ingestion_runs (
+                id TEXT NOT NULL PRIMARY KEY, startedAt INTEGER NOT NULL, completedAt INTEGER NOT NULL,
+                extensionId TEXT NOT NULL, extensionVersion INTEGER NOT NULL, artifactRevision TEXT,
+                artifactSha256 TEXT, trigger TEXT NOT NULL, status TEXT NOT NULL,
+                classificationStatus TEXT NOT NULL, classificationCompletedAt INTEGER,
+                accountCount INTEGER NOT NULL,
+                transferCount INTEGER NOT NULL, sourceFingerprint TEXT NOT NULL, fingerprintKeyVersion INTEGER NOT NULL
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_ingestion_runs_extensionId_startedAt ON ingestion_runs(extensionId, startedAt)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_ingestion_runs_status ON ingestion_runs(status)")
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS transfer_ingestion_events (
+                id TEXT NOT NULL PRIMARY KEY, runId TEXT NOT NULL, occurredAt INTEGER NOT NULL, transferId TEXT NOT NULL,
+                extensionId TEXT NOT NULL, observation TEXT NOT NULL, sourceFingerprint TEXT NOT NULL,
+                payloadFingerprint TEXT NOT NULL, fingerprintKeyVersion INTEGER NOT NULL,
+                hasDescription INTEGER NOT NULL, hasMemo INTEGER NOT NULL, hasType INTEGER NOT NULL,
+                hasMerchantName INTEGER NOT NULL, hasMerchantCategoryCode INTEGER NOT NULL,
+                hasCounterpartyName INTEGER NOT NULL, hasPurpose INTEGER NOT NULL
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_transfer_ingestion_events_runId ON transfer_ingestion_events(runId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_transfer_ingestion_events_transferId ON transfer_ingestion_events(transferId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_transfer_ingestion_events_extensionId_occurredAt ON transfer_ingestion_events(extensionId, occurredAt)")
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS transfer_annotation_events (
+                id TEXT NOT NULL PRIMARY KEY, occurredAt INTEGER NOT NULL, runId TEXT, transferId TEXT NOT NULL,
+                extensionId TEXT NOT NULL, trigger TEXT NOT NULL, outcome TEXT NOT NULL,
+                previousCategoryId TEXT, newCategoryId TEXT, ruleId TEXT, ruleSetId TEXT,
+                ruleContentSha256 TEXT, ruleSetContentSha256 TEXT, matchScore INTEGER, classifierVersion TEXT,
+                tagAddedCount INTEGER NOT NULL, tagRemovedCount INTEGER NOT NULL
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_transfer_annotation_events_transferId_occurredAt ON transfer_annotation_events(transferId, occurredAt)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_transfer_annotation_events_runId ON transfer_annotation_events(runId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_transfer_annotation_events_outcome ON transfer_annotation_events(outcome)")
+    }
+}

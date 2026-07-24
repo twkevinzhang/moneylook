@@ -21,6 +21,7 @@ import kotlinx.coroutines.CancellationException
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.model.CredentialProfile
+import tw.kevinzhang.core.data.model.IngestionTrigger
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.moneylook.sync.BankSyncCoordinator
 import tw.kevinzhang.moneylook.sync.SyncResultPersister
@@ -48,32 +49,44 @@ class ScheduleWorker @AssistedInject constructor(
             return Result.success()
         }
 
-        return try {
-            when (val result = syncCoordinator.sync(extension, profile)) {
-                is SyncResult.Success -> {
-                    syncResultPersister.persist(extension, result)
-                    credentialProfileDao.updateLastRun(
-                        extensionId,
-                        System.currentTimeMillis(),
-                        result.appLastRunStatus,
-                    )
-                    enqueueNext(applicationContext, profile)
-                    Result.success()
-                }
-                is SyncResult.Error -> handleFailure(profile, result.message)
-            }
+        val result = try {
+            syncCoordinator.sync(extension, profile)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFailure(profile, e.message ?: "unknown error")
+            syncResultPersister.recordFailure(extension, IngestionTrigger.SCHEDULED_SYNC)
+            return handleFailure(profile)
         }
+        return when (result) {
+                is SyncResult.Success -> {
+                    // persist() owns the run lifecycle, including a safe FAILED state on error.
+                    try {
+                        syncResultPersister.persist(extension, result, IngestionTrigger.SCHEDULED_SYNC)
+                        credentialProfileDao.updateLastRun(
+                            extensionId,
+                            System.currentTimeMillis(),
+                            result.appLastRunStatus,
+                        )
+                        enqueueNext(applicationContext, profile)
+                        Result.success()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        handleFailure(profile)
+                    }
+                }
+                is SyncResult.Error -> {
+                    syncResultPersister.recordFailure(extension, IngestionTrigger.SCHEDULED_SYNC)
+                    handleFailure(profile)
+                }
+            }
     }
 
-    private suspend fun handleFailure(profile: CredentialProfile, message: String): Result {
+    private suspend fun handleFailure(profile: CredentialProfile): Result {
         credentialProfileDao.updateLastRun(
             profile.extensionId,
             System.currentTimeMillis(),
-            "error:${message.take(200)}",
+            "error",
         )
         return if (runAttemptCount < MAX_IMMEDIATE_RETRIES) {
             Result.retry()

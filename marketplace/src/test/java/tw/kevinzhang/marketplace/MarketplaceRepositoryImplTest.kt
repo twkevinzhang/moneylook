@@ -17,6 +17,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.marketplace.data.ExtensionManifest
 import tw.kevinzhang.marketplace.data.validateAndNormalize
+import java.io.File
+import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
 class MarketplaceRepositoryImplTest {
@@ -93,20 +95,21 @@ class MarketplaceRepositoryImplTest {
               "syncTrigger":{"scriptPath":"sync.js"}
             }
         """.trimIndent()
+        var scriptBody = "globalThis.__moneylookResult = Promise.resolve({accounts: []});"
         val immutableRepo = repositoryWithResponses(requests) { path ->
             when (path) {
                 "/repos/owner/repo/git/ref/heads/main" ->
                     "{\"object\":{\"sha\":\"$revision\"}}"
                 "/owner/repo/$revision/index.min.json" -> "[]"
                 "/owner/repo/$revision/tw.test/manifest.json" -> manifest
-                "/owner/repo/$revision/tw.test/sync.js" -> "globalThis.__moneylookResult = Promise.resolve({accounts: []});"
+                "/owner/repo/$revision/tw.test/sync.js" -> scriptBody
                 else -> error("Unexpected request path: $path")
             }
         }
 
         immutableRepo.fetchIndex("https://github.com/owner/repo")
         immutableRepo.fetchManifest("https://github.com/owner/repo", "tw.test")
-        immutableRepo.downloadSyncTriggerScript(
+        val artifact = immutableRepo.downloadSyncTriggerScript(
             "https://github.com/owner/repo",
             "tw.test",
             "tw.test::https://github.com/owner/repo",
@@ -114,6 +117,34 @@ class MarketplaceRepositoryImplTest {
 
         assertEquals(1, requests.count { it.contains("/git/ref/heads/main") })
         assertTrue(requests.drop(1).all { it.contains("/$revision/") })
+        assertEquals(revision, artifact.immutableRevision)
+        assertEquals(
+            "4a5e08cd191c02e833a3db3e95ad5783978454f5780990f080572b838bc93af3",
+            artifact.sha256,
+        )
+        assertTrue(artifact.path.endsWith("/artifacts/${artifact.sha256}.js"))
+        assertEquals(scriptBody, File(artifact.path).readText())
+        val originalContent = scriptBody
+
+        scriptBody = "globalThis.__moneylookResult = Promise.resolve({accounts: [{name:'updated'}]});"
+        val updated = immutableRepo.downloadSyncTriggerScript(
+            "https://github.com/owner/repo",
+            "tw.test",
+            "tw.test::https://github.com/owner/repo",
+        )
+        assertEquals(scriptBody, File(updated.path).readText())
+        assertTrue(updated.path.endsWith("/artifacts/${updated.sha256}.js"))
+        assertTrue(artifact.path != updated.path)
+        assertEquals(originalContent, File(artifact.path).readText())
+        assertEquals(
+            MessageDigest.getInstance("SHA-256").digest(scriptBody.toByteArray())
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) },
+            updated.sha256,
+        )
+        assertTrue(
+            File(updated.path).parentFile!!.listFiles().orEmpty()
+                .none { it.name.endsWith(".tmp") || it.name.endsWith(".backup") },
+        )
     }
 
     @Test(expected = IllegalArgumentException::class)

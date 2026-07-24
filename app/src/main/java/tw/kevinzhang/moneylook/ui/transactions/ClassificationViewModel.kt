@@ -46,6 +46,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.moneylook.sync.AutoCategorizer
@@ -146,7 +147,9 @@ class ClassificationViewModel @Inject constructor(
                     ),
                 )
                 if (draft.resumeAutomatic) autoCategorizer.resumeAutomaticCategorization(transferId)
-                if (draft.matchingRule?.applyExisting == true) autoCategorizer.applyToExistingTransactions()
+                if (draft.matchingRule?.applyExisting == true) {
+                    autoCategorizer.applyToExistingTransactions(ClassificationTrigger.RULE_SAVE)
+                }
                 onSaved()
             } finally {
                 isDetailSaving.value = false
@@ -189,7 +192,9 @@ class ClassificationViewModel @Inject constructor(
                 conditions = normalized.conditions,
                 tagIds = normalized.tagIds,
             )
-            if (draft.applyExisting) autoCategorizer.applyToExistingTransactions()
+            if (draft.applyExisting) {
+                autoCategorizer.applyToExistingTransactions(ClassificationTrigger.RULE_SAVE)
+            }
         }
     }
 

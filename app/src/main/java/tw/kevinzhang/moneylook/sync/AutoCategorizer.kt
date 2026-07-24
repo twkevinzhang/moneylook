@@ -10,6 +10,11 @@ import tw.kevinzhang.core.data.db.CategoryDao
 import tw.kevinzhang.core.data.db.TransferAnnotationDao
 import tw.kevinzhang.core.data.db.TransferClassificationCandidate
 import tw.kevinzhang.core.data.db.TransferDao
+import tw.kevinzhang.core.data.db.AutoCategoryRuleSetDao
+import tw.kevinzhang.core.data.db.AutomaticClassificationDecision
+import tw.kevinzhang.core.data.db.AutomaticClassificationWriteResult
+import tw.kevinzhang.core.data.model.ClassificationOutcome
+import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
 import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
@@ -29,6 +34,8 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeParseException
 import java.text.Normalizer
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,6 +45,11 @@ import kotlin.math.abs
 
 fun interface TransferAutoCategorizer {
     suspend fun categorizeTransferIds(transferIds: List<String>)
+
+    /** Sync persistence overrides this to connect every decision to its ingestion run. */
+    suspend fun categorizeTransferIds(transferIds: List<String>, ingestionRunId: String) {
+        categorizeTransferIds(transferIds)
+    }
 }
 
 /** Aggregate-only outcome for a bulk application; it intentionally contains no transaction data. */
@@ -54,10 +66,20 @@ class AutoCategorizer @Inject constructor(
     private val annotationDao: TransferAnnotationDao,
     private val ruleDao: AutoCategoryRuleDao,
     private val categoryDao: CategoryDao,
+    private val ruleSetDao: AutoCategoryRuleSetDao? = null,
 ) : TransferAutoCategorizer {
     private val categorizationMutex = Mutex()
 
-    override suspend fun categorizeTransferIds(transferIds: List<String>) {
+    override suspend fun categorizeTransferIds(transferIds: List<String>) =
+        categorizeTransferIdsInternal(transferIds, ingestionRunId = null)
+
+    override suspend fun categorizeTransferIds(transferIds: List<String>, ingestionRunId: String) =
+        categorizeTransferIdsInternal(transferIds, ingestionRunId)
+
+    private suspend fun categorizeTransferIdsInternal(
+        transferIds: List<String>,
+        ingestionRunId: String?,
+    ) {
         categorizationMutex.withLock {
             val context = loadClassificationContext()
             val automaticTransferIds = context.automaticInternalTransferIds()
@@ -69,7 +91,9 @@ class AutoCategorizer @Inject constructor(
             categorize(
                 candidates = context.candidates.filter { it.transfer.id in targetIds },
                 internalTransferIds = context.internalTransferCounterparts.keys,
-                existingAnnotations = context.annotations,
+                ingestionRunId = ingestionRunId,
+                trigger = ClassificationTrigger.INGESTION,
+                ruleSetContentById = context.ruleSetContentById,
             )
         }
     }
@@ -88,33 +112,39 @@ class AutoCategorizer @Inject constructor(
         categorize(
             candidates = context.candidates.filter { it.transfer.id in targetIds },
             internalTransferIds = context.internalTransferCounterparts.keys,
-            existingAnnotations = context.annotations,
+            ingestionRunId = null,
+            trigger = ClassificationTrigger.INTERNAL_BACKFILL,
+            ruleSetContentById = context.ruleSetContentById,
         )
         true
     }
 
-    suspend fun applyToExistingTransactions(): AutoCategoryApplicationResult =
+    suspend fun applyToExistingTransactions(
+        trigger: ClassificationTrigger = ClassificationTrigger.BULK_REAPPLY,
+    ): AutoCategoryApplicationResult =
         categorizationMutex.withLock {
             val context = loadClassificationContext()
             categorize(
                 candidates = context.candidates,
                 internalTransferIds = context.internalTransferCounterparts.keys,
-                existingAnnotations = context.annotations,
+                ingestionRunId = null,
+                trigger = trigger,
+                ruleSetContentById = context.ruleSetContentById,
             )
         }
 
     suspend fun resumeAutomaticCategorization(transferId: String) {
-        val existing = annotationDao.getByTransferIds(listOf(transferId)).singleOrNull()
-        if (existing != null) {
-            annotationDao.upsert(
-                existing.copy(
-                    categoryId = null,
-                    categoryAssignment = AssignmentSource.AUTO,
-                    manualOverride = false,
-                ),
+        categorizationMutex.withLock {
+            annotationDao.resumeAutomaticClassification(transferId)
+            val context = loadClassificationContext()
+            categorize(
+                candidates = context.candidates.filter { it.transfer.id == transferId },
+                internalTransferIds = context.internalTransferCounterparts.keys,
+                ingestionRunId = null,
+                trigger = ClassificationTrigger.RESUME,
+                ruleSetContentById = context.ruleSetContentById,
             )
         }
-        categorizeTransferIds(listOf(transferId))
     }
 
     private suspend fun loadClassificationContext(): ClassificationContext {
@@ -128,13 +158,24 @@ class AutoCategorizer @Inject constructor(
         } else {
             emptyMap()
         }
-        return ClassificationContext(candidates, annotations, counterparts, categoryAvailable)
+        val ruleSetContentById = ruleSetDao?.getAll()
+            .orEmpty()
+            .associate { it.id to it.contentSha256 }
+        return ClassificationContext(
+            candidates,
+            annotations,
+            counterparts,
+            categoryAvailable,
+            ruleSetContentById,
+        )
     }
 
     private suspend fun categorize(
         candidates: List<TransferClassificationCandidate>,
         internalTransferIds: Set<String>,
-        existingAnnotations: Map<String, TransferAnnotation>,
+        ingestionRunId: String?,
+        trigger: ClassificationTrigger,
+        ruleSetContentById: Map<String, String>,
     ): AutoCategoryApplicationResult {
         if (candidates.isEmpty()) {
             return AutoCategoryApplicationResult(
@@ -149,23 +190,16 @@ class AutoCategorizer @Inject constructor(
 
         candidates.forEach { candidate ->
             val transfer = candidate.transfer
-            val existing = existingAnnotations[transfer.id]
-            if (existing?.manualOverride == true) {
-                preservedManualOverrideCount += 1
-                return@forEach
-            }
-
             val isInternalTransfer = transfer.id in internalTransferIds
             val decision = if (isInternalTransfer) null else rules.classificationDecision(candidate)
-            if (decision is ClassificationDecision.Suggest || decision is ClassificationDecision.Abstain) {
-                return@forEach
-            }
             val match = decision as? ClassificationDecision.AutoApply
-            if (!isInternalTransfer && match == null && existing == null) return@forEach
-            if (isInternalTransfer || match != null) matchedTransferCount += 1
-
-            annotationDao.upsert(
-                TransferAnnotation(
+            val outcome = when {
+                decision is ClassificationDecision.Abstain -> ClassificationOutcome.ABSTAINED
+                isInternalTransfer || match != null -> ClassificationOutcome.AUTO_APPLIED
+                else -> ClassificationOutcome.NO_MATCH
+            }
+            val writeResult = annotationDao.applyAutomaticDecision(
+                AutomaticClassificationDecision(
                     transferId = transfer.id,
                     extensionId = transfer.extensionId,
                     categoryId = if (isInternalTransfer) {
@@ -173,23 +207,29 @@ class AutoCategorizer @Inject constructor(
                     } else {
                         match?.evaluation?.ruleWithTags?.rule?.categoryId
                     },
-                    note = existing?.note.orEmpty(),
-                    categoryAssignment = AssignmentSource.AUTO,
-                    manualOverride = false,
-                    autoRuleId = match?.evaluation?.ruleWithTags?.rule?.id,
-                    autoRuleSetId = match?.evaluation?.ruleWithTags?.rule?.ruleSetId,
-                    autoMatchScore = match?.evaluation?.score,
-                    classifierVersion = match?.let { CLASSIFIER_VERSION },
+                    tagIds = if (isInternalTransfer || outcome != ClassificationOutcome.AUTO_APPLIED) {
+                        emptySet()
+                    } else {
+                        match?.evaluation?.ruleWithTags?.tags?.mapTo(mutableSetOf()) { it.id }.orEmpty()
+                    },
+                    runId = ingestionRunId,
+                    trigger = trigger,
+                    outcome = outcome,
+                    ruleId = match?.evaluation?.ruleWithTags?.rule?.id,
+                    ruleSetId = match?.evaluation?.ruleWithTags?.rule?.ruleSetId,
+                    ruleContentSha256 = match?.evaluation?.ruleWithTags?.contentSha256(),
+                    ruleSetContentSha256 = match?.evaluation?.ruleWithTags?.rule?.ruleSetId
+                        ?.let(ruleSetContentById::get),
+                    matchScore = match?.evaluation?.score,
+                    classifierVersion = CLASSIFIER_VERSION,
                 ),
             )
-            annotationDao.replaceAutoTags(
-                transferId = transfer.id,
-                tagIds = if (isInternalTransfer) {
-                    emptySet()
-                } else {
-                    match?.evaluation?.ruleWithTags?.tags?.mapTo(mutableSetOf()) { it.id }.orEmpty()
-                },
-            )
+            when (writeResult) {
+                AutomaticClassificationWriteResult.APPLIED -> matchedTransferCount += 1
+                AutomaticClassificationWriteResult.PRESERVED_MANUAL ->
+                    preservedManualOverrideCount += 1
+                AutomaticClassificationWriteResult.RECORDED_ONLY -> Unit
+            }
         }
         return AutoCategoryApplicationResult(
             processedTransferCount = candidates.size,
@@ -203,6 +243,7 @@ class AutoCategorizer @Inject constructor(
         val annotations: Map<String, TransferAnnotation>,
         val internalTransferCounterparts: Map<String, String>,
         val internalTransferCategoryAvailable: Boolean,
+        val ruleSetContentById: Map<String, String>,
     )
 
     private fun ClassificationContext.automaticInternalTransferIds(): Set<String> =
@@ -332,14 +373,12 @@ internal fun List<AutoCategoryRuleWithTags>.classificationDecision(
     }
     return when (winning.ruleWithTags.rule.action) {
         AutoCategoryRuleAction.AUTO_APPLY -> ClassificationDecision.AutoApply(winning)
-        AutoCategoryRuleAction.SUGGEST -> ClassificationDecision.Suggest(winning)
         AutoCategoryRuleAction.ABSTAIN -> ClassificationDecision.Abstain
     }
 }
 
 internal sealed interface ClassificationDecision {
     data class AutoApply(val evaluation: RuleEvaluation) : ClassificationDecision
-    data class Suggest(val evaluation: RuleEvaluation) : ClassificationDecision
     data object Abstain : ClassificationDecision
 }
 
@@ -441,6 +480,14 @@ private fun AutoCategoryRuleCondition.matches(candidate: TransferClassificationC
 private fun TransferClassificationCandidate.facts(field: AutoCategoryRuleConditionField): List<String> = when (field) {
     AutoCategoryRuleConditionField.LEGACY_ANY_TEXT ->
         listOf(transfer.description, transfer.memo, transfer.type.orEmpty())
+    AutoCategoryRuleConditionField.SEARCHABLE_TEXT -> listOf(
+        transfer.description,
+        transfer.memo,
+        transfer.type.orEmpty(),
+        transfer.merchantName.orEmpty(),
+        transfer.counterpartyName.orEmpty(),
+        transfer.purpose.orEmpty(),
+    )
     AutoCategoryRuleConditionField.DESCRIPTION -> listOf(transfer.description)
     AutoCategoryRuleConditionField.MEMO -> listOf(transfer.memo)
     AutoCategoryRuleConditionField.TYPE -> listOf(transfer.type.orEmpty())
@@ -469,6 +516,7 @@ private fun evidenceScore(
         AutoCategoryRuleConditionMatchMode.TOKEN -> 80
         AutoCategoryRuleConditionMatchMode.CONTAINS -> 70
     }
+    AutoCategoryRuleConditionField.SEARCHABLE_TEXT,
     AutoCategoryRuleConditionField.DESCRIPTION,
     AutoCategoryRuleConditionField.MEMO,
     AutoCategoryRuleConditionField.TYPE,
@@ -560,6 +608,41 @@ private fun tw.kevinzhang.core.data.model.AutoCategoryRule.originScore(): Int = 
     AutoCategoryRuleOrigin.USER_CONFIRMED -> 30
     AutoCategoryRuleOrigin.PRIVATE_LEARNED -> 10
     else -> 0
+}
+
+/** Immutable evidence for the exact rule, conditions, and tags evaluated at decision time. */
+private fun AutoCategoryRuleWithTags.contentSha256(): String {
+    val canonicalParts = buildList {
+        val value = rule
+        add(value.id)
+        add(value.name)
+        add(value.descriptionContains.orEmpty())
+        add(value.direction.name)
+        add(value.minAbsoluteAmount?.toString().orEmpty())
+        add(value.maxAbsoluteAmount?.toString().orEmpty())
+        add(value.accountId.orEmpty())
+        add(value.categoryId.orEmpty())
+        add(value.enabled.toString())
+        add(value.priority.toString())
+        add(value.descriptionMatchMode.name)
+        add(value.isDefault.toString())
+        add(value.ruleSetId.orEmpty())
+        add(value.extensionId.orEmpty())
+        add(value.accountKind?.name.orEmpty())
+        add(value.origin.name)
+        add(value.action.name)
+        conditions.sortedBy { it.position }.forEach { condition ->
+            add(condition.position.toString())
+            add(condition.conditionGroup.name)
+            add(condition.field.name)
+            add(condition.matchMode.name)
+            add(condition.pattern)
+        }
+        tags.sortedBy { it.id }.forEach { tag -> add(tag.id) }
+    }.joinToString("\u001f") { value -> "${value.length}:$value" }
+    return MessageDigest.getInstance("SHA-256")
+        .digest(canonicalParts.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 }
 
 private const val MIN_CATEGORY_MARGIN = 20

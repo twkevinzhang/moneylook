@@ -8,6 +8,12 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.Transfer
+import tw.kevinzhang.core.data.model.IngestionRun
+import tw.kevinzhang.core.data.model.TransferObservation
+import tw.kevinzhang.core.data.model.TransferIngestionEvent
+import tw.kevinzhang.core.data.model.IngestionClassificationStatus
+import tw.kevinzhang.core.data.model.IngestionStatus
+import java.util.UUID
 
 /**
  * Atomically replaces the account snapshot while preserving transaction history outside ranges
@@ -15,6 +21,130 @@ import tw.kevinzhang.core.data.model.Transfer
  */
 @Dao
 abstract class SyncResultDao : TransferSyncStore {
+    /** Snapshot mutation and its append-only import evidence share the Room transaction. */
+    @Transaction
+    override suspend fun replaceSnapshot(
+        extensionId: String,
+        accounts: List<Account>,
+        transfers: List<Transfer>,
+        refreshes: List<AccountTransferRefresh>,
+        cardInstruments: List<CreditCardInstrument>,
+        replaceCardAccountIds: Set<String>,
+        legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
+        replaceKinds: Set<AssetKind>?,
+        ingestionContext: IngestionContext,
+    ) {
+        require(ingestionContext.transferFingerprints.keys.containsAll(transfers.map(Transfer::id))) {
+            "every transfer requires keyed provenance fingerprints"
+        }
+        val previousTransfers = if (transfers.isEmpty()) {
+            emptyMap()
+        } else {
+            findTransfersByIds(transfers.map(Transfer::id)).associateBy(Transfer::id)
+        }
+        replaceSnapshot(
+            extensionId = extensionId,
+            accounts = accounts,
+            transfers = transfers,
+            refreshes = refreshes,
+            cardInstruments = cardInstruments,
+            replaceCardAccountIds = replaceCardAccountIds,
+            legacyIdentityByAccountId = legacyIdentityByAccountId,
+            replaceKinds = replaceKinds,
+        )
+        insertIngestionRun(
+            IngestionRun(
+                id = ingestionContext.runId,
+                startedAt = ingestionContext.startedAt,
+                completedAt = ingestionContext.completedAt,
+                extensionId = extensionId,
+                extensionVersion = ingestionContext.extensionVersion,
+                artifactRevision = ingestionContext.artifactRevision,
+                artifactSha256 = ingestionContext.artifactSha256,
+                trigger = ingestionContext.trigger,
+                status = ingestionContext.status,
+                classificationStatus = ingestionContext.classificationStatus,
+                classificationCompletedAt = null,
+                accountCount = accounts.size,
+                transferCount = transfers.size,
+                sourceFingerprint = ingestionContext.sourceFingerprint,
+                fingerprintKeyVersion = ingestionContext.fingerprintKeyVersion,
+            ),
+        )
+        if (transfers.isNotEmpty()) {
+            insertIngestionEvents(
+                transfers.map { transfer ->
+                    val fingerprints = ingestionContext.transferFingerprints.getValue(transfer.id)
+                    val previous = previousTransfers[transfer.id]
+                    TransferIngestionEvent(
+                        id = UUID.randomUUID().toString(),
+                        runId = ingestionContext.runId,
+                        occurredAt = ingestionContext.completedAt,
+                        transferId = transfer.id,
+                        extensionId = transfer.extensionId,
+                        observation = when {
+                            previous == null -> TransferObservation.INSERTED
+                            previous.copy(accountId = transfer.accountId) == transfer ->
+                                TransferObservation.UNCHANGED
+                            else -> TransferObservation.UPDATED
+                        },
+                        sourceFingerprint = fingerprints.sourceFingerprint,
+                        payloadFingerprint = fingerprints.payloadFingerprint,
+                        fingerprintKeyVersion = ingestionContext.fingerprintKeyVersion,
+                        hasDescription = transfer.description.isNotBlank(),
+                        hasMemo = transfer.memo.isNotBlank(),
+                        hasType = !transfer.type.isNullOrBlank(),
+                        hasMerchantName = !transfer.merchantName.isNullOrBlank(),
+                        hasMerchantCategoryCode = !transfer.merchantCategoryCode.isNullOrBlank(),
+                        hasCounterpartyName = !transfer.counterpartyName.isNullOrBlank(),
+                        hasPurpose = !transfer.purpose.isNullOrBlank(),
+                    )
+                },
+            )
+        }
+    }
+
+    @Transaction
+    override suspend fun recordFailedIngestion(
+        extensionId: String,
+        ingestionContext: IngestionContext,
+        accountCount: Int,
+        transferCount: Int,
+    ) {
+        insertIngestionRun(
+            IngestionRun(
+                id = ingestionContext.runId,
+                startedAt = ingestionContext.startedAt,
+                completedAt = System.currentTimeMillis(),
+                extensionId = extensionId,
+                extensionVersion = ingestionContext.extensionVersion,
+                artifactRevision = ingestionContext.artifactRevision,
+                artifactSha256 = ingestionContext.artifactSha256,
+                trigger = ingestionContext.trigger,
+                status = IngestionStatus.FAILED,
+                classificationStatus = IngestionClassificationStatus.FAILED,
+                classificationCompletedAt = System.currentTimeMillis(),
+                accountCount = accountCount,
+                transferCount = transferCount,
+                sourceFingerprint = ingestionContext.sourceFingerprint,
+                fingerprintKeyVersion = ingestionContext.fingerprintKeyVersion,
+            ),
+        )
+    }
+
+    @Query(
+        """
+        UPDATE ingestion_runs
+        SET classificationStatus = :status, classificationCompletedAt = :completedAt
+        WHERE id = :runId
+        """,
+    )
+    override abstract suspend fun updateClassificationStatus(
+        runId: String,
+        status: IngestionClassificationStatus,
+        completedAt: Long?,
+    )
+
     @Transaction
     override suspend fun replaceSnapshot(
         extensionId: String,
@@ -115,6 +245,15 @@ abstract class SyncResultDao : TransferSyncStore {
 
     @Upsert
     protected abstract suspend fun upsertCardInstruments(instruments: List<CreditCardInstrument>)
+
+    @Query("SELECT * FROM transfers WHERE id IN (:ids)")
+    protected abstract suspend fun findTransfersByIds(ids: List<String>): List<Transfer>
+
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertIngestionRun(run: IngestionRun)
+
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertIngestionEvents(events: List<TransferIngestionEvent>)
 
     @Query("DELETE FROM accounts WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteAccountsByExtensionId(extensionId: String)

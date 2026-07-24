@@ -122,19 +122,21 @@ class MarketplaceViewModel @Inject constructor(
                 check(existing == null || existing.id == compositeId) {
                     "此 Extension 已由其他來源安裝"
                 }
-                val syncTriggerCachePath = marketplaceRepository.downloadSyncTriggerScript(repoUrl, entry.path, compositeId)
+                val artifact = marketplaceRepository.downloadSyncTriggerScript(repoUrl, entry.path, compositeId)
                 val installed = InstalledExtension(
                     id = compositeId,
                     manifestId = manifest.id,
                     name = manifest.name,
                     version = manifest.version,
                     repoUrl = repoUrl,
-                    syncTriggerCachePath = syncTriggerCachePath,
+                    syncTriggerCachePath = artifact.path,
                     iconUrl = manifest.iconUrl,
                     suggestedScheduleCron = manifest.schedule?.suggestedCron,
                     suggestedScheduleTimezone = manifest.schedule?.suggestedTimezone ?: "Asia/Taipei",
                     suggestedScheduleEnabled = manifest.schedule != null,
                     credentialFieldsJson = gson.toJson(manifest.credential.fields),
+                    artifactRevision = artifact.immutableRevision,
+                    artifactSha256 = artifact.sha256,
                 )
                 check(installedExtensionDao.upsertUnlessInstalledFromOtherSource(installed)) {
                     "此 Extension 已由其他來源安裝"

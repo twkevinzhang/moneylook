@@ -30,6 +30,8 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.ClassificationOutcome
+import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -62,6 +64,7 @@ class AutoCategorizerTest {
             annotationDao = database.transferAnnotationDao(),
             ruleDao = database.autoCategoryRuleDao(),
             categoryDao = database.categoryDao(),
+            ruleSetDao = database.autoCategoryRuleSetDao(),
         )
     }
 
@@ -138,6 +141,53 @@ class AutoCategorizerTest {
             assertFalse(detail.tags.isNotEmpty())
         }
         Unit
+    }
+
+    @Test
+    fun `ingestion and manual decisions append traceable immutable events`() = runBlocking {
+        val food = Category("food", "餐飲", "#2E7D32")
+        database.categoryDao().upsert(food)
+        database.autoCategoryRuleDao().upsertWithTags(
+            AutoCategoryRule(
+                id = "coffee",
+                name = "咖啡",
+                descriptionContains = "coffee",
+                direction = AutoCategoryRuleDirection.EXPENSE,
+                categoryId = food.id,
+            ),
+            emptySet(),
+        )
+        val transfer = transfer("traceable", "Coffee", -100.0)
+        database.transferDao().upsertAll(listOf(transfer))
+
+        categorizer.categorizeTransferIds(listOf(transfer.id), "run-1")
+
+        val automatic = database.ingestionProvenanceDao()
+            .getTransferAnnotationEvents(transfer.id)
+            .single()
+        assertEquals("run-1", automatic.runId)
+        assertEquals(ClassificationTrigger.INGESTION, automatic.trigger)
+        assertEquals(ClassificationOutcome.AUTO_APPLIED, automatic.outcome)
+        assertEquals("coffee", automatic.ruleId)
+        assertEquals(64, automatic.ruleContentSha256?.length)
+
+        database.transferAnnotationDao().saveManualAnnotation(
+            TransferAnnotation(
+                transferId = transfer.id,
+                extensionId = transfer.extensionId,
+                categoryId = null,
+                categoryAssignment = AssignmentSource.MANUAL,
+            ),
+            emptySet(),
+        )
+
+        val manual = database.ingestionProvenanceDao()
+            .getTransferAnnotationEvents(transfer.id)
+            .first { it.trigger == ClassificationTrigger.MANUAL_EDIT }
+        assertEquals(ClassificationTrigger.MANUAL_EDIT, manual.trigger)
+        assertEquals(ClassificationOutcome.MANUAL_CLEARED, manual.outcome)
+        assertEquals(food.id, manual.previousCategoryId)
+        assertNull(manual.newCategoryId)
     }
 
     @Test
@@ -328,6 +378,45 @@ class AutoCategorizerTest {
     }
 
     @Test
+    fun `searchable text matches each textual fact without crossing field boundaries`() {
+        val food = Category("food", "餐飲", "#2E7D32")
+        val rule = v2Rule(
+            id = "searchable-food",
+            category = food,
+            conditions = listOf(
+                condition(
+                    0,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.SEARCHABLE_TEXT,
+                    AutoCategoryRuleConditionMatchMode.TOKEN,
+                    "餐飲 消費",
+                ),
+            ),
+        )
+        val candidate = classificationCandidate(
+            transfer(
+                id = "searchable",
+                description = "無關文字",
+                amount = -80.0,
+                merchantName = "公開商家",
+                purpose = "餐飲，消費",
+            ),
+        )
+
+        assertTrue(listOf(rule).classificationDecision(candidate) is ClassificationDecision.AutoApply)
+        assertNull(
+            listOf(rule).classificationDecision(
+                candidate.copy(
+                    transfer = candidate.transfer.copy(
+                        description = "餐飲",
+                        purpose = "消費",
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `v2 matcher abstains on cross category evidence ties and insufficient margins including legacy rules`() {
         val food = Category("food", "餐飲", "#2E7D32")
         val transport = Category("transport", "交通", "#1565C0")
@@ -401,18 +490,18 @@ class AutoCategorizerTest {
             transfer("scoped", "薪資", 100.0, extensionId = "target-extension"),
             accountKind = AssetKind.CREDIT_CARD,
         )
-        val suggest = v2Rule(
-            id = "suggest",
+        val automatic = v2Rule(
+            id = "automatic",
             category = income,
-            action = AutoCategoryRuleAction.SUGGEST,
+            action = AutoCategoryRuleAction.AUTO_APPLY,
             direction = AutoCategoryRuleDirection.INCOME,
             accountKind = AssetKind.CREDIT_CARD,
             extensionId = "target-extension",
             conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "薪資")),
         )
-        assertTrue(listOf(suggest).classificationDecision(candidate) is ClassificationDecision.Suggest)
-        assertNull(listOf(suggest).classificationDecision(candidate.copy(accountKind = AssetKind.DEPOSIT)))
-        assertNull(listOf(suggest).classificationDecision(candidate.copy(transfer = candidate.transfer.copy(extensionId = "other-extension"))))
+        assertTrue(listOf(automatic).classificationDecision(candidate) is ClassificationDecision.AutoApply)
+        assertNull(listOf(automatic).classificationDecision(candidate.copy(accountKind = AssetKind.DEPOSIT)))
+        assertNull(listOf(automatic).classificationDecision(candidate.copy(transfer = candidate.transfer.copy(extensionId = "other-extension"))))
 
         val wrongKind = v2Rule(
             id = "wrong-kind",
@@ -443,17 +532,17 @@ class AutoCategorizerTest {
     }
 
     @Test
-    fun `suggestion leaves an existing automatic annotation untouched`() = runBlocking {
+    fun `automatic rule replaces an existing automatic annotation`() = runBlocking {
         val income = Category("income", "收入", "#1565C0", kind = CategoryKind.INCOME)
         val existing = Category("existing", "既有", "#2E7D32", kind = CategoryKind.INCOME)
         database.categoryDao().upsert(income)
         database.categoryDao().upsert(existing)
         val rule = AutoCategoryRule(
-            id = "salary-suggestion",
-            name = "薪資建議",
+            id = "salary-automatic",
+            name = "薪資分類",
             direction = AutoCategoryRuleDirection.INCOME,
             categoryId = income.id,
-            action = AutoCategoryRuleAction.SUGGEST,
+            action = AutoCategoryRuleAction.AUTO_APPLY,
         )
         database.autoCategoryRuleDao().upsertWithDetails(
             rule,
@@ -480,10 +569,7 @@ class AutoCategorizerTest {
 
         categorizer.applyToExistingTransactions()
 
-        assertEquals(
-            annotation,
-            database.transferAnnotationDao().observeDetail(transfer.id).first()!!.annotation,
-        )
+        assertEquals(income.id, database.transferAnnotationDao().observeDetail(transfer.id).first()!!.annotation?.categoryId)
     }
 
     @Test

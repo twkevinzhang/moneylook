@@ -22,6 +22,7 @@ import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.marketplace.MarketplaceRepository
+import tw.kevinzhang.marketplace.DownloadedExtensionArtifact
 import tw.kevinzhang.marketplace.RepoUrlRepository
 import tw.kevinzhang.marketplace.data.ExtensionIndexEntry
 import tw.kevinzhang.marketplace.data.ExtensionManifest
@@ -75,6 +76,23 @@ class MarketplaceViewModelTest {
         assertEquals(1, installedDao.getAll().size)
     }
 
+    @Test
+    fun `successful install persists immutable artifact identity and content addressed path`() =
+        runTest(dispatcher) {
+            val repository = FakeMarketplaceRepository()
+            val installedDao = FakeInstalledExtensionDao()
+            val viewModel = viewModel(repository, installedDao)
+            advanceUntilIdle()
+
+            viewModel.install(REPO_URL, ENTRY)
+            advanceUntilIdle()
+
+            val installed = installedDao.getAll().single()
+            assertEquals("/tmp/artifacts/test-sha256.js", installed.syncTriggerCachePath)
+            assertEquals("test-revision", installed.artifactRevision)
+            assertEquals("test-sha256", installed.artifactSha256)
+        }
+
     private fun viewModel(
         repository: FakeMarketplaceRepository,
         installedDao: FakeInstalledExtensionDao = FakeInstalledExtensionDao(),
@@ -99,10 +117,14 @@ class MarketplaceViewModelTest {
             repoUrl: String,
             path: String,
             extensionId: String,
-        ): String {
+        ): DownloadedExtensionArtifact {
             downloadCount += 1
             downloadFailure?.let { throw it }
-            return "/tmp/sync.js"
+            return DownloadedExtensionArtifact(
+                "/tmp/artifacts/test-sha256.js",
+                "test-revision",
+                "test-sha256",
+            )
         }
     }
 

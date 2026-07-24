@@ -34,6 +34,7 @@ import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.model.CredentialProfile
+import tw.kevinzhang.core.data.model.IngestionTrigger
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.moneylook.schedule.ScheduleStatus
@@ -50,6 +51,7 @@ import javax.inject.Inject
 enum class SyncState { IDLE, SYNCING, SUCCESS, PARTIAL, ERROR }
 
 internal const val PARTIAL_SYNC_MESSAGE = "部分資料同步失敗，已保留上次資料"
+internal const val PERSISTENCE_FAILURE_MESSAGE = "同步資料儲存失敗"
 
 internal fun SyncResult.Success.homeSyncState(): SyncState =
     if (hasPartialSyncFailure) SyncState.PARTIAL else SyncState.SUCCESS
@@ -62,6 +64,24 @@ internal fun persistedSyncState(lastRunStatus: String?): SyncState =
 
 internal fun persistedSyncMessage(lastRunStatus: String?): String? =
     PARTIAL_SYNC_MESSAGE.takeIf { lastRunStatus == "partial" }
+
+internal suspend fun handleSuccessfulSyncPersistence(
+    result: SyncResult.Success,
+    persist: suspend () -> Unit,
+    updateLastRun: suspend (String) -> Unit,
+    updateUi: (SyncState, String?) -> Unit,
+) {
+    try {
+        persist()
+        updateLastRun(result.appLastRunStatus)
+        updateUi(result.homeSyncState(), result.homeSyncMessage())
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        updateLastRun("error")
+        updateUi(SyncState.ERROR, PERSISTENCE_FAILURE_MESSAGE)
+    }
+}
 
 data class ExtensionSyncStatus(
     val extension: InstalledExtension,
@@ -323,14 +343,22 @@ class HomeViewModel @Inject constructor(
         val now = System.currentTimeMillis()
         when (result) {
             is SyncResult.Success -> {
-                syncResultPersister.persist(extension, result)
-                credentialProfileDao.updateLastRun(extension.id, now, result.appLastRunStatus)
-                updateStatus(extension.id) {
-                    it.copy(syncState = result.homeSyncState(), errorMessage = result.homeSyncMessage())
-                }
+                handleSuccessfulSyncPersistence(
+                    result = result,
+                    persist = { syncResultPersister.persist(extension, result) },
+                    updateLastRun = { status ->
+                        credentialProfileDao.updateLastRun(extension.id, now, status)
+                    },
+                    updateUi = { state, message ->
+                    updateStatus(extension.id) {
+                            it.copy(syncState = state, errorMessage = message)
+                        }
+                    }
+                )
             }
             is SyncResult.Error -> {
-                credentialProfileDao.updateLastRun(extension.id, now, "error:${result.message.take(200)}")
+                syncResultPersister.recordFailure(extension, IngestionTrigger.USER_SYNC)
+                credentialProfileDao.updateLastRun(extension.id, now, "error")
                 updateStatus(extension.id) {
                     it.copy(syncState = SyncState.ERROR, errorMessage = result.message)
                 }
