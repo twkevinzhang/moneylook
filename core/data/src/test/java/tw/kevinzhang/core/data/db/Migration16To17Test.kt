@@ -60,7 +60,7 @@ class Migration16To17Test {
     }
 
     @Test
-    fun `migration chain passes the complete Room v18 schema validation`() {
+    fun `migration chain passes the complete Room v19 schema validation`() {
         val context = RuntimeEnvironment.getApplication()
         Room.databaseBuilder(context, MoneylookDatabase::class.java, databaseName)
             .allowMainThreadQueries()
@@ -73,7 +73,7 @@ class Migration16To17Test {
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(databaseName)
-                .callback(object : SupportSQLiteOpenHelper.Callback(18) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(19) {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(
                         db: SupportSQLiteDatabase,
@@ -87,12 +87,12 @@ class Migration16To17Test {
         helper.close()
 
         Room.databaseBuilder(context, MoneylookDatabase::class.java, databaseName)
-            .addMigrations(MIGRATION_16_17, MIGRATION_17_18)
+            .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
             .allowMainThreadQueries()
             .build()
             .also { database ->
                 val migrated = database.openHelper.writableDatabase
-                assertEquals(18, migrated.version)
+                assertEquals(19, migrated.version)
                 assertTrue(tableExists(migrated, "auto_category_rule_sets"))
                 assertTrue(tableExists(migrated, "auto_category_rule_conditions"))
                 database.close()

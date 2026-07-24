@@ -596,3 +596,13 @@ val MIGRATION_17_18 = object : Migration(17, 18) {
         DefaultClassificationSeeder.seedFullPublicCatalogIfEmpty(db)
     }
 }
+
+/**
+ * Adds the v3 public generic collection only to an existing public catalog. This migration has
+ * no DDL: the collection marker makes the additive insert one-time and protects later deletions.
+ */
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        DefaultClassificationSeeder.seedRulesV3ForExistingPublicCatalog(db)
+    }
+}
