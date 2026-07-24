@@ -6,6 +6,7 @@ import com.google.gson.Gson
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -26,6 +27,7 @@ class BrowserWebViewSessionTest {
                 timeoutMs = 1_000,
                 settleMs = 0,
                 userAgent = userAgent,
+                returnAtDocumentStartUrl = null,
             ),
         )
 
@@ -45,6 +47,7 @@ class BrowserWebViewSessionTest {
                 timeoutMs = 1_000,
                 settleMs = 0,
                 userAgent = null,
+                returnAtDocumentStartUrl = null,
             ),
         )
 
@@ -66,6 +69,113 @@ class BrowserWebViewSessionTest {
             "name=%E6%B8%AC%E8%A9%A6&mode=web".toByteArray(StandardCharsets.UTF_8),
             view.postedBody,
         )
+    }
+
+    @Test
+    fun committedNavigationTrackerPreservesTheDocumentUrlBeforeSpaReplacement() {
+        val tracker = BrowserDocumentUrlTracker()
+        val authorize = "https://example.com/oauth/authorize?code=fictional"
+        val committed = "https://example.com/portal?sid=fictional-session-id"
+        val spaRoute = "https://example.com/portal/account/summary"
+
+        tracker.reset()
+        tracker.onPageStarted(authorize)
+        tracker.onPageStarted(committed)
+        tracker.onPageCommitVisible(spaRoute)
+
+        assertTrue(tracker.candidates(spaRoute).contains(committed))
+        assertEquals(committed, tracker.resolve(spaRoute))
+    }
+
+    @Test
+    fun committedNavigationTrackerFallsBackWithoutACommittedHttpDocument() {
+        val tracker = BrowserDocumentUrlTracker()
+        val finalUrl = "https://example.com/account/summary"
+
+        tracker.reset()
+        tracker.onPageStarted("javascript:alert(1)")
+        tracker.onPageCommitVisible("data:text/html,ignored")
+
+        assertEquals(finalUrl, tracker.resolve(finalUrl))
+    }
+
+    @Test
+    fun documentStartSignalAuthenticatesAndPreservesTheImmediateUrl() {
+        val gson = Gson()
+        val token = "fictional-document-token"
+        val committed = "https://example.com/portal?sid=fictional-session-id"
+        val signal = BrowserDocumentStartSignal.message(token, committed, gson)
+        val script = BrowserDocumentStartSignal.script("__fixture_document_signal__", token, gson)
+
+        assertEquals(
+            committed,
+            BrowserDocumentStartSignal.parse(signal, token, "https://example.com", gson),
+        )
+        assertEquals(
+            null,
+            BrowserDocumentStartSignal.parse(signal, "wrong-token", "https://example.com", gson),
+        )
+        assertEquals(
+            null,
+            BrowserDocumentStartSignal.parse(signal, token, "https://other.example.com", gson),
+        )
+        assertTrue(script.contains("window.location.href"))
+        assertTrue(script.contains(".postMessage("))
+        assertTrue(!script.contains("addJavascriptInterface"))
+    }
+
+    @Test
+    fun targetNavigationInterceptorCancelsOnlyTheMatchingMainFrame() {
+        val intercepted = mutableListOf<String>()
+        val interceptor = BrowserTargetNavigationInterceptor(intercepted::add)
+        val target = "https://example.com/portal?sid="
+        val candidate = "https://example.com/portal?sid=fictional-session-id"
+
+        interceptor.arm(target)
+
+        assertTrue(!interceptor.shouldIntercept(candidate, isForMainFrame = false))
+        assertTrue(!interceptor.shouldIntercept("https://example.com/portal", isForMainFrame = true))
+        assertTrue(interceptor.shouldIntercept(candidate, isForMainFrame = true))
+        assertEquals(listOf(candidate), intercepted)
+        assertTrue(!interceptor.shouldIntercept(candidate, isForMainFrame = true))
+
+        interceptor.clear()
+        assertTrue(!interceptor.shouldIntercept(candidate, isForMainFrame = true))
+    }
+
+    @Test
+    fun targetedNavigationWaitsForTheTargetInsteadOfCompletingOnAnIntermediatePageFinish() {
+        assertTrue(navigationMayCompleteFromPageFinished(returnAtDocumentStartUrl = null))
+        assertTrue(
+            !navigationMayCompleteFromPageFinished(
+                returnAtDocumentStartUrl = "https://example.com/portal?sid=",
+            ),
+        )
+    }
+
+    @Test
+    fun resourceUrlTrackerKeepsOnlyABoundedHttpHistory() {
+        val tracker = BrowserResourceUrlTracker()
+        tracker.record("javascript:alert(1)")
+        repeat(300) { index ->
+            tracker.record("https://example.com/resource/$index")
+        }
+
+        val urls = tracker.snapshot()
+        assertEquals(256, urls.size)
+        assertEquals("https://example.com/resource/44", urls.first())
+        assertEquals("https://example.com/resource/299", urls.last())
+    }
+
+    @Test
+    fun documentStartRouteMatchRequiresDeclaredNonEmptyQueryKeys() {
+        val target = "https://example.com/portal?sid="
+
+        assertTrue(sameDocumentRoute("https://example.com/portal?sid=fictional#route", target))
+        assertTrue(!sameDocumentRoute("https://example.com/portal", target))
+        assertTrue(!sameDocumentRoute("https://example.com/portal?sid=", target))
+        assertTrue(!sameDocumentRoute("https://example.com/portal/child?sid=fictional", target))
+        assertTrue(!sameDocumentRoute("https://other.example.com/portal?sid=fictional", target))
     }
 
     @Test

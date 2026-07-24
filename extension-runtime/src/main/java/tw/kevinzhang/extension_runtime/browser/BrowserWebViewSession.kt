@@ -40,10 +40,18 @@ internal class BrowserWebViewSession(
     private var openEvents: Channel<OpenEvent>? = null
     private var currentUrl: String? = null
     private var generation: Long = 0
+    private val documentUrlTracker = BrowserDocumentUrlTracker()
+    private val resourceUrlTracker = BrowserResourceUrlTracker()
+    private val documentStartToken = UUID.randomUUID().toString()
+    private var documentStartSignalInstalled = false
+    private val targetNavigationInterceptor = BrowserTargetNavigationInterceptor { url ->
+        openEvents?.trySend(OpenEvent.TargetIntercepted(url))
+    }
 
     suspend fun open(request: BrowserOpenRequest): BrowserOpenResponse = navigate(
         timeoutMs = request.timeoutMs,
         settleMs = request.settleMs,
+        returnAtDocumentStartUrl = request.returnAtDocumentStartUrl,
     ) { view ->
         startOpenNavigation(view, request)
     }
@@ -51,6 +59,7 @@ internal class BrowserWebViewSession(
     suspend fun post(request: BrowserFormPostRequest): BrowserOpenResponse = navigate(
         timeoutMs = request.timeoutMs,
         settleMs = request.settleMs,
+        returnAtDocumentStartUrl = null,
     ) { view ->
         startFormPostNavigation(view, request)
     }
@@ -58,6 +67,7 @@ internal class BrowserWebViewSession(
     private suspend fun navigate(
         timeoutMs: Long,
         settleMs: Long,
+        returnAtDocumentStartUrl: String?,
         start: (WebView) -> Unit,
     ): BrowserOpenResponse = withContext(Dispatchers.Main.immediate) {
         when (state) {
@@ -70,13 +80,23 @@ internal class BrowserWebViewSession(
         val events = Channel<OpenEvent>(Channel.CONFLATED)
         openEvents = events
         state = State.OPENING
+        targetNavigationInterceptor.arm(returnAtDocumentStartUrl)
         try {
             val finalUrl = withTimeout<String>(timeoutMs) {
+                documentUrlTracker.reset()
+                resourceUrlTracker.reset()
                 start(view)
                 while (true) {
                     when (val event = events.receive()) {
                         is OpenEvent.Failed -> throw event.error
+                        is OpenEvent.TargetIntercepted -> {
+                            documentUrlTracker.onNavigationCandidate(event.url)
+                            return@withTimeout event.url
+                        }
                         is OpenEvent.Finished -> {
+                            if (!navigationMayCompleteFromPageFinished(returnAtDocumentStartUrl)) {
+                                continue
+                            }
                             if (settleMs > 0) delay(settleMs)
                             if (state != State.OPENING) {
                                 if (state == State.CLOSED) {
@@ -111,9 +131,16 @@ internal class BrowserWebViewSession(
             if (parsed.scheme !in SUPPORTED_SCHEMES) {
                 throw SafeBrowserException("BROWSER_NAVIGATION", "browser returned an unsupported URL")
             }
+            val documentUrl = documentUrlTracker.resolve(finalUrl)
             currentUrl = finalUrl
             state = State.READY
-            BrowserOpenResponse(url = finalUrl, origin = parsed.origin())
+            BrowserOpenResponse(
+                url = finalUrl,
+                origin = parsed.origin(),
+                documentUrl = documentUrl,
+                documentUrls = documentUrlTracker.candidates(finalUrl),
+                requestUrls = resourceUrlTracker.snapshot(),
+            )
         } catch (e: CancellationException) {
             view.stopLoading()
             if (e is TimeoutCancellationException) {
@@ -130,6 +157,7 @@ internal class BrowserWebViewSession(
         } finally {
             if (openEvents === events) openEvents = null
             events.cancel()
+            targetNavigationInterceptor.clear()
         }
     }
 
@@ -203,8 +231,11 @@ internal class BrowserWebViewSession(
         val view = webView
         webView = null
         currentUrl = null
+        documentUrlTracker.reset()
+        resourceUrlTracker.reset()
         if (view != null) {
             view.stopLoading()
+            removeDocumentStartSignal(view)
             view.webViewClient = WebViewClient()
             view.destroy()
         }
@@ -236,6 +267,41 @@ internal class BrowserWebViewSession(
                 setSupportMultipleWindows(false)
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             }
+            if (
+                WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
+                WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+            ) {
+                WebViewCompat.addWebMessageListener(
+                    view,
+                    BrowserDocumentStartSignal.OBJECT_NAME,
+                    setOf("*"),
+                ) { _, message, sourceOrigin, isMainFrame, _ ->
+                    if (isMainFrame) {
+                        message.data
+                            ?.let {
+                                BrowserDocumentStartSignal.parse(
+                                    it,
+                                    documentStartToken,
+                                    sourceOrigin.toString(),
+                                    gson,
+                                )
+                            }
+                            ?.let { url ->
+                                documentUrlTracker.onNavigationCandidate(url)
+                            }
+                    }
+                }
+                WebViewCompat.addDocumentStartJavaScript(
+                    view,
+                    BrowserDocumentStartSignal.script(
+                        BrowserDocumentStartSignal.OBJECT_NAME,
+                        documentStartToken,
+                        gson,
+                    ),
+                    setOf("*"),
+                )
+                documentStartSignalInstalled = true
+            }
             view.webViewClient = SessionWebViewClient()
         } catch (e: Exception) {
             view.destroy()
@@ -245,6 +311,14 @@ internal class BrowserWebViewSession(
         profileName = name
         webView = view
         return view
+    }
+
+    private fun removeDocumentStartSignal(view: WebView) {
+        if (!documentStartSignalInstalled) return
+        documentStartSignalInstalled = false
+        runCatching {
+            WebViewCompat.removeWebMessageListener(view, BrowserDocumentStartSignal.OBJECT_NAME)
+        }
     }
 
     private suspend fun awaitPayloadMetadata(
@@ -343,22 +417,53 @@ internal class BrowserWebViewSession(
     }
 
     private inner class SessionWebViewClient : WebViewClient() {
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-            request.url.scheme !in SUPPORTED_SCHEMES
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val url = request.url.toString()
+            if (request.isForMainFrame) {
+                documentUrlTracker.onNavigationCandidate(url)
+            }
+            if (targetNavigationInterceptor.shouldIntercept(url, request.isForMainFrame)) return true
+            return request.url.scheme !in SUPPORTED_SCHEMES
+        }
 
         @Deprecated("Deprecated in Android")
-        override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
-            url.toHttpUrlOrNull() == null
+        override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+            documentUrlTracker.onNavigationCandidate(url)
+            if (targetNavigationInterceptor.shouldIntercept(url, isForMainFrame = true)) return true
+            return url.toHttpUrlOrNull() == null
+        }
 
         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
             generation += 1
             currentUrl = url
+            documentUrlTracker.onPageStarted(url)
+            if (targetNavigationInterceptor.shouldIntercept(url, isForMainFrame = true)) {
+                view.stopLoading()
+                return
+            }
             if (state == State.REQUESTING) state = State.FAILED
+        }
+
+        override fun onPageCommitVisible(view: WebView, url: String) {
+            documentUrlTracker.onPageCommitVisible(url)
         }
 
         override fun onPageFinished(view: WebView, url: String) {
             currentUrl = url
+            documentUrlTracker.onNavigationCandidate(url)
             if (state == State.OPENING) openEvents?.trySend(OpenEvent.Finished(generation))
+        }
+
+        override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+            documentUrlTracker.onNavigationCandidate(url)
+        }
+
+        override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest,
+        ): android.webkit.WebResourceResponse? {
+            resourceUrlTracker.record(request.url.toString())
+            return null
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -385,6 +490,7 @@ internal class BrowserWebViewSession(
     }
 
     private sealed interface OpenEvent {
+        data class TargetIntercepted(val url: String) : OpenEvent
         data class Finished(val generation: Long) : OpenEvent
         data class Failed(val error: SafeBrowserException) : OpenEvent
     }
@@ -414,6 +520,159 @@ internal class BrowserWebViewSession(
     }
 }
 
+internal class BrowserDocumentUrlTracker {
+    private var startedUrl: String? = null
+    private var committedUrl: String? = null
+    private val navigationUrls = mutableListOf<String>()
+
+    fun reset() {
+        startedUrl = null
+        committedUrl = null
+        navigationUrls.clear()
+    }
+
+    fun onPageStarted(url: String) {
+        validatedUrlOrNull(url)?.let {
+            startedUrl = it
+            record(it)
+        }
+    }
+
+    fun onPageCommitVisible(url: String) {
+        validatedUrlOrNull(url)?.let {
+            committedUrl = it
+            record(it)
+        }
+    }
+
+    fun onNavigationCandidate(url: String) {
+        validatedUrlOrNull(url)?.let(::record)
+    }
+
+    fun resolve(finalUrl: String): String =
+        startedUrl ?: committedUrl ?: validatedUrlOrNull(finalUrl) ?: finalUrl
+
+    fun candidates(finalUrl: String): List<String> {
+        val final = validatedUrlOrNull(finalUrl)
+        return if (final == null || navigationUrls.lastOrNull() == final) {
+            navigationUrls.toList()
+        } else {
+            navigationUrls.toList() + final
+        }
+    }
+
+    private fun record(url: String) {
+        if (navigationUrls.lastOrNull() == url) return
+        if (navigationUrls.size == MAX_CANDIDATES) navigationUrls.removeAt(0)
+        navigationUrls += url
+    }
+
+    private fun validatedUrlOrNull(value: String): String? {
+        val parsed = value.toHttpUrlOrNull() ?: return null
+        return value.takeIf { parsed.scheme == "http" || parsed.scheme == "https" }
+    }
+
+    private companion object {
+        const val MAX_CANDIDATES = 32
+    }
+}
+
+internal object BrowserDocumentStartSignal {
+    const val OBJECT_NAME = "__moneylook_document_start_signal__"
+
+    fun script(objectName: String, token: String, gson: Gson): String {
+        val objectNameLiteral = gson.toJson(objectName)
+        val tokenLiteral = gson.toJson(token)
+        return """
+            (function() {
+                try {
+                    window[$objectNameLiteral].postMessage(JSON.stringify({
+                        token: $tokenLiteral,
+                        url: String(window.location.href)
+                    }));
+                } catch (_) {}
+            })();
+        """.trimIndent()
+    }
+
+    fun message(token: String, url: String, gson: Gson): String =
+        gson.toJson(mapOf("token" to token, "url" to url))
+
+    fun parse(
+        message: String,
+        expectedToken: String,
+        sourceOrigin: String,
+        gson: Gson,
+    ): String? {
+        if (message.length > MAX_MESSAGE_CHARS) return null
+        val root = try {
+            gson.fromJson(message, JsonObject::class.java)
+        } catch (e: Exception) {
+            return null
+        } ?: return null
+        val token = root.get("token")
+            ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+            ?.asString
+        if (token != expectedToken) return null
+        val url = root.get("url")
+            ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+            ?.asString
+            ?: return null
+        return url.takeIf { sameOrigin(it, sourceOrigin) }
+    }
+
+    private const val MAX_MESSAGE_CHARS = 20_000
+}
+
+internal class BrowserTargetNavigationInterceptor(
+    private val onIntercept: (String) -> Unit,
+) {
+    @Volatile
+    private var expectedUrl: String? = null
+
+    fun arm(expectedUrl: String?) {
+        this.expectedUrl = expectedUrl
+    }
+
+    fun clear() {
+        expectedUrl = null
+    }
+
+    @Synchronized
+    fun shouldIntercept(candidate: String, isForMainFrame: Boolean): Boolean {
+        val expected = expectedUrl ?: return false
+        if (!isForMainFrame || !sameDocumentRoute(candidate, expected)) return false
+        expectedUrl = null
+        onIntercept(candidate)
+        return true
+    }
+}
+
+internal class BrowserResourceUrlTracker {
+    private val urls = mutableListOf<String>()
+
+    @Synchronized
+    fun reset() {
+        urls.clear()
+    }
+
+    @Synchronized
+    fun record(url: String) {
+        val parsed = url.toHttpUrlOrNull() ?: return
+        if (parsed.scheme != "http" && parsed.scheme != "https") return
+        if (urls.lastOrNull() == url) return
+        if (urls.size == MAX_CANDIDATES) urls.removeAt(0)
+        urls += url
+    }
+
+    @Synchronized
+    fun snapshot(): List<String> = urls.toList()
+
+    private companion object {
+        const val MAX_CANDIDATES = 256
+    }
+}
+
 internal fun startOpenNavigation(view: WebView, request: BrowserOpenRequest) {
     request.userAgent?.let { view.settings.userAgentString = it }
     view.loadUrl(request.url)
@@ -421,6 +680,29 @@ internal fun startOpenNavigation(view: WebView, request: BrowserOpenRequest) {
 
 internal fun startFormPostNavigation(view: WebView, request: BrowserFormPostRequest) {
     view.postUrl(request.url, request.body)
+}
+
+internal fun navigationMayCompleteFromPageFinished(returnAtDocumentStartUrl: String?): Boolean =
+    returnAtDocumentStartUrl == null
+
+internal fun sameDocumentRoute(candidate: String, expected: String): Boolean {
+    val candidateUrl = candidate.toHttpUrlOrNull() ?: return false
+    val expectedUrl = expected.toHttpUrlOrNull() ?: return false
+    return candidateUrl.scheme == expectedUrl.scheme &&
+        candidateUrl.host == expectedUrl.host &&
+        candidateUrl.port == expectedUrl.port &&
+        candidateUrl.encodedPath == expectedUrl.encodedPath &&
+        expectedUrl.queryParameterNames.all { name ->
+            !candidateUrl.queryParameter(name).isNullOrEmpty()
+        }
+}
+
+internal fun sameOrigin(candidate: String, expectedOrigin: String): Boolean {
+    val candidateUrl = candidate.toHttpUrlOrNull() ?: return false
+    val expectedUrl = expectedOrigin.toHttpUrlOrNull() ?: return false
+    return candidateUrl.scheme == expectedUrl.scheme &&
+        candidateUrl.host == expectedUrl.host &&
+        candidateUrl.port == expectedUrl.port
 }
 
 private fun HttpUrl.origin(): String {
