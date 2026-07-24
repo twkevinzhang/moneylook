@@ -7,9 +7,24 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
 import tw.kevinzhang.core.data.model.AutoCategoryRuleSet
 import tw.kevinzhang.core.data.model.Category
 
-/** Writes only absent public catalog rows; it never updates or recreates user-deleted data. */
+/** Writes only absent public rows; the one-time completely empty catalog repair is documented below. */
 object DefaultClassificationSeeder {
     fun seedFreshDatabase(db: SupportSQLiteDatabase) {
+        seedFullPublicCatalogIfEmpty(db)
+    }
+
+    /**
+     * Restores the bundled catalog only for a database with no categories and no rules at all.
+     *
+     * A non-empty category or rule table is user-owned state: it may represent a deliberately
+     * deleted default, a partial custom catalog, or imported rules whose categories have not been
+     * created yet. Those states must remain untouched during upgrades. Legacy schemas have no
+     * tombstone for the indistinguishable edge case where a user deliberately deleted both
+     * catalogs completely, so the one-time migration treats that fully empty state as unseeded.
+     */
+    fun seedFullPublicCatalogIfEmpty(db: SupportSQLiteDatabase) {
+        if (tableHasRows(db, "categories") || tableHasRows(db, "auto_category_rules")) return
+
         seedCategories(db, DefaultClassificationCatalog.categories)
         seedRulesForExistingCategoriesV17(db)
         seedRulesV2ForExistingCategories(db)
@@ -98,6 +113,11 @@ object DefaultClassificationSeeder {
             "SELECT EXISTS(SELECT 1 FROM `categories` WHERE `id` = ?)",
             arrayOf(categoryId),
         ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 1 }
+
+    private fun tableHasRows(db: SupportSQLiteDatabase, tableName: String): Boolean =
+        db.query("SELECT EXISTS(SELECT 1 FROM `$tableName`)").use { cursor ->
+            cursor.moveToFirst() && cursor.getInt(0) == 1
+        }
 
     private fun SupportSQLiteStatement.bindRule(rule: AutoCategoryRule) {
         bindString(1, rule.id)

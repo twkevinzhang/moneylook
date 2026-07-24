@@ -26,6 +26,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_13_14
 import tw.kevinzhang.core.data.db.MIGRATION_14_15
 import tw.kevinzhang.core.data.db.MIGRATION_15_16
 import tw.kevinzhang.core.data.db.MIGRATION_16_17
+import tw.kevinzhang.core.data.db.MIGRATION_17_18
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -55,6 +56,7 @@ object DataModule {
                 MIGRATION_14_15,
                 MIGRATION_15_16,
                 MIGRATION_16_17,
+                MIGRATION_17_18,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .build()
