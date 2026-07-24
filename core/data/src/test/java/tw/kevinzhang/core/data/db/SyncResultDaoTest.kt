@@ -16,6 +16,7 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.Category
+import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -141,6 +142,59 @@ class SyncResultDaoTest {
             assertEquals("2026-07-22T09:00:00", detail.transfer.postingDateTime)
         }
         Unit
+    }
+
+    @Test
+    fun `partial card snapshots preserve prior cards while complete snapshots remove stale cards safely`() = runBlocking {
+        val store = database.syncResultDao()
+        val cardAccount = account("card-account", kind = AssetKind.CREDIT_CARD)
+        val first = cardInstrument("card-1")
+        val stale = cardInstrument("card-2")
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(cardAccount),
+            transfers = listOf(
+                transfer("purchase", "2026-07-21", -1.0, "card-account")
+                    .copy(cardInstrumentId = stale.id),
+            ),
+            refreshes = listOf(AccountTransferRefresh("card-account", null)),
+            cardInstruments = listOf(first, stale),
+            replaceCardAccountIds = setOf("card-account"),
+        )
+
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(cardAccount),
+            transfers = emptyList(),
+            refreshes = listOf(AccountTransferRefresh("card-account", emptyList())),
+            cardInstruments = listOf(first.copy(displayName = "更新卡名")),
+            replaceCardAccountIds = emptySet(),
+        )
+        assertEquals(
+            setOf("card-1", "card-2"),
+            database.creditCardInstrumentDao().observeByAccount("card-account").first().map { it.id }.toSet(),
+        )
+        assertEquals(
+            "card-2",
+            database.transferDao().observeByAccount("card-account").first().single().cardInstrumentId,
+        )
+
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(cardAccount),
+            transfers = emptyList(),
+            refreshes = listOf(AccountTransferRefresh("card-account", emptyList())),
+            cardInstruments = listOf(first),
+            replaceCardAccountIds = setOf("card-account"),
+        )
+        assertEquals(
+            listOf("card-1"),
+            database.creditCardInstrumentDao().observeByAccount("card-account").first().map { it.id },
+        )
+        assertEquals(
+            null,
+            database.transferDao().observeByAccount("card-account").first().single().cardInstrumentId,
+        )
     }
 
     @Test
@@ -410,5 +464,16 @@ class SyncResultDaoTest {
         amount = amount,
         balance = null,
         memo = "",
+    )
+
+    private fun cardInstrument(id: String) = CreditCardInstrument(
+        id = id,
+        accountId = "card-account",
+        extensionId = "extension",
+        panCiphertext = byteArrayOf(1, 2, 3),
+        panIv = byteArrayOf(4, 5, 6),
+        panFingerprint = id.padEnd(64, '0'),
+        maskedPan = "•••• 4242",
+        lastFour = "4242",
     )
 }

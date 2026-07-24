@@ -182,6 +182,11 @@ private fun GlobalTransferListItem.toGlobalTransactionItem(ratesPerTwd: Map<Stri
     extensionName = extensionName,
     currency = currency,
     accountKind = accountKind,
+    cardDisplayLabel = listOfNotNull(
+        cardDisplayName?.trim()?.takeIf(String::isNotBlank),
+        cardMaskedPan?.trim()?.takeIf(String::isNotBlank)
+            ?: cardLastFour?.takeIf { it.matches(Regex("\\d{4}")) }?.let { "•••• $it" },
+    ).joinToString(" · ").takeIf(String::isNotBlank),
     status = transfer.status,
     postingDateTime = transfer.postingDateTime,
     amountTwd = transfer.amount.toTwd(currency, ratesPerTwd),

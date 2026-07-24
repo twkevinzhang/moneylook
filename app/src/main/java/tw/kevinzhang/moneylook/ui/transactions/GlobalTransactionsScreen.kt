@@ -487,6 +487,9 @@ private fun GlobalTransactionRow(item: GlobalTransactionItem, onClick: () -> Uni
                 }
             }
             Text(listOfNotNull(item.categoryName ?: "尚未分類", item.accountName, item.extensionName.takeIf(String::isNotBlank)).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            item.cardDisplayLabel?.let { card ->
+                Text(card, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             if (item.tags.isNotEmpty()) Text(item.tags.joinToString(" · ") { "#${it.name}" }, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(12.dp))

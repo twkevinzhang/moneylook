@@ -12,18 +12,63 @@ import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferDateRange
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.extension_runtime.data.AccountData
+import tw.kevinzhang.extension_runtime.data.CardData
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
 import tw.kevinzhang.extension_runtime.data.TransferSyncData
 import tw.kevinzhang.extension_runtime.data.TransferSyncRangeData
+import tw.kevinzhang.moneylook.security.CardPanProtector
+import tw.kevinzhang.moneylook.security.ProtectedCardPan
 
 class SyncResultPersisterTest {
+    @Test
+    fun `encrypts PAN before persistence and maps transactions by card ref`() = runBlocking {
+        val store = RecordingStore()
+        val fictionalPan = "4242424242424242"
+        val result = SyncResult.Success(
+            listOf(
+                AccountData(
+                    name = "Credit statement",
+                    balance = 1.0,
+                    currency = "TWD",
+                    kind = AssetKind.CREDIT_CARD,
+                    cardsComplete = true,
+                    cards = listOf(
+                        CardData(
+                            ref = "main",
+                            sourceCardKey = "c".repeat(64),
+                            pan = fictionalPan,
+                            displayName = "Main card",
+                        ),
+                        CardData(ref = "supplementary", lastFour = "0002"),
+                    ),
+                    transfers = listOf(
+                        TransferData("2026-07-21", "purchase", -1.0, null, "", cardRef = "main"),
+                        TransferData("2026-07-22", "unknown", -2.0, null, ""),
+                    ),
+                ),
+            ),
+        )
+
+        SyncResultPersister(store, cardPanProtector = FakeCardPanProtector).persist(extension(), result)
+
+        assertEquals(2, store.cardInstruments.size)
+        assertEquals(setOf(store.accounts.single().id), store.replaceCardAccountIds)
+        val persisted = store.cardInstruments.first { it.lastFour == "4242" }
+        assertFalse(persisted.panCiphertext!!.toString(Charsets.UTF_8).contains(fictionalPan))
+        assertEquals("iv".toByteArray().toList(), persisted.panIv!!.toList())
+        assertEquals(persisted.id, store.transfers.first().cardInstrumentId)
+        assertNull(store.transfers.last().cardInstrumentId)
+        assertFalse(stableCardInstrumentId(store.accounts.single().id, "c".repeat(64), null, "other").contains("4242"))
+    }
+
     @Test
     fun `persists typed fields and keeps same named accounts distinct by kind number and currency`() = runBlocking {
         val store = RecordingStore()
@@ -272,6 +317,8 @@ class SyncResultPersisterTest {
         var extensionId = ""
         var accounts: List<Account> = emptyList()
         var transfers: List<Transfer> = emptyList()
+        var cardInstruments: List<CreditCardInstrument> = emptyList()
+        var replaceCardAccountIds: Set<String> = emptySet()
         var refreshes: List<AccountTransferRefresh> = emptyList()
         var legacyIdentityByAccountId: Map<String, LegacyAccountIdentity> = emptyMap()
         var replaceKinds: Set<AssetKind>? = null
@@ -281,6 +328,8 @@ class SyncResultPersisterTest {
             accounts: List<Account>,
             transfers: List<Transfer>,
             refreshes: List<AccountTransferRefresh>,
+            cardInstruments: List<CreditCardInstrument>,
+            replaceCardAccountIds: Set<String>,
             legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
             replaceKinds: Set<AssetKind>?,
         ) {
@@ -288,8 +337,20 @@ class SyncResultPersisterTest {
             this.accounts = accounts
             this.transfers = transfers
             this.refreshes = refreshes
+            this.cardInstruments = cardInstruments
+            this.replaceCardAccountIds = replaceCardAccountIds
             this.legacyIdentityByAccountId = legacyIdentityByAccountId
             this.replaceKinds = replaceKinds
         }
+    }
+
+    private object FakeCardPanProtector : CardPanProtector {
+        override fun protect(pan: String): ProtectedCardPan = ProtectedCardPan(
+            ciphertext = "ciphertext".toByteArray(),
+            iv = "iv".toByteArray(),
+            fingerprint = "f".repeat(64),
+        )
+
+        override fun reveal(ciphertext: ByteArray, iv: ByteArray): String = "4242424242424242"
     }
 }

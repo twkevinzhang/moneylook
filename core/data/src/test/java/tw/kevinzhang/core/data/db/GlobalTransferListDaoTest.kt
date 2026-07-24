@@ -91,7 +91,7 @@ class GlobalTransferListDaoTest {
         assertEquals(
             setOf(
                 "transfer", "annotation", "category", "tags", "accountName", "extensionName",
-                "currency", "accountKind",
+                "currency", "accountKind", "cardDisplayName", "cardMaskedPan", "cardLastFour",
             ),
             projectionFields,
         )

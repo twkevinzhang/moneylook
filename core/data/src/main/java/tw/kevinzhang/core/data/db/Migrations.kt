@@ -440,3 +440,39 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
         db.execSQL("ALTER TABLE `transfers` ADD COLUMN `postingDateTime` TEXT")
     }
 }
+
+/** Stores physical-card metadata separately from aggregated credit-card accounts. */
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `credit_card_instruments` (
+                `id` TEXT NOT NULL,
+                `accountId` TEXT NOT NULL,
+                `extensionId` TEXT NOT NULL,
+                `sourceCardKey` TEXT,
+                `panCiphertext` BLOB,
+                `panIv` BLOB,
+                `panFingerprint` TEXT,
+                `maskedPan` TEXT,
+                `lastFour` TEXT,
+                `displayName` TEXT,
+                `network` TEXT,
+                `productType` TEXT,
+                `holderRole` TEXT,
+                `holderName` TEXT,
+                `status` TEXT,
+                `expiryMonth` INTEGER,
+                `expiryYear` INTEGER,
+                `creditLimit` REAL,
+                `availableCredit` REAL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_credit_card_instruments_accountId` ON `credit_card_instruments` (`accountId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_credit_card_instruments_extensionId_sourceCardKey` ON `credit_card_instruments` (`extensionId`, `sourceCardKey`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_credit_card_instruments_extensionId_panFingerprint` ON `credit_card_instruments` (`extensionId`, `panFingerprint`)")
+        db.execSQL("ALTER TABLE `transfers` ADD COLUMN `cardInstrumentId` TEXT")
+    }
+}

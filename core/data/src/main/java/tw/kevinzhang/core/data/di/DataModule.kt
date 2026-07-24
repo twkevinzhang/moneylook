@@ -11,6 +11,7 @@ import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.AutoCategoryRuleDao
 import tw.kevinzhang.core.data.db.CategoryDao
 import tw.kevinzhang.core.data.db.CredentialProfileDao
+import tw.kevinzhang.core.data.db.CreditCardInstrumentDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.MIGRATION_5_6
 import tw.kevinzhang.core.data.db.MIGRATION_6_7
@@ -22,6 +23,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_11_12
 import tw.kevinzhang.core.data.db.MIGRATION_12_13
 import tw.kevinzhang.core.data.db.MIGRATION_13_14
 import tw.kevinzhang.core.data.db.MIGRATION_14_15
+import tw.kevinzhang.core.data.db.MIGRATION_15_16
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -49,6 +51,7 @@ object DataModule {
                 MIGRATION_12_13,
                 MIGRATION_13_14,
                 MIGRATION_14_15,
+                MIGRATION_15_16,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .fallbackToDestructiveMigration(dropAllTables = true)
@@ -66,6 +69,10 @@ object DataModule {
     @Provides
     fun provideCredentialProfileDao(db: MoneylookDatabase): CredentialProfileDao =
         db.credentialProfileDao()
+
+    @Provides
+    fun provideCreditCardInstrumentDao(db: MoneylookDatabase): CreditCardInstrumentDao =
+        db.creditCardInstrumentDao()
 
     @Provides
     fun provideInstalledExtensionDao(db: MoneylookDatabase): InstalledExtensionDao =

@@ -34,6 +34,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.db.CreditCardInstrumentMetadata
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.db.TransferListItem
 import tw.kevinzhang.moneylook.ui.transactions.ClassificationViewModel
@@ -54,6 +55,7 @@ fun ExtensionLedgerScreen(
 ) {
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val account = accounts.firstOrNull { it.id == accountId }
+    val cards by viewModel.creditCardsForAccount(accountId).collectAsStateWithLifecycle(initialValue = emptyList())
     val transfers by classificationViewModel.transfersForAccount(accountId)
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
@@ -71,6 +73,7 @@ fun ExtensionLedgerScreen(
     ) { innerPadding ->
         ExtensionLedgerAnnotatedContent(
             account = account,
+            cards = cards,
             transfers = transfers,
             onNavigateToTransaction = onNavigateToTransaction,
             modifier = Modifier.fillMaxSize().padding(innerPadding),
@@ -81,6 +84,7 @@ fun ExtensionLedgerScreen(
 @Composable
 private fun ExtensionLedgerAnnotatedContent(
     account: Account?,
+    cards: List<CreditCardInstrumentMetadata>,
     transfers: List<TransferListItem>,
     onNavigateToTransaction: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -90,8 +94,12 @@ private fun ExtensionLedgerAnnotatedContent(
         return
     }
     val groupedTransfers = transfers.groupBy { ledgerMonthKey(it.transfer) }
+    val cardsById = cards.associateBy(CreditCardInstrumentMetadata::id)
     LazyColumn(modifier = modifier) {
         item(key = "account-header") { LedgerAccountHeader(account) }
+        if (account.kind == AssetKind.CREDIT_CARD && cards.isNotEmpty()) {
+            item(key = "cards") { CreditCardSection(cards.map(CreditCardInstrumentMetadata::toDisplay), account.currency) }
+        }
         if (account.transferSyncComplete == false) item(key = "partial-history") {
             AssistChip(onClick = {}, enabled = false, label = { Text("部分明細尚未同步完成") }, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
         }
@@ -105,7 +113,12 @@ private fun ExtensionLedgerAnnotatedContent(
                 }
             }
             items(monthTransfers, key = { it.transfer.id }) { item ->
-                AnnotatedTransferRow(item, account.currency, onClick = { onNavigateToTransaction(item.transfer.id) })
+                AnnotatedTransferRow(
+                    item,
+                    account.currency,
+                    card = item.transfer.cardInstrumentId?.let(cardsById::get)?.toDisplay(),
+                    onClick = { onNavigateToTransaction(item.transfer.id) },
+                )
                 HorizontalDivider()
             }
         }
@@ -117,6 +130,7 @@ private fun ExtensionLedgerAnnotatedContent(
 internal fun ExtensionLedgerContent(
     account: Account?,
     transfers: List<Transfer>,
+    cards: List<CreditCardDisplay> = emptyList(),
     onNavigateToTransaction: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -128,9 +142,13 @@ internal fun ExtensionLedgerContent(
     }
 
     val groupedTransfers = transfers.groupBy(::ledgerMonthKey)
+    val cardsById = cards.associateBy(CreditCardDisplay::id)
     LazyColumn(modifier = modifier) {
         item(key = "account-header") {
             LedgerAccountHeader(account)
+        }
+        if (account.kind == AssetKind.CREDIT_CARD && cards.isNotEmpty()) {
+            item(key = "cards") { CreditCardSection(cards, account.currency) }
         }
         if (account.transferSyncComplete == false) {
             item(key = "partial-history") {
@@ -168,7 +186,12 @@ internal fun ExtensionLedgerContent(
                     }
                 }
                 items(monthTransfers, key = Transfer::id) { transfer ->
-                    TransferRow(transfer, account.currency, onClick = { onNavigateToTransaction(transfer.id) })
+                    TransferRow(
+                        transfer,
+                        account.currency,
+                        card = transfer.cardInstrumentId?.let(cardsById::get),
+                        onClick = { onNavigateToTransaction(transfer.id) },
+                    )
                     HorizontalDivider()
                 }
             }
@@ -219,7 +242,7 @@ private fun LedgerAccountHeader(account: Account) {
 }
 
 @Composable
-private fun TransferRow(transfer: Transfer, currency: String, onClick: () -> Unit) {
+private fun TransferRow(transfer: Transfer, currency: String, card: CreditCardDisplay?, onClick: () -> Unit) {
     val date = ledgerDate(transfer.txnDateTime)
     val isIncome = transfer.amount >= 0
     val amountColor = if (isIncome) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
@@ -245,6 +268,7 @@ private fun TransferRow(transfer: Transfer, currency: String, onClick: () -> Uni
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
             )
+            CardAssociationLabel(card)
             if (transfer.memo.isNotBlank()) {
                 Text(
                     text = transfer.memo,
@@ -279,7 +303,12 @@ private fun TransferRow(transfer: Transfer, currency: String, onClick: () -> Uni
 }
 
 @Composable
-private fun AnnotatedTransferRow(item: TransferListItem, currency: String, onClick: () -> Unit) {
+private fun AnnotatedTransferRow(
+    item: TransferListItem,
+    currency: String,
+    card: CreditCardDisplay?,
+    onClick: () -> Unit,
+) {
     val transfer = item.transfer
     val date = ledgerDate(transfer.txnDateTime)
     val isIncome = transfer.amount >= 0
@@ -292,12 +321,47 @@ private fun AnnotatedTransferRow(item: TransferListItem, currency: String, onCli
         Column(modifier = Modifier.weight(1f).padding(start = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(item.category?.name ?: "尚未分類", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             Text(transfer.description.ifBlank { "未提供交易說明" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            CardAssociationLabel(card)
             if (item.tags.isNotEmpty()) Text(item.tags.joinToString(" · ") { "#${it.name}" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
             item.annotation?.note?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(signedTransferAmount(transfer.amount, currency), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = amountColor)
             transfer.balance?.let { Text("餘額 ${formatCurrencyAmount(it, currency)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+    }
+}
+
+@Composable
+private fun CardAssociationLabel(card: CreditCardDisplay?) {
+    card?.let { value ->
+        Text(
+            text = listOfNotNull(value.title(), value.numberLabel()).joinToString(" · "),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun CreditCardSection(cards: List<CreditCardDisplay>, currency: String) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("卡片", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        cards.forEach { card ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(card.title(), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                card.numberLabel()?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                SecurePanReveal(cardInstrumentId = card.id, enabled = card.canRevealPan)
+                card.metadataLabel()?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                card.holderName?.trim()?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                card.expiryLabel()?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                card.creditLimit?.takeIf { it.isFinite() }?.let {
+                    Text("信用額度 ${formatCurrencyAmount(it, currency)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                card.availableCredit?.takeIf { it.isFinite() }?.let {
+                    Text("可用額度 ${formatCurrencyAmount(it, currency)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }

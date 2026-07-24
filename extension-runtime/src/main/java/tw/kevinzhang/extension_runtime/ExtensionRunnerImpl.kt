@@ -32,6 +32,7 @@ import tw.kevinzhang.extension_runtime.bridge.NativeHttpTransport
 import tw.kevinzhang.extension_runtime.bridge.RunRequestBudget
 import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
 import tw.kevinzhang.extension_runtime.data.AccountData
+import tw.kevinzhang.extension_runtime.data.CardData
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
@@ -378,6 +379,23 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
         if (kind != AssetKind.CREDIT_CARD && (availableCredit.value != null || creditLimit.value != null)) {
             return SyncResult.Error("script result contains credit fields for a non-card account")
         }
+        val cards = if ("cards" in account) {
+            if (kind != AssetKind.CREDIT_CARD) {
+                return SyncResult.Error("script result contains cards for a non-card account")
+            }
+            parseCards(account) ?: return SyncResult.Error("script result contains invalid card")
+        } else {
+            emptyList()
+        }
+        val cardsComplete = when {
+            "cardsComplete" !in account -> null
+            kind != AssetKind.CREDIT_CARD -> {
+                return SyncResult.Error("script result contains card status for a non-card account")
+            }
+            "cards" !in account -> return SyncResult.Error("script result contains card status without cards")
+            account["cardsComplete"] is Boolean -> account["cardsComplete"] as Boolean
+            else -> return SyncResult.Error("script result contains invalid card status")
+        }
         if (kind != AssetKind.DEPOSIT && balance < 0) {
             return SyncResult.Error("script result contains invalid debt balance")
         }
@@ -387,7 +405,7 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
         } else {
             null
         }
-        val transfers = parseTransfers(account, requireIsoDate = transferSync != null)
+        val transfers = parseTransfers(account, requireIsoDate = transferSync != null, cards = cards)
             ?: return SyncResult.Error("script result contains invalid transfer")
         if (transferSync != null && transfers.any { transfer ->
                 !transferDateInRequestedRange(transfer.txnDateTime, transferSync)
@@ -405,6 +423,8 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             branchName = branchName.value,
             availableCredit = availableCredit.value,
             creditLimit = creditLimit.value,
+            cards = cards,
+            cardsComplete = cardsComplete,
             transfers = transfers,
             transferSync = transferSync,
         )
@@ -433,6 +453,8 @@ private data class OptionalValue<T>(val value: T?)
 /** Source keys are deliberately constrained so raw account/card numbers cannot enter sdk.sync. */
 private val SOURCE_ACCOUNT_KEY_PATTERN = Regex("[0-9a-f]{64}")
 private val KIND_SYNC_CODE_PATTERN = Regex("[A-Z0-9_]{1,32}")
+private val CARD_REF_PATTERN = Regex("[A-Za-z][A-Za-z0-9_.:-]{0,127}")
+private val LAST_FOUR_PATTERN = Regex("[0-9]{4}")
 
 private fun parseKindSync(
     root: Map<String, Any>,
@@ -483,10 +505,22 @@ private fun optionalFiniteNumber(account: Map<*, *>, key: String): OptionalValue
     else -> finiteNumber(account[key])?.let(::OptionalValue)
 }
 
+private fun optionalInt(account: Map<*, *>, key: String): OptionalValue<Int>? = when {
+    key !in account -> OptionalValue(null)
+    else -> finiteNumber(account[key])
+        ?.takeIf { it == it.toInt().toDouble() }
+        ?.toInt()
+        ?.let(::OptionalValue)
+}
+
 private fun finiteNumber(value: Any?): Double? =
     (value as? Number)?.toDouble()?.takeIf { it.isFinite() }
 
-private fun parseTransfers(account: Map<*, *>, requireIsoDate: Boolean): List<TransferData>? {
+private fun parseTransfers(
+    account: Map<*, *>,
+    requireIsoDate: Boolean,
+    cards: List<CardData>,
+): List<TransferData>? {
     if ("transfers" !in account) return emptyList()
     val rawTransfers = account["transfers"] as? List<*> ?: return null
     return rawTransfers.map { rawTransfer ->
@@ -506,6 +540,8 @@ private fun parseTransfers(account: Map<*, *>, requireIsoDate: Boolean): List<Tr
         if (postingDateTime.value != null && parseTransferDate(postingDateTime.value) == null) {
             return null
         }
+        val cardRef = optionalNonBlankString(transfer, "cardRef") ?: return null
+        if (cardRef.value != null && cardRef.value !in cards.map(CardData::ref).toSet()) return null
         TransferData(
             txnDateTime = txnDateTime,
             description = description.value ?: "",
@@ -516,8 +552,81 @@ private fun parseTransfers(account: Map<*, *>, requireIsoDate: Boolean): List<Tr
             status = status.value,
             id = id,
             postingDateTime = postingDateTime.value,
+            cardRef = cardRef.value,
         )
     }
+}
+
+private fun parseCards(account: Map<*, *>): List<CardData>? {
+    val rawCards = account["cards"] as? List<*> ?: return null
+    val cards = rawCards.map { rawCard ->
+        val card = rawCard as? Map<*, *> ?: return null
+        if (card.keys.any { key -> isForbiddenCardField(key as? String) }) return null
+        val ref = (card["ref"] as? String)?.takeIf(CARD_REF_PATTERN::matches) ?: return null
+        val sourceCardKey = optionalNonBlankString(card, "sourceCardKey") ?: return null
+        if (sourceCardKey.value != null && !SOURCE_ACCOUNT_KEY_PATTERN.matches(sourceCardKey.value)) return null
+        val pan = optionalNonBlankString(card, "pan") ?: return null
+        if (pan.value != null && !isValidPan(pan.value)) return null
+        val maskedPan = optionalNonBlankString(card, "maskedPan") ?: return null
+        if (maskedPan.value != null && maskedPan.value.all(Char::isDigit)) return null
+        val lastFour = optionalNonBlankString(card, "lastFour") ?: return null
+        if (lastFour.value != null && !LAST_FOUR_PATTERN.matches(lastFour.value)) return null
+        if (pan.value != null && lastFour.value != null && !pan.value.endsWith(lastFour.value)) return null
+        val displayName = optionalNonBlankString(card, "displayName") ?: return null
+        val network = optionalNonBlankString(card, "network") ?: return null
+        val productType = optionalNonBlankString(card, "productType") ?: return null
+        val holderRole = optionalNonBlankString(card, "holderRole") ?: return null
+        if (holderRole.value != null && holderRole.value !in setOf("primary", "supplementary")) return null
+        val holderName = optionalNonBlankString(card, "holderName") ?: return null
+        val status = optionalNonBlankString(card, "status") ?: return null
+        val expiryMonth = optionalInt(card, "expiryMonth") ?: return null
+        val expiryYear = optionalInt(card, "expiryYear") ?: return null
+        if ((expiryMonth.value == null) != (expiryYear.value == null)) return null
+        if (expiryMonth.value != null && expiryMonth.value !in 1..12) return null
+        if (expiryYear.value != null && expiryYear.value !in 2000..2200) return null
+        val creditLimit = optionalFiniteNumber(card, "creditLimit") ?: return null
+        val availableCredit = optionalFiniteNumber(card, "availableCredit") ?: return null
+        if (creditLimit.value != null && creditLimit.value < 0.0) return null
+        if (availableCredit.value != null && availableCredit.value < 0.0) return null
+        CardData(
+            ref = ref,
+            sourceCardKey = sourceCardKey.value,
+            pan = pan.value,
+            maskedPan = maskedPan.value,
+            lastFour = lastFour.value,
+            displayName = displayName.value,
+            network = network.value,
+            productType = productType.value,
+            holderRole = holderRole.value,
+            holderName = holderName.value,
+            status = status.value,
+            expiryMonth = expiryMonth.value,
+            expiryYear = expiryYear.value,
+            creditLimit = creditLimit.value,
+            availableCredit = availableCredit.value,
+        )
+    }
+    val uniqueRefs = cards.map(CardData::ref).distinct().size == cards.size
+    val sourceKeys = cards.mapNotNull(CardData::sourceCardKey)
+    val uniqueSourceKeys = sourceKeys.distinct().size == sourceKeys.size
+    val pans = cards.mapNotNull(CardData::pan)
+    val uniquePans = pans.distinct().size == pans.size
+    return cards.takeIf { uniqueRefs && uniqueSourceKeys && uniquePans }
+}
+
+private fun isForbiddenCardField(key: String?): Boolean {
+    val normalized = key?.lowercase() ?: return true
+    return listOf("cvv", "cvc", "pin", "track", "magstripe", "securitycode")
+        .any(normalized::contains)
+}
+
+private fun isValidPan(value: String): Boolean {
+    if (value.length !in 12..19 || !value.all(Char::isDigit)) return false
+    val sum = value.reversed().mapIndexed { index, character ->
+        val digit = character.digitToInt()
+        if (index % 2 == 1) (digit * 2).let { if (it > 9) it - 9 else it } else digit
+    }.sum()
+    return sum % 10 == 0
 }
 
 private fun parseTransferSync(account: Map<*, *>): TransferSyncData? {

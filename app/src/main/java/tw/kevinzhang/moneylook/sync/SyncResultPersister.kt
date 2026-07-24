@@ -5,10 +5,13 @@ import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferDateRange
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.model.Account
+import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.AccountData
+import tw.kevinzhang.moneylook.security.CardPanProtector
+import tw.kevinzhang.moneylook.security.ProtectedCardPan
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -19,6 +22,7 @@ import javax.inject.Singleton
 class SyncResultPersister @Inject constructor(
     private val transferSyncStore: TransferSyncStore,
     private val autoCategorizer: TransferAutoCategorizer = TransferAutoCategorizer { },
+    private val cardPanProtector: CardPanProtector = MissingCardPanProtector,
 ) {
     suspend fun persist(extension: InstalledExtension, result: SyncResult.Success) {
         val now = System.currentTimeMillis()
@@ -48,6 +52,47 @@ class SyncResultPersister @Inject constructor(
                 creditLimit = data.creditLimit,
                 transferSyncComplete = data.transferSync?.complete,
             )
+        }
+        val cardInstrumentIdsByAccountAndRef = mutableMapOf<Pair<String, String>, String>()
+        val replaceCardAccountIds = result.accounts
+            .filter { it.cardsComplete == true }
+            .map(::accountId)
+            .toSet()
+        val cardInstruments = result.accounts.flatMap { data ->
+            val accountId = accountId(data)
+            data.cards.map { card ->
+                // The sole persistence boundary for plaintext PAN. Encryption happens before
+                // constructing the Room entity or invoking the transactional store.
+                val protectedPan = card.pan?.let(cardPanProtector::protect)
+                val instrumentId = stableCardInstrumentId(
+                    accountId = accountId,
+                    sourceCardKey = card.sourceCardKey,
+                    panFingerprint = protectedPan?.fingerprint,
+                    resultLocalRef = card.ref,
+                )
+                cardInstrumentIdsByAccountAndRef[accountId to card.ref] = instrumentId
+                CreditCardInstrument(
+                    id = instrumentId,
+                    accountId = accountId,
+                    extensionId = extension.id,
+                    sourceCardKey = card.sourceCardKey,
+                    panCiphertext = protectedPan?.ciphertext,
+                    panIv = protectedPan?.iv,
+                    panFingerprint = protectedPan?.fingerprint,
+                    maskedPan = card.maskedPan,
+                    lastFour = card.lastFour ?: card.pan?.takeLast(4),
+                    displayName = card.displayName,
+                    network = card.network,
+                    productType = card.productType,
+                    holderRole = card.holderRole,
+                    holderName = card.holderName,
+                    status = card.status,
+                    expiryMonth = card.expiryMonth,
+                    expiryYear = card.expiryYear,
+                    creditLimit = card.creditLimit,
+                    availableCredit = card.availableCredit,
+                )
+            }
         }
         val transfers = result.accounts.flatMap { data ->
             val accountId = accountId(data)
@@ -88,6 +133,9 @@ class SyncResultPersister @Inject constructor(
                     type = transfer.type,
                     status = transfer.status,
                     postingDateTime = transfer.postingDateTime,
+                    cardInstrumentId = transfer.cardRef?.let { ref ->
+                        cardInstrumentIdsByAccountAndRef[accountId to ref]
+                    },
                 )
             }
         }
@@ -104,6 +152,8 @@ class SyncResultPersister @Inject constructor(
             accounts = accounts,
             transfers = transfers,
             refreshes = refreshes,
+            cardInstruments = cardInstruments,
+            replaceCardAccountIds = replaceCardAccountIds,
             legacyIdentityByAccountId = legacyIdentityByProposedId
                 .filterValues { it in uniqueLegacyIdentities },
             replaceKinds = result.kindSync
@@ -112,6 +162,15 @@ class SyncResultPersister @Inject constructor(
         )
         autoCategorizer.categorizeTransferIds(transfers.map(Transfer::id))
     }
+}
+
+/** Prevents accidental plaintext persistence in unit tests that did not opt into a cipher fake. */
+private object MissingCardPanProtector : CardPanProtector {
+    override fun protect(pan: String): ProtectedCardPan =
+        throw IllegalStateException("card PAN protector is unavailable")
+
+    override fun reveal(ciphertext: ByteArray, iv: ByteArray): String =
+        throw IllegalStateException("card PAN protector is unavailable")
 }
 
 /**
@@ -171,6 +230,22 @@ internal fun stableTransferId(
         .digest(canonicalIdentity.toByteArray(StandardCharsets.UTF_8))
         .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
     return "$accountId::txn::$digest"
+}
+
+/** The result-local card ref is a fallback only; stable bank keys or keyed PAN fingerprints win. */
+internal fun stableCardInstrumentId(
+    accountId: String,
+    sourceCardKey: String?,
+    panFingerprint: String?,
+    resultLocalRef: String,
+): String {
+    val identity = sourceCardKey ?: panFingerprint ?: resultLocalRef
+    val canonicalIdentity = listOf(accountId, identity)
+        .joinToString(separator = "\u001F") { value -> "${value.length}:$value" }
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest(canonicalIdentity.toByteArray(StandardCharsets.UTF_8))
+        .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    return "$accountId::card::$digest"
 }
 
 private fun transferFallbackFingerprint(

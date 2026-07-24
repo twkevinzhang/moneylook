@@ -9,6 +9,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRule
 import tw.kevinzhang.core.data.model.AutoCategoryRuleTagCrossRef
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CredentialProfile
+import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
@@ -22,13 +23,14 @@ import tw.kevinzhang.core.data.model.TransferTagCrossRef
         AutoCategoryRuleTagCrossRef::class,
         Category::class,
         CredentialProfile::class,
+        CreditCardInstrument::class,
         InstalledExtension::class,
         Tag::class,
         Transfer::class,
         TransferAnnotation::class,
         TransferTagCrossRef::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
@@ -37,6 +39,7 @@ abstract class MoneylookDatabase : RoomDatabase() {
     abstract fun autoCategoryRuleDao(): AutoCategoryRuleDao
     abstract fun categoryDao(): CategoryDao
     abstract fun credentialProfileDao(): CredentialProfileDao
+    abstract fun creditCardInstrumentDao(): CreditCardInstrumentDao
     abstract fun installedExtensionDao(): InstalledExtensionDao
     abstract fun transferDao(): TransferDao
     abstract fun transferAnnotationDao(): TransferAnnotationDao

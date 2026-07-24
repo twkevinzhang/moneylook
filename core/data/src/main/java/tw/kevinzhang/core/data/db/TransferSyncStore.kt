@@ -2,6 +2,7 @@ package tw.kevinzhang.core.data.db
 
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.Transfer
 
 /** A successful inclusive date range whose transactions may safely replace local history. */
@@ -37,6 +38,10 @@ interface TransferSyncStore {
         accounts: List<Account>,
         transfers: List<Transfer>,
         refreshes: List<AccountTransferRefresh>,
+        /** Per-card metadata for returned credit-card accounts; PANs are already encrypted. */
+        cardInstruments: List<CreditCardInstrument> = emptyList(),
+        /** Credit-card account IDs whose card list is an authoritative complete snapshot. */
+        replaceCardAccountIds: Set<String> = emptySet(),
         /** Proposed account ID to its unique, app-private legacy identity for one-time migration. */
         legacyIdentityByAccountId: Map<String, LegacyAccountIdentity> = emptyMap(),
         /** Null keeps legacy whole-extension replacement; otherwise only these kinds are authoritative. */

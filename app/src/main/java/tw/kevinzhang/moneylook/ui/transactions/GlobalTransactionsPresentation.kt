@@ -36,6 +36,8 @@ data class GlobalTransactionItem(
     val currency: String,
     /** Account product semantics are used only for the credit-card settlement label. */
     val accountKind: AssetKind = AssetKind.DEPOSIT,
+    /** Bank-provided safe card identifiers only; never a complete PAN. */
+    val cardDisplayLabel: String? = null,
     /** Extension-provided card settlement status; only exact known values receive a label. */
     val status: String? = null,
     /** Bank-provided settlement date for a posted credit-card transaction. */

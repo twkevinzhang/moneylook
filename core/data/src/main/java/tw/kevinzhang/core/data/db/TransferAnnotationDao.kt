@@ -73,6 +73,10 @@ data class GlobalTransferListItem(
     val extensionName: String,
     val currency: String,
     val accountKind: AssetKind,
+    /** Safe card display metadata; a complete PAN and encrypted fields are never projected. */
+    val cardDisplayName: String? = null,
+    val cardMaskedPan: String? = null,
+    val cardLastFour: String? = null,
 )
 
 @Dao
@@ -228,9 +232,13 @@ abstract class TransferAnnotationDao {
                 account.accountName AS accountName,
                 account.extensionName AS extensionName,
                 account.currency AS currency,
-                account.kind AS accountKind
+                account.kind AS accountKind,
+                card.displayName AS cardDisplayName,
+                card.maskedPan AS cardMaskedPan,
+                card.lastFour AS cardLastFour
             FROM transfers AS t
             INNER JOIN accounts AS account ON account.id = t.accountId
+            LEFT JOIN credit_card_instruments AS card ON card.id = t.cardInstrumentId
             LEFT JOIN transfer_annotations AS a ON a.transferId = t.id
             LEFT JOIN categories AS c ON c.id = a.categoryId
         """
