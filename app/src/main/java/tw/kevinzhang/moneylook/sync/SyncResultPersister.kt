@@ -4,6 +4,10 @@ import tw.kevinzhang.core.data.db.AccountTransferRefresh
 import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferDateRange
 import tw.kevinzhang.core.data.db.TransferSyncStore
+import tw.kevinzhang.core.data.db.IngestionContext
+import tw.kevinzhang.core.data.db.TransferFingerprintEvidence
+import tw.kevinzhang.core.data.model.IngestionStatus
+import tw.kevinzhang.core.data.model.IngestionTrigger
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.InstalledExtension
@@ -12,20 +16,33 @@ import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.moneylook.security.CardPanProtector
 import tw.kevinzhang.moneylook.security.ProtectedCardPan
+import tw.kevinzhang.moneylook.security.SourceFingerprintProtector
+import tw.kevinzhang.moneylook.security.ProtectedSourceFingerprint
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
 
 @Singleton
 class SyncResultPersister @Inject constructor(
     private val transferSyncStore: TransferSyncStore,
     private val autoCategorizer: TransferAutoCategorizer = TransferAutoCategorizer { },
     private val cardPanProtector: CardPanProtector = MissingCardPanProtector,
+    private val sourceFingerprintProtector: SourceFingerprintProtector = MissingSourceFingerprintProtector,
 ) {
-    suspend fun persist(extension: InstalledExtension, result: SyncResult.Success) {
-        val now = System.currentTimeMillis()
+    suspend fun persist(
+        extension: InstalledExtension,
+        result: SyncResult.Success,
+        trigger: IngestionTrigger = IngestionTrigger.USER_SYNC,
+    ) {
+        val startedAt = System.currentTimeMillis()
+        val runId = UUID.randomUUID().toString()
+        var ingestionContext: IngestionContext? = null
+        var snapshotCommitted = false
+        try {
         val legacyIdentityByProposedId = result.accounts.associate { data ->
             stableAccountId(extension.id, data) to legacyIdentityForSourceKey(data)
         }.filterValues { it != null }.mapValues { (_, identity) -> requireNotNull(identity) }
@@ -43,7 +60,7 @@ class SyncResultPersister @Inject constructor(
                 accountName = data.name,
                 balance = data.balance,
                 currency = data.currency,
-                lastSyncAt = now,
+                lastSyncAt = startedAt,
                 accountNo = data.no,
                 sourceAccountKey = data.sourceAccountKey,
                 kind = data.kind,
@@ -151,21 +168,204 @@ class SyncResultPersister @Inject constructor(
                 },
             )
         }
-        transferSyncStore.replaceSnapshot(
-            extensionId = extension.id,
-            accounts = accounts,
-            transfers = transfers,
-            refreshes = refreshes,
-            cardInstruments = cardInstruments,
-            replaceCardAccountIds = replaceCardAccountIds,
-            legacyIdentityByAccountId = legacyIdentityByProposedId
-                .filterValues { it in uniqueLegacyIdentities },
-            replaceKinds = result.kindSync
-                ?.filter { it.status == KindSyncStatus.COMPLETE }
-                ?.mapTo(mutableSetOf()) { it.kind },
+        val completedAt = System.currentTimeMillis()
+        val runFingerprint = sourceFingerprintProtector.fingerprint(
+            "ingestion-run",
+            extension.id,
+            extension.version.toString(),
+            extension.artifactRevision.orEmpty(),
+            extension.artifactSha256.orEmpty(),
         )
-        autoCategorizer.categorizeTransferIds(transfers.map(Transfer::id))
+        val transferFingerprints = transfers.associate { transfer ->
+            val sourceFingerprint = sourceFingerprintProtector.fingerprint(
+                "transfer-source",
+                extension.id,
+                transfer.id,
+            )
+            val payloadFingerprint = sourceFingerprintProtector.fingerprint(
+                "transfer-payload",
+                transfer.id,
+                transfer.txnDateTime,
+                transfer.postingDateTime.orEmpty(),
+                transfer.description,
+                transfer.amount.toString(),
+                transfer.balance?.toString().orEmpty(),
+                transfer.memo,
+                transfer.type.orEmpty(),
+                transfer.status.orEmpty(),
+                transfer.cardInstrumentId.orEmpty(),
+                transfer.merchantName.orEmpty(),
+                transfer.merchantCategoryCode.orEmpty(),
+                transfer.counterpartyName.orEmpty(),
+                transfer.purpose.orEmpty(),
+            )
+            require(sourceFingerprint.keyVersion == payloadFingerprint.keyVersion) {
+                "source fingerprint key version changed during one import"
+            }
+            transfer.id to TransferFingerprintEvidence(
+                sourceFingerprint = sourceFingerprint.value,
+                payloadFingerprint = payloadFingerprint.value,
+            )
+        }
+        val preparedContext = IngestionContext(
+            runId = runId,
+            startedAt = startedAt,
+            completedAt = completedAt,
+            extensionVersion = extension.version,
+            artifactRevision = extension.artifactRevision,
+            artifactSha256 = extension.artifactSha256,
+            trigger = trigger,
+            status = if (result.hasPartialSyncFailure) IngestionStatus.PARTIAL else IngestionStatus.SUCCESS,
+            sourceFingerprint = runFingerprint.value,
+            fingerprintKeyVersion = runFingerprint.keyVersion,
+            transferFingerprints = transferFingerprints,
+        )
+        ingestionContext = preparedContext
+        transferSyncStore.replaceSnapshot(
+                extensionId = extension.id,
+                accounts = accounts,
+                transfers = transfers,
+                refreshes = refreshes,
+                cardInstruments = cardInstruments,
+                replaceCardAccountIds = replaceCardAccountIds,
+                legacyIdentityByAccountId = legacyIdentityByProposedId
+                    .filterValues { it in uniqueLegacyIdentities },
+                replaceKinds = result.kindSync
+                    ?.filter { it.status == KindSyncStatus.COMPLETE }
+                    ?.mapTo(mutableSetOf()) { it.kind },
+                ingestionContext = preparedContext,
+            )
+        snapshotCommitted = true
+        try {
+            autoCategorizer.categorizeTransferIds(transfers.map(Transfer::id), runId)
+            transferSyncStore.updateClassificationStatus(
+                runId,
+                tw.kevinzhang.core.data.model.IngestionClassificationStatus.COMPLETE,
+                System.currentTimeMillis(),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            markClassificationFailedOrSuppress(runId, error)
+            throw error
+        }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (!snapshotCommitted) {
+                recordFailedRunOrSuppress(
+                    extensionId = extension.id,
+                    context = ingestionContext ?: failedPreprocessingContext(
+                        extension = extension,
+                        trigger = trigger,
+                        startedAt = startedAt,
+                        runId = runId,
+                    ),
+                    accountCount = result.accounts.size,
+                    transferCount = result.accounts.sumOf { it.transfers.size },
+                    original = error,
+                )
+            }
+            throw error
+        }
     }
+
+    private fun failedPreprocessingContext(
+        extension: InstalledExtension,
+        trigger: IngestionTrigger,
+        startedAt: Long,
+        runId: String,
+    ) = IngestionContext(
+        runId = runId,
+        startedAt = startedAt,
+        completedAt = System.currentTimeMillis(),
+        extensionVersion = extension.version,
+        artifactRevision = extension.artifactRevision,
+        artifactSha256 = extension.artifactSha256,
+        trigger = trigger,
+        status = IngestionStatus.FAILED,
+        classificationStatus =
+            tw.kevinzhang.core.data.model.IngestionClassificationStatus.FAILED,
+        sourceFingerprint = "unavailable",
+        fingerprintKeyVersion = 0,
+        transferFingerprints = emptyMap(),
+    )
+
+    /** Records an extension/runtime failure without retaining its message or any private payload. */
+    suspend fun recordFailure(
+        extension: InstalledExtension,
+        trigger: IngestionTrigger = IngestionTrigger.USER_SYNC,
+    ) {
+        val now = System.currentTimeMillis()
+        val fingerprint = sourceFingerprintProtector.fingerprint(
+            "ingestion-run",
+            extension.id,
+            extension.version.toString(),
+            extension.artifactRevision.orEmpty(),
+            extension.artifactSha256.orEmpty(),
+        )
+        transferSyncStore.recordFailedIngestion(
+            extensionId = extension.id,
+            ingestionContext = IngestionContext(
+                runId = UUID.randomUUID().toString(),
+                startedAt = now,
+                completedAt = now,
+                extensionVersion = extension.version,
+                artifactRevision = extension.artifactRevision,
+                artifactSha256 = extension.artifactSha256,
+                trigger = trigger,
+                status = IngestionStatus.FAILED,
+                classificationStatus =
+                    tw.kevinzhang.core.data.model.IngestionClassificationStatus.FAILED,
+                sourceFingerprint = fingerprint.value,
+                fingerprintKeyVersion = fingerprint.keyVersion,
+                transferFingerprints = emptyMap(),
+            ),
+            accountCount = 0,
+            transferCount = 0,
+        )
+    }
+
+    private suspend fun recordFailedRunOrSuppress(
+        extensionId: String,
+        context: IngestionContext,
+        accountCount: Int,
+        transferCount: Int,
+        original: Exception,
+    ) {
+        try {
+            transferSyncStore.recordFailedIngestion(
+                extensionId,
+                context,
+                accountCount,
+                transferCount,
+            )
+        } catch (auditError: CancellationException) {
+            throw auditError
+        } catch (auditError: Exception) {
+            original.addSuppressed(auditError)
+        }
+    }
+
+    private suspend fun markClassificationFailedOrSuppress(runId: String, original: Exception) {
+        try {
+            transferSyncStore.updateClassificationStatus(
+                runId,
+                tw.kevinzhang.core.data.model.IngestionClassificationStatus.FAILED,
+                System.currentTimeMillis(),
+            )
+        } catch (auditError: CancellationException) {
+            throw auditError
+        } catch (auditError: Exception) {
+            original.addSuppressed(auditError)
+        }
+    }
+}
+
+/** Unit-test fallback. Production always receives the Android Keystore implementation from Hilt. */
+private object MissingSourceFingerprintProtector : SourceFingerprintProtector {
+    override fun fingerprint(vararg components: String): ProtectedSourceFingerprint =
+        ProtectedSourceFingerprint("test-only", 0)
 }
 
 /** Prevents accidental plaintext persistence in unit tests that did not opt into a cipher fake. */

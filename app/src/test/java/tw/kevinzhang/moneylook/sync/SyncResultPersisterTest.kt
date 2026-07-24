@@ -11,11 +11,13 @@ import tw.kevinzhang.core.data.db.AccountTransferRefresh
 import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferDateRange
 import tw.kevinzhang.core.data.db.TransferSyncStore
+import tw.kevinzhang.core.data.db.IngestionContext
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Transfer
+import tw.kevinzhang.core.data.model.IngestionClassificationStatus
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.CardData
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
@@ -274,6 +276,77 @@ class SyncResultPersisterTest {
     }
 
     @Test
+    fun `classification failure marks committed ingestion failed before rethrowing`() = runBlocking {
+        val store = RecordingStore()
+        val persister = SyncResultPersister(
+            transferSyncStore = store,
+            autoCategorizer = TransferAutoCategorizer { throw IllegalStateException("fictional failure") },
+        )
+
+        val error = runCatching {
+            persister.persist(extension(), SyncResult.Success(listOf(AccountData("Account", 1.0, "TWD"))))
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalStateException)
+        assertEquals(IngestionClassificationStatus.FAILED, store.classificationStatus)
+        assertTrue(store.failedContext == null)
+    }
+
+    @Test
+    fun `snapshot failure records a safe failed ingestion run`() = runBlocking {
+        val store = RecordingStore().apply { failSnapshot = true }
+        val error = runCatching {
+            SyncResultPersister(store).persist(
+                extension(),
+                SyncResult.Success(listOf(AccountData("Account", 1.0, "TWD"))),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalStateException)
+        assertEquals("bank::repo", store.failedExtensionId)
+        assertEquals(0, store.failedTransferCount)
+        assertEquals(IngestionClassificationStatus.PENDING, store.failedContext?.classificationStatus)
+    }
+
+    @Test
+    fun `preprocessing failure records exactly one safe failed run`() = runBlocking {
+        val store = RecordingStore()
+        val result = SyncResult.Success(
+            listOf(
+                AccountData(
+                    name = "Card",
+                    balance = 1.0,
+                    currency = "TWD",
+                    kind = AssetKind.CREDIT_CARD,
+                    cards = listOf(CardData(ref = "card", pan = "4242424242424242")),
+                ),
+            ),
+        )
+
+        val error = runCatching {
+            SyncResultPersister(store).persist(extension(), result)
+        }.exceptionOrNull()
+
+        assertTrue(error is IllegalStateException)
+        assertEquals(1, store.failedRunCount)
+        assertEquals("unavailable", store.failedContext?.sourceFingerprint)
+        assertEquals(0, store.failedContext?.fingerprintKeyVersion)
+        assertTrue(store.accounts.isEmpty())
+    }
+
+    @Test
+    fun `explicit runtime failure entry records no payload counts`() = runBlocking {
+        val store = RecordingStore()
+
+        SyncResultPersister(store).recordFailure(extension())
+
+        assertEquals("bank::repo", store.failedExtensionId)
+        assertEquals(0, store.failedAccountCount)
+        assertEquals(0, store.failedTransferCount)
+        assertEquals(IngestionClassificationStatus.FAILED, store.failedContext?.classificationStatus)
+    }
+
+    @Test
     fun `stable account and transfer ids are opaque and deterministic`() {
         val numbered = AccountData("活期", 1.0, "TWD", no = "001")
         val sourceKeyed = numbered.copy(sourceAccountKey = "deposit-opaque-1")
@@ -330,6 +403,13 @@ class SyncResultPersisterTest {
         var refreshes: List<AccountTransferRefresh> = emptyList()
         var legacyIdentityByAccountId: Map<String, LegacyAccountIdentity> = emptyMap()
         var replaceKinds: Set<AssetKind>? = null
+        var failSnapshot = false
+        var failedExtensionId: String? = null
+        var failedContext: IngestionContext? = null
+        var failedAccountCount = -1
+        var failedTransferCount = -1
+        var classificationStatus: IngestionClassificationStatus? = null
+        var failedRunCount = 0
 
         override suspend fun replaceSnapshot(
             extensionId: String,
@@ -341,6 +421,7 @@ class SyncResultPersisterTest {
             legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
             replaceKinds: Set<AssetKind>?,
         ) {
+            if (failSnapshot) throw IllegalStateException("fictional snapshot failure")
             this.extensionId = extensionId
             this.accounts = accounts
             this.transfers = transfers
@@ -349,6 +430,27 @@ class SyncResultPersisterTest {
             this.replaceCardAccountIds = replaceCardAccountIds
             this.legacyIdentityByAccountId = legacyIdentityByAccountId
             this.replaceKinds = replaceKinds
+        }
+
+        override suspend fun recordFailedIngestion(
+            extensionId: String,
+            ingestionContext: IngestionContext,
+            accountCount: Int,
+            transferCount: Int,
+        ) {
+            failedRunCount += 1
+            failedExtensionId = extensionId
+            failedContext = ingestionContext
+            failedAccountCount = accountCount
+            failedTransferCount = transferCount
+        }
+
+        override suspend fun updateClassificationStatus(
+            runId: String,
+            status: IngestionClassificationStatus,
+            completedAt: Long?,
+        ) {
+            classificationStatus = status
         }
     }
 

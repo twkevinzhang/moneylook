@@ -3,6 +3,7 @@ package tw.kevinzhang.moneylook.ui.home
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
@@ -65,4 +66,28 @@ class HomeSyncStateTest {
         assertEquals(SyncState.IDLE, persistedSyncState("success"))
         assertNull(persistedSyncMessage("success"))
     }
+
+    @Test
+    fun `successful sync persistence failure stores fixed error state without exception text`() =
+        runBlocking {
+            val result = SyncResult.Success(listOf(AccountData("Account", 1.0, "TWD")))
+            var lastRunStatus: String? = null
+            var uiState: SyncState? = null
+            var uiMessage: String? = null
+
+            handleSuccessfulSyncPersistence(
+                result = result,
+                persist = { throw IllegalStateException("PRIVATE_PERSISTENCE_DETAIL") },
+                updateLastRun = { lastRunStatus = it },
+                updateUi = { state, message ->
+                    uiState = state
+                    uiMessage = message
+                },
+            )
+
+            assertEquals("error", lastRunStatus)
+            assertEquals(SyncState.ERROR, uiState)
+            assertEquals(PERSISTENCE_FAILURE_MESSAGE, uiMessage)
+            assertEquals(false, requireNotNull(uiMessage).contains("PRIVATE_PERSISTENCE_DETAIL"))
+        }
 }

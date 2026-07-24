@@ -10,4 +10,9 @@ import dagger.hilt.components.SingletonComponent
 abstract class CardPanCryptoModule {
     @Binds
     abstract fun bindCardPanProtector(impl: AndroidKeystoreCardPanProtector): CardPanProtector
+
+    @Binds
+    abstract fun bindSourceFingerprintProtector(
+        impl: AndroidKeystoreSourceFingerprintProtector,
+    ): SourceFingerprintProtector
 }

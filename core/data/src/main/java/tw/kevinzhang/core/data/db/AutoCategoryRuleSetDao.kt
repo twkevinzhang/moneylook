@@ -9,6 +9,12 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleSet
 
 @Dao
 abstract class AutoCategoryRuleSetDao {
+    @Query("SELECT * FROM auto_category_rule_sets WHERE id = :id")
+    abstract suspend fun getById(id: String): AutoCategoryRuleSet?
+
+    @Query("SELECT * FROM auto_category_rule_sets ORDER BY id")
+    abstract suspend fun getAll(): List<AutoCategoryRuleSet>
+
     @Query("SELECT * FROM auto_category_rule_sets ORDER BY isActive DESC, id")
     abstract fun observeAll(): Flow<List<AutoCategoryRuleSet>>
 

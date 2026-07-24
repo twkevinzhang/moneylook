@@ -12,7 +12,13 @@ interface MarketplaceRepository {
 
     /**
      * Downloads the sync-trigger script and saves to internal storage.
-     * Returns the absolute local file path.
+     * Returns the local path and immutable source identity used by runtime and provenance.
      */
-    suspend fun downloadSyncTriggerScript(repoUrl: String, path: String, extensionId: String): String
+    suspend fun downloadSyncTriggerScript(repoUrl: String, path: String, extensionId: String): DownloadedExtensionArtifact
 }
+
+data class DownloadedExtensionArtifact(
+    val path: String,
+    val immutableRevision: String,
+    val sha256: String,
+)

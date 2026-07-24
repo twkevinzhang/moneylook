@@ -29,10 +29,9 @@ enum class AutoCategoryRuleOrigin {
     IMPORTED,
 }
 
-/** Whether a matching rule may write a category or must ask the user first. */
+/** Whether a matching rule may write a category or deliberately leave it unchanged. */
 enum class AutoCategoryRuleAction {
     AUTO_APPLY,
-    SUGGEST,
     ABSTAIN,
 }
 
@@ -40,6 +39,8 @@ enum class AutoCategoryRuleAction {
 enum class AutoCategoryRuleConditionField {
     /** Preserves v1 behaviour: description, memo, and bank transaction type are all candidates. */
     LEGACY_ANY_TEXT,
+    /** V2-normalized search across all non-MCC transaction text fields. */
+    SEARCHABLE_TEXT,
     DESCRIPTION,
     MEMO,
     TYPE,

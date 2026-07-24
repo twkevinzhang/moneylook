@@ -222,7 +222,10 @@ object AutoCategoryRuleCsvCodec {
         accountKind = nullable(columns[14])?.let { enumValueOf<AssetKind>(it) },
         origin = nullable(columns[15])?.let { enumValueOf<AutoCategoryRuleOrigin>(it) }
             ?: AutoCategoryRuleOrigin.LEGACY,
-        action = nullable(columns[16])?.let { enumValueOf<AutoCategoryRuleAction>(it) }
+        action = nullable(columns[16])?.let { raw ->
+            require(raw != "SUGGEST") { "SUGGEST is no longer supported; use AUTO_APPLY or ABSTAIN" }
+            enumValueOf<AutoCategoryRuleAction>(raw)
+        }
             ?: AutoCategoryRuleAction.AUTO_APPLY,
     )
 

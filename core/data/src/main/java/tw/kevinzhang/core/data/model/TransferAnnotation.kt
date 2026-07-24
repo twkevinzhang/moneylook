@@ -35,7 +35,7 @@ data class TransferAnnotation(
     val categoryAssignment: AssignmentSource = AssignmentSource.AUTO,
     /** True also represents an intentional manual clear (categoryId == null). */
     val manualOverride: Boolean = categoryAssignment == AssignmentSource.MANUAL,
-    /** Rule evidence for an automatic/suggested classification; manual edits never need it. */
+    /** Rule evidence for an automatic classification; manual edits never need it. */
     val autoRuleId: String? = null,
     val autoRuleSetId: String? = null,
     val autoMatchScore: Int? = null,

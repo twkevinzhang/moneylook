@@ -20,4 +20,7 @@ data class InstalledExtension(
     val suggestedScheduleTimezone: String = "Asia/Taipei",
     val suggestedScheduleEnabled: Boolean = true,
     val credentialFieldsJson: String = LEGACY_CREDENTIAL_FIELDS_JSON,
+    /** Immutable marketplace revision and digest of the downloaded sync artifact, if available. */
+    val artifactRevision: String? = null,
+    val artifactSha256: String? = null,
 )

@@ -15,7 +15,28 @@ import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
+import tw.kevinzhang.core.data.model.TransferAnnotationEvent
+import tw.kevinzhang.core.data.model.ClassificationOutcome
+import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.TransferTagCrossRef
+
+data class AutomaticClassificationDecision(
+    val transferId: String,
+    val extensionId: String,
+    val categoryId: String?,
+    val tagIds: Set<String>,
+    val runId: String?,
+    val trigger: ClassificationTrigger,
+    val outcome: ClassificationOutcome,
+    val ruleId: String?,
+    val ruleSetId: String?,
+    val ruleContentSha256: String?,
+    val ruleSetContentSha256: String?,
+    val matchScore: Int?,
+    val classifierVersion: String?,
+)
+
+enum class AutomaticClassificationWriteResult { APPLIED, RECORDED_ONLY, PRESERVED_MANUAL }
 
 /** A transaction together with user-owned metadata. Bank [Transfer.memo] is intentionally separate. */
 data class TransferDetail(
@@ -133,20 +154,176 @@ abstract class TransferAnnotationDao {
             "manual save requires a MANUAL category assignment"
         }
         require(annotation.manualOverride) { "manual save requires manualOverride" }
+        val previous = getByTransferIds(listOf(annotation.transferId)).singleOrNull()
+        val previousManualTagIds = getManualTagCrossRefs(annotation.transferId).mapTo(mutableSetOf()) { it.tagId }
         upsert(annotation)
         deleteAllTags(annotation.transferId)
         if (tagIds.isNotEmpty()) {
             upsertTagCrossRefs(tagIds.map { tagId -> TransferTagCrossRef(annotation.transferId, tagId) })
         }
+        insertAnnotationEvent(
+            TransferAnnotationEvent(
+                id = java.util.UUID.randomUUID().toString(),
+                occurredAt = System.currentTimeMillis(),
+                runId = null,
+                transferId = annotation.transferId,
+                extensionId = annotation.extensionId,
+                trigger = ClassificationTrigger.MANUAL_EDIT,
+                outcome = if (annotation.categoryId == null) {
+                    ClassificationOutcome.MANUAL_CLEARED
+                } else {
+                    ClassificationOutcome.MANUAL_ASSIGNED
+                },
+                previousCategoryId = previous?.categoryId,
+                newCategoryId = annotation.categoryId,
+                ruleId = null,
+                ruleSetId = null,
+                ruleContentSha256 = null,
+                ruleSetContentSha256 = null,
+                matchScore = null,
+                classifierVersion = null,
+                tagAddedCount = (tagIds - previousManualTagIds).size,
+                tagRemovedCount = (previousManualTagIds - tagIds).size,
+            ),
+        )
     }
 
     /** Replaces only user-picked tags; automatic tags remain available for a later rule re-run. */
     @Transaction
     open suspend fun replaceManualTags(transferId: String, tagIds: Set<String>) {
+        val previousTagIds = getManualTagCrossRefs(transferId).mapTo(mutableSetOf()) { it.tagId }
+        val annotation = getByTransferIds(listOf(transferId)).singleOrNull()
+        val extensionId = annotation?.extensionId ?: getTransferExtensionId(transferId)
+            ?: return
         deleteTagsBySource(transferId, "MANUAL")
         if (tagIds.isNotEmpty()) {
             upsertTagCrossRefs(tagIds.map { tagId -> TransferTagCrossRef(transferId, tagId) })
         }
+        insertAnnotationEvent(
+            TransferAnnotationEvent(
+                id = java.util.UUID.randomUUID().toString(),
+                occurredAt = System.currentTimeMillis(),
+                runId = null,
+                transferId = transferId,
+                extensionId = extensionId,
+                trigger = ClassificationTrigger.MANUAL_EDIT,
+                outcome = ClassificationOutcome.MANUAL_TAG_EDIT,
+                previousCategoryId = annotation?.categoryId,
+                newCategoryId = annotation?.categoryId,
+                ruleId = null,
+                ruleSetId = null,
+                ruleContentSha256 = null,
+                ruleSetContentSha256 = null,
+                matchScore = null,
+                classifierVersion = null,
+                tagAddedCount = (tagIds - previousTagIds).size,
+                tagRemovedCount = (previousTagIds - tagIds).size,
+            ),
+        )
+    }
+
+    /**
+     * Rechecks the live manual override and commits annotation, automatic tags, and audit as one
+     * decision. A manual edit that races a classifier therefore always wins.
+     */
+    @Transaction
+    open suspend fun applyAutomaticDecision(
+        decision: AutomaticClassificationDecision,
+    ): AutomaticClassificationWriteResult {
+        val current = getByTransferIds(listOf(decision.transferId)).singleOrNull()
+        if (current?.manualOverride == true) {
+            insertDecisionEvent(
+                decision.copy(
+                    outcome = ClassificationOutcome.PRESERVED_MANUAL,
+                    categoryId = current.categoryId,
+                    tagIds = emptySet(),
+                ),
+                previousCategoryId = current.categoryId,
+            )
+            return AutomaticClassificationWriteResult.PRESERVED_MANUAL
+        }
+        if (decision.outcome == ClassificationOutcome.AUTO_APPLIED ||
+            decision.outcome == ClassificationOutcome.NO_MATCH && current != null
+        ) {
+            upsert(
+                TransferAnnotation(
+                    transferId = decision.transferId,
+                    extensionId = decision.extensionId,
+                    categoryId = decision.categoryId,
+                    note = current?.note.orEmpty(),
+                    categoryAssignment = tw.kevinzhang.core.data.model.AssignmentSource.AUTO,
+                    manualOverride = false,
+                    autoRuleId = decision.ruleId,
+                    autoRuleSetId = decision.ruleSetId,
+                    autoMatchScore = decision.matchScore,
+                    classifierVersion = decision.classifierVersion,
+                ),
+            )
+            replaceAutoTags(decision.transferId, decision.tagIds)
+        }
+        insertDecisionEvent(decision, current?.categoryId)
+        return if (decision.outcome == ClassificationOutcome.AUTO_APPLIED) {
+            AutomaticClassificationWriteResult.APPLIED
+        } else {
+            AutomaticClassificationWriteResult.RECORDED_ONLY
+        }
+    }
+
+    /** Clears a manual override under the same serialization boundary used by classifier writes. */
+    @Transaction
+    open suspend fun resumeAutomaticClassification(transferId: String) {
+        val existing = getByTransferIds(listOf(transferId)).singleOrNull() ?: return
+        upsert(
+            existing.copy(
+                categoryId = null,
+                categoryAssignment = tw.kevinzhang.core.data.model.AssignmentSource.AUTO,
+                manualOverride = false,
+            ),
+        )
+        insertAnnotationEvent(
+            TransferAnnotationEvent(
+                id = java.util.UUID.randomUUID().toString(),
+                occurredAt = System.currentTimeMillis(),
+                runId = null,
+                transferId = existing.transferId,
+                extensionId = existing.extensionId,
+                trigger = ClassificationTrigger.RESUME,
+                outcome = ClassificationOutcome.RESUMED_AUTOMATIC,
+                previousCategoryId = existing.categoryId,
+                newCategoryId = null,
+                ruleId = null,
+                ruleSetId = null,
+                ruleContentSha256 = null,
+                ruleSetContentSha256 = null,
+                matchScore = null,
+                classifierVersion = null,
+            ),
+        )
+    }
+
+    private suspend fun insertDecisionEvent(
+        decision: AutomaticClassificationDecision,
+        previousCategoryId: String?,
+    ) {
+        insertAnnotationEvent(
+            TransferAnnotationEvent(
+                id = java.util.UUID.randomUUID().toString(),
+                occurredAt = System.currentTimeMillis(),
+                runId = decision.runId,
+                transferId = decision.transferId,
+                extensionId = decision.extensionId,
+                trigger = decision.trigger,
+                outcome = decision.outcome,
+                previousCategoryId = previousCategoryId,
+                newCategoryId = decision.categoryId,
+                ruleId = decision.ruleId,
+                ruleSetId = decision.ruleSetId,
+                ruleContentSha256 = decision.ruleContentSha256,
+                ruleSetContentSha256 = decision.ruleSetContentSha256,
+                matchScore = decision.matchScore,
+                classifierVersion = decision.classifierVersion,
+            ),
+        )
     }
 
     /** Replaces automatic tags without disturbing explicit user tag assignments. */
@@ -171,6 +348,15 @@ abstract class TransferAnnotationDao {
 
     @Query("DELETE FROM transfer_tag_cross_refs WHERE transferId = :transferId")
     protected abstract suspend fun deleteAllTags(transferId: String)
+
+    @Query("SELECT * FROM transfer_tag_cross_refs WHERE transferId = :transferId AND source = 'MANUAL'")
+    protected abstract suspend fun getManualTagCrossRefs(transferId: String): List<TransferTagCrossRef>
+
+    @Query("SELECT extensionId FROM transfers WHERE id = :transferId")
+    protected abstract suspend fun getTransferExtensionId(transferId: String): String?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertAnnotationEvent(event: TransferAnnotationEvent)
 
     /**
      * Removes annotations and their tags once an extension is genuinely removed, not during a

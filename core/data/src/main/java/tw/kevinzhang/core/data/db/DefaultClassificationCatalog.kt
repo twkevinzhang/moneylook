@@ -27,15 +27,6 @@ object DefaultClassificationCatalog {
      * Public MCC mapping derived from Mastercard's Quick Reference Booklet and Visa's Merchant
      * Data Standards Manual. These codes identify merchant types, not individual transactions.
      */
-    val publicMccRuleSet = AutoCategoryRuleSet(
-        id = "public-mcc-rules-v2",
-        name = "Moneylook public MCC rules v2",
-        origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
-        version = "2026.07.24",
-        canonicalizerVersion = "v2-space-fold",
-        contentSha256 = "60ad647811680cf1035d52f628c30db47a46e92fc1050b47aae369f412c94289",
-    )
-
     /** Stable public rule IDs and MCCs. AUTO is reserved for one unambiguous category. */
     val publicMccRules: List<PublicMccRule> = listOf(
         mccRule("public-mcc-auto-expense-food-v2", "expense-food", AutoCategoryRuleAction.AUTO_APPLY, 100, "5411,5422,5441,5451,5462,5499,5811,5812,5814"),
@@ -50,20 +41,31 @@ object DefaultClassificationCatalog {
         mccRule("public-mcc-auto-expense-insurance-v2", "expense-insurance", AutoCategoryRuleAction.AUTO_APPLY, 100, "5960,6300"),
         mccRule("public-mcc-auto-expense-tax-v2", "expense-tax", AutoCategoryRuleAction.AUTO_APPLY, 100, "9311"),
         mccRule("public-mcc-auto-expense-phone-v2", "expense-phone", AutoCategoryRuleAction.AUTO_APPLY, 100, "4813"),
-        mccRule("public-mcc-suggest-expense-phone-v2", "expense-phone", AutoCategoryRuleAction.SUGGEST, 50, "4814"),
-        mccRule("public-mcc-suggest-expense-internet-v2", "expense-internet", AutoCategoryRuleAction.SUGGEST, 50, "4816"),
-        mccRule("public-mcc-suggest-expense-entertainment-v2", "expense-entertainment", AutoCategoryRuleAction.SUGGEST, 50, "4899,5735,5813,5815"),
-        mccRule("public-mcc-suggest-expense-home-v2", "expense-home", AutoCategoryRuleAction.SUGGEST, 50, "1520,1711,1731,1740,1750,1761,1771,1799,4900,5950,7217,7623"),
-        mccRule("public-mcc-suggest-expense-transport-v2", "expense-transport", AutoCategoryRuleAction.SUGGEST, 50, "5541"),
-        mccRule("public-mcc-suggest-expense-medical-v2", "expense-medical", AutoCategoryRuleAction.SUGGEST, 50, "5912"),
-        mccRule("public-mcc-suggest-expense-shopping-v2", "expense-shopping", AutoCategoryRuleAction.SUGGEST, 50, "5932,5945"),
-        mccRule("public-mcc-suggest-expense-gift-v2", "expense-gift", AutoCategoryRuleAction.SUGGEST, 50, "5947,5992"),
-        mccRule("public-mcc-suggest-expense-topup-v2", "expense-topup", AutoCategoryRuleAction.SUGGEST, 50, "6540"),
-        mccRule("public-mcc-suggest-expense-clothing-v2", "expense-clothing", AutoCategoryRuleAction.SUGGEST, 50, "7216,7251,7296"),
-        mccRule("public-mcc-suggest-expense-learning-v2", "expense-learning", AutoCategoryRuleAction.SUGGEST, 50, "7911"),
-        mccRule("public-mcc-suggest-expense-business-v2", "expense-business", AutoCategoryRuleAction.SUGGEST, 50, "7311,7333,7338,7339,7361,7372,7375,7379,7392,7399,8911,8931"),
-        mccRule("public-mcc-suggest-transfer-account-v2", "transfer-account", AutoCategoryRuleAction.SUGGEST, 50, "4829"),
+        mccRule("public-mcc-suggest-expense-phone-v2", "expense-phone", AutoCategoryRuleAction.AUTO_APPLY, 50, "4814"),
+        mccRule("public-mcc-suggest-expense-internet-v2", "expense-internet", AutoCategoryRuleAction.AUTO_APPLY, 50, "4816"),
+        mccRule("public-mcc-suggest-expense-entertainment-v2", "expense-entertainment", AutoCategoryRuleAction.AUTO_APPLY, 50, "4899,5735,5813,5815"),
+        mccRule("public-mcc-suggest-expense-home-v2", "expense-home", AutoCategoryRuleAction.AUTO_APPLY, 50, "1520,1711,1731,1740,1750,1761,1771,1799,4900,5950,7217,7623"),
+        mccRule("public-mcc-suggest-expense-transport-v2", "expense-transport", AutoCategoryRuleAction.AUTO_APPLY, 50, "5541"),
+        mccRule("public-mcc-suggest-expense-medical-v2", "expense-medical", AutoCategoryRuleAction.AUTO_APPLY, 50, "5912"),
+        mccRule("public-mcc-suggest-expense-shopping-v2", "expense-shopping", AutoCategoryRuleAction.AUTO_APPLY, 50, "5932,5945"),
+        mccRule("public-mcc-suggest-expense-gift-v2", "expense-gift", AutoCategoryRuleAction.AUTO_APPLY, 50, "5947,5992"),
+        mccRule("public-mcc-suggest-expense-topup-v2", "expense-topup", AutoCategoryRuleAction.AUTO_APPLY, 50, "6540"),
+        mccRule("public-mcc-suggest-expense-clothing-v2", "expense-clothing", AutoCategoryRuleAction.AUTO_APPLY, 50, "7216,7251,7296"),
+        mccRule("public-mcc-suggest-expense-learning-v2", "expense-learning", AutoCategoryRuleAction.AUTO_APPLY, 50, "7911"),
+        mccRule("public-mcc-suggest-expense-business-v2", "expense-business", AutoCategoryRuleAction.AUTO_APPLY, 50, "7311,7333,7338,7339,7361,7372,7375,7379,7392,7399,8911,8931"),
+        mccRule("public-mcc-suggest-transfer-account-v2", "transfer-account", AutoCategoryRuleAction.AUTO_APPLY, 50, "4829"),
     )
+
+    val publicMccRuleSet: AutoCategoryRuleSet by lazy {
+        AutoCategoryRuleSet(
+            id = PUBLIC_MCC_RULE_SET_ID,
+            name = "Moneylook public MCC rules v2",
+            origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+            version = "2026.07.25",
+            canonicalizerVersion = "v2-space-fold",
+            contentSha256 = publicRuleCollectionContentSha256(publicMccRules),
+        )
+    }
 
     val publicStructuralRules: List<PublicMccRule> = listOf(
         phraseRule("public-structural-auto-credit-card-revolving-interest-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.EXPENSE, AssetKind.CREDIT_CARD, "循環利息", "revolving interest"),
@@ -72,12 +74,12 @@ object DefaultClassificationCatalog {
         phraseRule("public-structural-auto-credit-card-foreign-fee-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.EXPENSE, AssetKind.CREDIT_CARD, "國外交易手續費", "foreign transaction fee"),
         phraseRule("public-structural-auto-deposit-cash-withdrawal-v2", "expense-cash", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.EXPENSE, AssetKind.DEPOSIT, "跨行提款", "自行提款", "cash withdrawal", "atm withdrawal"),
         phraseRule("public-structural-auto-deposit-transfer-fee-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.EXPENSE, AssetKind.DEPOSIT, "轉帳手續費", "transfer fee"),
-        phraseRule("public-structural-suggest-salary-v2", "income-salary", AutoCategoryRuleAction.SUGGEST, AutoCategoryRuleDirection.INCOME, null, "薪資入帳", "薪水入帳", "salary"),
-        phraseRule("public-structural-suggest-bonus-v2", "income-bonus", AutoCategoryRuleAction.SUGGEST, AutoCategoryRuleDirection.INCOME, null, "年終獎金", "績效獎金", "bonus"),
-        phraseRule("public-structural-suggest-refund-v2", "income-refund", AutoCategoryRuleAction.SUGGEST, AutoCategoryRuleDirection.INCOME, null, "退貨退款", "交易退款", "refund"),
-        phraseRule("public-structural-suggest-credit-card-payment-v2", "transfer-account", AutoCategoryRuleAction.SUGGEST, AutoCategoryRuleDirection.ANY, null, "信用卡繳款", "credit card payment", "card payment"),
-        phraseRule("public-structural-suggest-auto-topup-v2", "expense-topup", AutoCategoryRuleAction.SUGGEST, AutoCategoryRuleDirection.EXPENSE, null, "自動加值", "自動儲值", "automatic top up", "auto top up"),
-        phraseRule("public-structural-suggest-credit-card-installment-v2", "expense-shopping", AutoCategoryRuleAction.SUGGEST, AutoCategoryRuleDirection.EXPENSE, AssetKind.CREDIT_CARD, "信用卡分期消費", "installment purchase"),
+        phraseRule("public-structural-suggest-salary-v2", "income-salary", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.INCOME, null, "薪資入帳", "薪水入帳", "salary"),
+        phraseRule("public-structural-suggest-bonus-v2", "income-bonus", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.INCOME, null, "年終獎金", "績效獎金", "bonus"),
+        phraseRule("public-structural-suggest-refund-v2", "income-refund", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.INCOME, null, "退貨退款", "交易退款", "refund"),
+        phraseRule("public-structural-suggest-credit-card-payment-v2", "transfer-account", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.ANY, null, "信用卡繳款", "credit card payment", "card payment"),
+        phraseRule("public-structural-suggest-auto-topup-v2", "expense-topup", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.EXPENSE, null, "自動加值", "自動儲值", "automatic top up", "auto top up"),
+        phraseRule("public-structural-suggest-credit-card-installment-v2", "expense-shopping", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleDirection.EXPENSE, AssetKind.CREDIT_CARD, "信用卡分期消費", "installment purchase"),
     )
 
     /** Conservative, field-scoped public rules with no merchant or personal transaction data. */
@@ -85,7 +87,7 @@ object DefaultClassificationCatalog {
         id = PUBLIC_STRUCTURAL_RULE_SET_ID,
         name = "Moneylook public structural rules v2",
         origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
-        version = "2026.07.24",
+        version = "2026.07.25",
         canonicalizerVersion = "v2-space-fold",
         contentSha256 = publicRuleCollectionContentSha256(publicStructuralRules),
     )
@@ -241,7 +243,7 @@ object DefaultClassificationCatalog {
             categoryId = categoryId,
             priority = priority,
             isDefault = true,
-            ruleSetId = publicMccRuleSet.id,
+            ruleSetId = PUBLIC_MCC_RULE_SET_ID,
             accountKind = AssetKind.CREDIT_CARD,
             origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
             action = action,
@@ -331,6 +333,7 @@ object DefaultClassificationCatalog {
         ),
     )
 
+    private const val PUBLIC_MCC_RULE_SET_ID = "public-mcc-rules-v2"
     private const val PUBLIC_STRUCTURAL_RULE_SET_ID = "public-structural-rules-v2"
     const val PUBLIC_GENERIC_RULE_SET_ID = "public-generic-rules-v3"
     private const val STRUCTURAL_TEXT_FIELDS = 3

@@ -4,6 +4,32 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.Transfer
+import tw.kevinzhang.core.data.model.IngestionStatus
+import tw.kevinzhang.core.data.model.IngestionClassificationStatus
+import tw.kevinzhang.core.data.model.IngestionTrigger
+
+/** Keyed, app-private fingerprints for one normalized transfer returned by an extension. */
+data class TransferFingerprintEvidence(
+    val sourceFingerprint: String,
+    val payloadFingerprint: String,
+)
+
+/** Privacy-safe facts associated with one completed snapshot write. */
+data class IngestionContext(
+    val runId: String,
+    val startedAt: Long,
+    val completedAt: Long,
+    val extensionVersion: Int,
+    val artifactRevision: String?,
+    val artifactSha256: String?,
+    val trigger: IngestionTrigger,
+    val status: IngestionStatus,
+    val classificationStatus: IngestionClassificationStatus =
+        IngestionClassificationStatus.PENDING,
+    val sourceFingerprint: String,
+    val fingerprintKeyVersion: Int,
+    val transferFingerprints: Map<String, TransferFingerprintEvidence>,
+)
 
 /** A successful inclusive date range whose transactions may safely replace local history. */
 data class TransferDateRange(
@@ -47,4 +73,40 @@ interface TransferSyncStore {
         /** Null keeps legacy whole-extension replacement; otherwise only these kinds are authoritative. */
         replaceKinds: Set<AssetKind>? = null,
     )
+
+    /**
+     * Provenance-aware overload. Keeping the legacy method preserves test doubles and third-party
+     * store implementations while Room writes events atomically in its concrete implementation.
+     */
+    suspend fun replaceSnapshot(
+        extensionId: String,
+        accounts: List<Account>,
+        transfers: List<Transfer>,
+        refreshes: List<AccountTransferRefresh>,
+        cardInstruments: List<CreditCardInstrument> = emptyList(),
+        replaceCardAccountIds: Set<String> = emptySet(),
+        legacyIdentityByAccountId: Map<String, LegacyAccountIdentity> = emptyMap(),
+        replaceKinds: Set<AssetKind>? = null,
+        ingestionContext: IngestionContext,
+    ) {
+        replaceSnapshot(
+            extensionId, accounts, transfers, refreshes, cardInstruments, replaceCardAccountIds,
+            legacyIdentityByAccountId, replaceKinds,
+        )
+    }
+
+    /** Safe failure ledger entry for a run whose snapshot transaction did not commit. */
+    suspend fun recordFailedIngestion(
+        extensionId: String,
+        ingestionContext: IngestionContext,
+        accountCount: Int,
+        transferCount: Int,
+    ) = Unit
+
+    /** Classification completion is explicit because it occurs after snapshot persistence. */
+    suspend fun updateClassificationStatus(
+        runId: String,
+        status: IngestionClassificationStatus,
+        completedAt: Long?,
+    ) = Unit
 }
