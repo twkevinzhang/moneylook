@@ -8,6 +8,7 @@ data class TransferSyncCursor(
     val kind: AssetKind,
     val currency: String,
     val latestTxnDateTime: String,
+    val earliestTxnDateTime: String = "",
 ) {
     override fun toString(): String = "TransferSyncCursor([REDACTED])"
 }

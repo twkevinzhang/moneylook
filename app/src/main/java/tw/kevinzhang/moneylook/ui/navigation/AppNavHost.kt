@@ -21,6 +21,7 @@ import androidx.navigation.navArgument
 import tw.kevinzhang.moneylook.ui.analysis.GlobalLedgerAnalysisContent
 import tw.kevinzhang.moneylook.ui.home.ExtensionLedgerScreen
 import tw.kevinzhang.moneylook.ui.home.HomeScreen
+import tw.kevinzhang.moneylook.ui.home.SyncLogScreen
 import tw.kevinzhang.moneylook.ui.marketplace.ManageReposScreen
 import tw.kevinzhang.moneylook.ui.marketplace.MarketplaceScreen
 import tw.kevinzhang.moneylook.ui.settings.SettingsScreen
@@ -103,6 +104,7 @@ fun AppNavHost(navController: NavHostController) {
                 onNavigateToLedger = { accountId ->
                     navController.navigate(Screen.ExtensionLedger.route(accountId))
                 },
+                onNavigateToSyncLog = { extensionId -> navController.navigate(Screen.SyncLog.route(extensionId)) },
             )
         }
         composable(Screen.Marketplace.route) {
@@ -159,6 +161,15 @@ fun AppNavHost(navController: NavHostController) {
         }
         composable(Screen.AutoRules.route) {
             AutoRuleScreen(onNavigateUp = { navController.popBackStack() })
+        }
+        composable(
+            route = Screen.SyncLog.route,
+            arguments = listOf(navArgument("extensionId") { type = NavType.StringType }),
+        ) { entry ->
+            SyncLogScreen(
+                extensionId = java.net.URLDecoder.decode(entry.arguments?.getString("extensionId") ?: "", "UTF-8"),
+                onNavigateUp = { navController.popBackStack() },
+            )
         }
     }
 }

@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,6 +96,7 @@ private fun ClassificationManagementScaffold(
     deleteTarget?.let { item ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
             title = { Text("刪除${item.name}？") },
             text = { Text("已使用這個項目的交易將不再顯示它。") },
             confirmButton = { TextButton(onClick = { onDelete(item.id); deleteTarget = null }) { Text("刪除") } },
@@ -146,6 +148,7 @@ private fun ManagedItemDialog(
     var color by remember(initial) { mutableStateOf(initial?.color ?: defaultCategoryColors.first()) }
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {

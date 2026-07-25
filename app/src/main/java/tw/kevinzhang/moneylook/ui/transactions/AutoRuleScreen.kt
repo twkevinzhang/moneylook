@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
 import tw.kevinzhang.core.data.model.AssetKind
@@ -83,6 +84,7 @@ fun AutoRuleListContent(
     deleteId?.let { id ->
         AlertDialog(
             onDismissRequest = { deleteId = null }, title = { Text("刪除自動分類規則？") },
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
             text = { Text("不會變更既有交易的分類。") },
             confirmButton = { TextButton(onClick = { onDelete(id); deleteId = null }) { Text("刪除") } },
             dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } },
@@ -91,6 +93,7 @@ fun AutoRuleListContent(
     if (confirmApplyAllRules) {
         AlertDialog(
             onDismissRequest = { confirmApplyAllRules = false },
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
             title = { Text("套用所有規則？") },
             text = {
                 Text(
@@ -187,6 +190,7 @@ fun AutoRuleEditorDialog(
     var draft by remember(initial) { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         title = { Text(if (initial.id.isBlank()) "新增自動分類規則" else "編輯自動分類規則") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {

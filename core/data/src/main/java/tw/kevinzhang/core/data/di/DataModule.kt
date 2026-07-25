@@ -30,6 +30,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_16_17
 import tw.kevinzhang.core.data.db.MIGRATION_17_18
 import tw.kevinzhang.core.data.db.MIGRATION_18_19
 import tw.kevinzhang.core.data.db.MIGRATION_19_20
+import tw.kevinzhang.core.data.db.MIGRATION_20_21
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -62,6 +63,7 @@ object DataModule {
                 MIGRATION_17_18,
                 MIGRATION_18_19,
                 MIGRATION_19_20,
+                MIGRATION_20_21,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .build()
@@ -81,6 +83,10 @@ object DataModule {
     @Provides
     fun provideCredentialProfileDao(db: MoneylookDatabase): CredentialProfileDao =
         db.credentialProfileDao()
+
+    @Provides
+    fun provideSyncDiagnosticDao(db: MoneylookDatabase): tw.kevinzhang.core.data.db.SyncDiagnosticDao =
+        db.syncDiagnosticDao()
 
     @Provides
     fun provideCreditCardInstrumentDao(db: MoneylookDatabase): CreditCardInstrumentDao =

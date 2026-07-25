@@ -237,8 +237,17 @@ class ExtensionRunnerImpl @Inject constructor(
                 try {
                     const result = await eval($scriptLiteral);
                     __result_bridge__.onResult(JSON.stringify(result));
-                } catch (_) {
-                    __result_bridge__.onError();
+                } catch (error) {
+                    const candidate = typeof error === 'object' && error && typeof error.code === 'string'
+                        ? error.code
+                        : (typeof error === 'object' && error && typeof error.message === 'string'
+                            ? error.message : null);
+                    const code = typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{0,47}$/.test(candidate)
+                        ? candidate : null;
+                    const stack = typeof error === 'object' && error && typeof error.stack === 'string' ? error.stack : '';
+                    const match = stack.match(/:(\\d+):(\\d+)/);
+                    const frame = match ? ('line ' + match[1] + ', column ' + match[2]) : null;
+                    __result_bridge__.onError(JSON.stringify({ code: code, frame: frame }));
                 } finally {
                     browser.close();
                 }
@@ -342,9 +351,14 @@ private class ScriptResultBridge(
     }
 
     @JavascriptInterface
-    fun onError() {
+    fun onError(diagnosticJson: String) {
         // Extension exceptions may embed credentials, request headers, or response bodies.
-        deferred.complete(SyncResult.Error("extension script failed"))
+        val values = runCatching {
+            @Suppress("UNCHECKED_CAST") gson.fromJson(diagnosticJson, Map::class.java) as Map<String, Any?>
+        }.getOrNull().orEmpty()
+        val code = (values["code"] as? String)?.takeIf { it.matches(Regex("[A-Z][A-Z0-9_]{0,47}")) }
+        val frame = (values["frame"] as? String)?.takeIf { it.matches(Regex("line \\d{1,6}, column \\d{1,6}")) }
+        deferred.complete(SyncResult.Error("extension script failed", code = code, scriptFrame = frame))
     }
 }
 
@@ -486,6 +500,7 @@ private fun parseKindSync(
 private fun parseKindSyncStatus(value: Any?): KindSyncStatus? = when (value) {
     "complete" -> KindSyncStatus.COMPLETE
     "failed" -> KindSyncStatus.FAILED
+    "not_applicable" -> KindSyncStatus.NOT_APPLICABLE
     else -> null
 }
 

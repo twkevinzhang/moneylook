@@ -20,6 +20,7 @@ import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.core.data.model.TransferAnnotationEvent
 import tw.kevinzhang.core.data.model.TransferIngestionEvent
 import tw.kevinzhang.core.data.model.TransferTagCrossRef
+import tw.kevinzhang.core.data.model.SyncDiagnostic
 
 @Database(
     entities = [
@@ -39,8 +40,9 @@ import tw.kevinzhang.core.data.model.TransferTagCrossRef
         TransferAnnotationEvent::class,
         TransferIngestionEvent::class,
         TransferTagCrossRef::class,
+        SyncDiagnostic::class,
     ],
-    version = 20,
+    version = 21,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
@@ -57,6 +59,7 @@ abstract class MoneylookDatabase : RoomDatabase() {
     abstract fun transferAnnotationDao(): TransferAnnotationDao
     abstract fun tagDao(): TagDao
     abstract fun syncResultDao(): SyncResultDao
+    abstract fun syncDiagnosticDao(): SyncDiagnosticDao
 
     companion object {
         /** Seeds the full public catalog only when Room creates a brand-new database. */

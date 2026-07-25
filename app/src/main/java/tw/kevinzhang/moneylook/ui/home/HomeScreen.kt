@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -75,6 +76,7 @@ fun HomeScreen(
     bottomBar: @Composable () -> Unit = {},
     onNavigateToMarketplace: () -> Unit,
     onNavigateToLedger: (accountId: String) -> Unit,
+    onNavigateToSyncLog: (extensionId: String) -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val extensions by viewModel.extensions.collectAsStateWithLifecycle()
@@ -115,6 +117,7 @@ fun HomeScreen(
     if (showSyncDialog) {
         AlertDialog(
             onDismissRequest = { showSyncDialog = false },
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
             title = { Text("全部同步") },
             text = { Text("將依序重新登入並同步所有已設定帳密的銀行，確定要繼續？") },
             confirmButton = {
@@ -183,6 +186,7 @@ fun HomeScreen(
                         onSync = { viewModel.sync(ext) },
                         onEditCredentials = { editingExtension = ext },
                         onViewLedger = onNavigateToLedger,
+                        onViewSyncLog = { onNavigateToSyncLog(ext.id) },
                     )
                 }
             }
@@ -338,6 +342,7 @@ private fun ExtensionCard(
     onSync: () -> Unit,
     onEditCredentials: () -> Unit,
     onViewLedger: (accountId: String) -> Unit,
+    onViewSyncLog: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -421,7 +426,10 @@ private fun ExtensionCard(
                     } else {
                         MaterialTheme.colorScheme.error
                     },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onViewSyncLog)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
 
@@ -468,6 +476,7 @@ private fun CredentialEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         title = { Text("${extension.name} 登入資料與排程") },
         text = {
             Column(

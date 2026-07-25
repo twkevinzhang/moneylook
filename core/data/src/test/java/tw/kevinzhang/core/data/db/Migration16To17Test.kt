@@ -60,7 +60,7 @@ class Migration16To17Test {
     }
 
     @Test
-    fun `migration chain passes the complete Room v20 schema validation`() {
+    fun `migration chain passes the complete Room v21 schema validation`() {
         val context = RuntimeEnvironment.getApplication()
         Room.databaseBuilder(context, MoneylookDatabase::class.java, databaseName)
             .allowMainThreadQueries()
@@ -73,7 +73,7 @@ class Migration16To17Test {
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(databaseName)
-                .callback(object : SupportSQLiteOpenHelper.Callback(20) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(21) {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(
                         db: SupportSQLiteDatabase,
@@ -87,15 +87,22 @@ class Migration16To17Test {
         helper.close()
 
         Room.databaseBuilder(context, MoneylookDatabase::class.java, databaseName)
-            .addMigrations(MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+            .addMigrations(
+                MIGRATION_16_17,
+                MIGRATION_17_18,
+                MIGRATION_18_19,
+                MIGRATION_19_20,
+                MIGRATION_20_21,
+            )
             .allowMainThreadQueries()
             .build()
             .also { database ->
                 val migrated = database.openHelper.writableDatabase
-                assertEquals(20, migrated.version)
+                assertEquals(21, migrated.version)
                 assertTrue(tableExists(migrated, "auto_category_rule_sets"))
                 assertTrue(tableExists(migrated, "auto_category_rule_conditions"))
                 assertTrue(tableExists(migrated, "ingestion_runs"))
+                assertTrue(tableExists(migrated, "sync_diagnostics"))
                 database.close()
             }
     }
@@ -110,6 +117,7 @@ class Migration16To17Test {
         db.execSQL("DROP TABLE `transfer_annotation_events`")
         db.execSQL("DROP TABLE `transfer_ingestion_events`")
         db.execSQL("DROP TABLE `ingestion_runs`")
+        db.execSQL("DROP TABLE `sync_diagnostics`")
         db.execSQL("DROP TABLE `auto_category_rule_conditions`")
         db.execSQL("DROP TABLE `auto_category_rule_sets`")
 

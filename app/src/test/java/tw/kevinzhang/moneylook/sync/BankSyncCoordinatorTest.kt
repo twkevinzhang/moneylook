@@ -1,6 +1,8 @@
 package tw.kevinzhang.moneylook.sync
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -9,7 +11,9 @@ import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.db.TransferCursorStore
 import tw.kevinzhang.core.data.db.TransferSyncCursor
+import tw.kevinzhang.core.data.db.SyncDiagnosticDao
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.SyncDiagnostic
 import tw.kevinzhang.extension_runtime.ExtensionCredential
 import tw.kevinzhang.extension_runtime.ExtensionRunner
 import tw.kevinzhang.extension_runtime.ExtensionSyncContext
@@ -52,6 +56,7 @@ class BankSyncCoordinatorTest {
                 }
             },
             transferCursorStore = cursorStore(),
+            syncDiagnosticDao = diagnosticDao(),
         )
 
         val result = coordinator.sync(extension, profile)
@@ -66,6 +71,10 @@ class BankSyncCoordinatorTest {
             "2026-07-21T18:00:00+08:00",
             receivedSyncContext?.transferCursors?.single()?.latestTxnDateTime,
         )
+        assertEquals(
+            "2026-07-01T00:00:00+08:00",
+            receivedSyncContext?.transferCursors?.single()?.earliestTxnDateTime,
+        )
     }
 
     @Test
@@ -79,6 +88,7 @@ class BankSyncCoordinatorTest {
                 ): SyncResult = SyncResult.Error("extension login failed")
             },
             transferCursorStore = cursorStore(),
+            syncDiagnosticDao = diagnosticDao(),
         )
 
         val result = coordinator.sync(extension, profile)
@@ -102,6 +112,7 @@ class BankSyncCoordinatorTest {
                 }
             },
             transferCursorStore = cursorStore(AssetKind.TIME_DEPOSIT),
+            syncDiagnosticDao = diagnosticDao(),
         )
 
         coordinator.sync(extension, profile)
@@ -116,7 +127,14 @@ class BankSyncCoordinatorTest {
                 kind = kind,
                 currency = "TWD",
                 latestTxnDateTime = "2026-07-21T18:00:00+08:00",
+                earliestTxnDateTime = "2026-07-01T00:00:00+08:00",
             ),
         )
+    }
+
+    private fun diagnosticDao() = object : SyncDiagnosticDao {
+        override suspend fun insert(diagnostic: SyncDiagnostic) = Unit
+        override fun observeByExtension(extensionId: String): Flow<List<SyncDiagnostic>> =
+            flowOf(emptyList())
     }
 }
