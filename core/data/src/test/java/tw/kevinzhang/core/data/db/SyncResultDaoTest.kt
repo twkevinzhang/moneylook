@@ -267,6 +267,39 @@ class SyncResultDaoTest {
     }
 
     @Test
+    fun `partial history with no completed ranges upserts successful statements and retains prior history`() = runBlocking {
+        val store = database.syncResultDao()
+        val account = account("account")
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(account),
+            transfers = listOf(
+                transfer("prior-march", "2026-03-01", 1.0),
+                transfer("prior-april", "2026-04-01", 2.0),
+            ),
+            refreshes = listOf(AccountTransferRefresh("account", null)),
+        )
+
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(account.copy(transferSyncComplete = false)),
+            transfers = listOf(
+                transfer("statement-april-success", "2026-03-15", 3.0),
+            ),
+            // A failed month (for example HTTP 502) means no date range is safe to replace.
+            refreshes = listOf(AccountTransferRefresh("account", emptyList())),
+        )
+
+        assertEquals(
+            setOf("prior-march", "prior-april", "statement-april-success"),
+            database.transferDao().observeByAccount("account").first().map(Transfer::id).toSet(),
+        )
+        assertFalse(
+            database.accountDao().observeAll().first().single { it.id == "account" }.transferSyncComplete!!,
+        )
+    }
+
+    @Test
     fun `latest transfer cursors are grouped by opaque source identity and redact their values`() = runBlocking {
         val store = database.syncResultDao()
         store.replaceSnapshot(
