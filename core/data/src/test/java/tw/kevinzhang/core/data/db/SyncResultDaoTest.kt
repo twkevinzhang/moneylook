@@ -298,12 +298,14 @@ class SyncResultDaoTest {
                     kind = tw.kevinzhang.core.data.model.AssetKind.DEPOSIT,
                     currency = "TWD",
                     latestTxnDateTime = "2026-07-21T18:00:00+08:00",
+                    earliestTxnDateTime = "2026-07-20T09:00:00+08:00",
                 ),
             ),
             cursors,
         )
         assertFalse(cursors.single().toString().contains("deposit-opaque-1"))
         assertFalse(cursors.single().toString().contains("2026-07-21"))
+        assertFalse(cursors.single().toString().contains("2026-07-20"))
     }
 
     @Test

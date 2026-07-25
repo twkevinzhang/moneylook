@@ -43,6 +43,7 @@ class ExtensionRunnerContractTest {
                         kind = "deposit",
                         currency = "TWD",
                         latestTxnDateTime = "2026-07-21T18:00:00+08:00",
+                        earliestTxnDateTime = "2025-07-21T09:00:00+08:00",
                     ),
                 ),
             ),
@@ -51,7 +52,7 @@ class ExtensionRunnerContractTest {
         assertTrue(wrapper.contains("credential: deepFreeze({\"username\":\"alice\",\"password\":\"p@ssword\"})"))
         assertTrue(
             wrapper.contains(
-                "sync: deepFreeze({\"transferCursors\":[{\"sourceAccountKey\":\"$sourceKey\",\"kind\":\"deposit\",\"currency\":\"TWD\",\"latestTxnDateTime\":\"2026-07-21T18:00:00+08:00\"}]})",
+                "sync: deepFreeze({\"transferCursors\":[{\"sourceAccountKey\":\"$sourceKey\",\"kind\":\"deposit\",\"currency\":\"TWD\",\"latestTxnDateTime\":\"2026-07-21T18:00:00+08:00\",\"earliestTxnDateTime\":\"2025-07-21T09:00:00+08:00\"}]})",
             ),
         )
         assertTrue(wrapper.contains("Object.getOwnPropertyNames(value)"))
@@ -79,13 +80,14 @@ class ExtensionRunnerContractTest {
     fun syncContextToStringRedactsCursorValues() {
         val context = ExtensionSyncContext(
             transferCursors = listOf(
-                ExtensionTransferCursor(sourceKey, "deposit", "TWD", "2026-07-21T18:00:00+08:00"),
+                ExtensionTransferCursor(sourceKey, "deposit", "TWD", "2026-07-21T18:00:00+08:00", "2025-07-21T09:00:00+08:00"),
             ),
         )
 
         assertEquals("ExtensionSyncContext(transferCursors=1)", context.toString())
         assertFalse(context.toString().contains(sourceKey))
         assertFalse(context.toString().contains("2026-07-21"))
+        assertFalse(context.toString().contains("2025-07-21"))
         assertEquals("ExtensionTransferCursor([REDACTED])", context.transferCursors.single().toString())
     }
 
@@ -349,6 +351,19 @@ class ExtensionRunnerContractTest {
             ),
             parsed.kindSync,
         )
+    }
+
+    @Test
+    fun `parses not applicable kind without treating it as a failed product`() {
+        val parsed = parseAccounts(
+            """{"accounts":[{"name":"Checking","balance":1,"kind":"deposit"}],"kindSync":[
+                {"kind":"deposit","status":"complete"},
+                {"kind":"time_deposit","status":"not_applicable","code":"NO_PRODUCT"}
+            ]}""".trimIndent(),
+            Gson(),
+        ) as SyncResult.Success
+
+        assertEquals(KindSyncStatus.NOT_APPLICABLE, parsed.kindSync?.last()?.status)
     }
 
     @Test

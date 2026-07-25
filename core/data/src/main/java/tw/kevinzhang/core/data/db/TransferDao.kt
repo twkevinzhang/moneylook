@@ -49,7 +49,8 @@ interface TransferDao : TransferCursorStore {
         SELECT a.sourceAccountKey AS sourceAccountKey,
                a.kind AS kind,
                a.currency AS currency,
-               MAX(t.txnDateTime) AS latestTxnDateTime
+               MAX(t.txnDateTime) AS latestTxnDateTime,
+               MIN(t.txnDateTime) AS earliestTxnDateTime
         FROM accounts AS a
         INNER JOIN transfers AS t ON t.accountId = a.id
         WHERE a.extensionId = :extensionId

@@ -72,6 +72,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
@@ -606,6 +607,7 @@ private fun GlobalDateRangeDialog(range: GlobalDateRange, onDismiss: () -> Unit,
     )
     DatePickerDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
         confirmButton = {
             TextButton(onClick = {
                 val valid = onConfirm(pickerState.selectedStartDateMillis?.utcDate(), pickerState.selectedEndDateMillis?.utcDate())

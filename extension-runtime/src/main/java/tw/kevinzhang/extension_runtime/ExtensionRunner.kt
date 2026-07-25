@@ -16,6 +16,8 @@ data class ExtensionTransferCursor(
     val kind: String,
     val currency: String,
     val latestTxnDateTime: String,
+    /** Earliest locally stored transaction, so an extension can resume a bounded backfill. */
+    val earliestTxnDateTime: String = "",
 ) {
     override fun toString(): String = "ExtensionTransferCursor([REDACTED])"
 }

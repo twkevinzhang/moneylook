@@ -360,7 +360,7 @@ class HomeViewModel @Inject constructor(
                 syncResultPersister.recordFailure(extension, IngestionTrigger.USER_SYNC)
                 credentialProfileDao.updateLastRun(extension.id, now, "error")
                 updateStatus(extension.id) {
-                    it.copy(syncState = SyncState.ERROR, errorMessage = result.message)
+                    it.copy(syncState = SyncState.ERROR, errorMessage = "同步失敗，請查看同步紀錄")
                 }
             }
         }

@@ -666,3 +666,16 @@ val MIGRATION_19_20 = object : Migration(19, 20) {
         db.execSQL("CREATE INDEX IF NOT EXISTS index_transfer_annotation_events_outcome ON transfer_annotation_events(outcome)")
     }
 }
+
+/** Adds privacy-preserving, append-only sync diagnostics. */
+val MIGRATION_20_21 = object : Migration(20, 21) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS sync_diagnostics (
+                id TEXT NOT NULL PRIMARY KEY, extensionId TEXT NOT NULL, createdAt INTEGER NOT NULL,
+                category TEXT NOT NULL, code TEXT, scriptFrame TEXT
+            )""",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_diagnostics_extensionId_createdAt ON sync_diagnostics (extensionId, createdAt)")
+    }
+}
