@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    name: Build and release APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="$GITHUB_REF_NAME"
+          if [[ "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+          else
+            echo "::error::Tag must use vMAJOR.MINOR.PATCH, for example v0.0.1"
+            exit 1
+          fi
+
+          if (( ${#major} > 4 || ${#minor} > 3 || ${#patch} > 3 )); then
+            echo "::error::Major, minor, or patch version is too large"
+            exit 1
+          fi
+
+          major_number=$((10#$major))
+          minor_number=$((10#$minor))
+          patch_number=$((10#$patch))
+          if (( minor_number >= 1000 || patch_number >= 1000 )); then
+            echo "::error::Minor and patch versions must be below 1000"
+            exit 1
+          fi
+
+          version_code=$((major_number * 1000000 + minor_number * 1000 + patch_number))
+          if (( version_code < 1 || version_code > 2100000000 )); then
+            echo "::error::Calculated versionCode is invalid: $version_code"
+            exit 1
+          fi
+
+          echo "APP_VERSION_NAME=${tag#v}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Validate signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for secret_name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!secret_name:-}" ]]; then
+              echo "::error::Required GitHub Actions secret $secret_name is not configured"
+              exit 1
+            fi
+          done
+
+      - name: Run debug unit tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Compile debug Kotlin
+        run: ./gradlew :app:compileDebugKotlin
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PATH: ${{ runner.temp }}/moneylook-release.jks
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH"
+          echo "KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Assemble signed release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease \
+            -PAPP_VERSION_NAME="$APP_VERSION_NAME" \
+            -PAPP_VERSION_CODE="$APP_VERSION_CODE"
+
+      - name: Name release APK
+        run: |
+          mv app/build/outputs/apk/release/app-release.apk \
+            "app/build/outputs/apk/release/moneylook-${GITHUB_REF_NAME}.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/moneylook-*.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true

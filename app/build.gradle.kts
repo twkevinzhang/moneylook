@@ -5,6 +5,15 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+val versionNameOverride = providers.gradleProperty("APP_VERSION_NAME").orNull
+val versionCodeOverride = providers.gradleProperty("APP_VERSION_CODE").orNull?.let { value ->
+    value.toIntOrNull()?.takeIf { it in 1..2_100_000_000 }
+        ?: error("APP_VERSION_CODE must be an integer between 1 and 2100000000")
+}
+val releaseKeystoreFile = providers.environmentVariable("KEYSTORE_PATH").orNull
+    ?.let(::file)
+    ?.takeIf { it.isFile }
+
 android {
     namespace = "tw.kevinzhang.moneylook"
     compileSdk = 36
@@ -12,14 +21,27 @@ android {
         applicationId = "tw.kevinzhang.moneylook"
         minSdk = 24
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = versionCodeOverride ?: 3
+        versionName = versionNameOverride ?: "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    if (releaseKeystoreFile != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = releaseKeystoreFile
+                storePassword = providers.environmentVariable("KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
+            }
+        }
     }
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseKeystoreFile != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
