@@ -10,9 +10,25 @@ val versionCodeOverride = providers.gradleProperty("APP_VERSION_CODE").orNull?.l
     value.toIntOrNull()?.takeIf { it in 1..2_100_000_000 }
         ?: error("APP_VERSION_CODE must be an integer between 1 and 2100000000")
 }
-val releaseKeystoreFile = providers.environmentVariable("KEYSTORE_PATH").orNull
-    ?.let(::file)
-    ?.takeIf { it.isFile }
+fun signingValue(environmentName: String, propertyName: String): String? =
+    providers.environmentVariable(environmentName)
+        .filter { it.isNotBlank() }
+        .orElse(providers.gradleProperty(propertyName).filter { it.isNotBlank() })
+        .orNull
+
+val signingKeystorePath = signingValue("KEYSTORE_PATH", "MONEYLOOK_KEYSTORE_PATH")
+val signingKeystoreFile = signingKeystorePath?.let(::file)?.also { keystore ->
+    require(keystore.isFile) { "Configured Moneylook signing keystore does not exist" }
+}
+val signingStorePassword = signingValue("KEYSTORE_PASSWORD", "MONEYLOOK_KEYSTORE_PASSWORD")
+val signingKeyAlias = signingValue("KEY_ALIAS", "MONEYLOOK_KEY_ALIAS")
+val signingKeyPassword = signingValue("KEY_PASSWORD", "MONEYLOOK_KEY_PASSWORD")
+
+if (signingKeystoreFile != null) {
+    requireNotNull(signingStorePassword) { "Moneylook signing keystore password is not configured" }
+    requireNotNull(signingKeyAlias) { "Moneylook signing key alias is not configured" }
+    requireNotNull(signingKeyPassword) { "Moneylook signing key password is not configured" }
+}
 
 android {
     namespace = "tw.kevinzhang.moneylook"
@@ -25,22 +41,27 @@ android {
         versionName = versionNameOverride ?: "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    if (releaseKeystoreFile != null) {
+    if (signingKeystoreFile != null) {
         signingConfigs {
-            create("release") {
-                storeFile = releaseKeystoreFile
-                storePassword = providers.environmentVariable("KEYSTORE_PASSWORD").orNull
-                keyAlias = providers.environmentVariable("KEY_ALIAS").orNull
-                keyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
+            create("moneylook") {
+                storeFile = signingKeystoreFile
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
             }
         }
     }
     buildTypes {
+        debug {
+            if (signingKeystoreFile != null) {
+                signingConfig = signingConfigs.getByName("moneylook")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (releaseKeystoreFile != null) {
-                signingConfig = signingConfigs.getByName("release")
+            if (signingKeystoreFile != null) {
+                signingConfig = signingConfigs.getByName("moneylook")
             }
         }
     }
