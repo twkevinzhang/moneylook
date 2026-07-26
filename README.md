@@ -163,6 +163,25 @@ sdk.browser.close()
 ./gradlew testDebugUnitTest
 ```
 
+### 本機簽章設定
+
+專案可讓 `debug` 與 `release` 共用同一組本機簽章，方便以 `adb install -r` 更新已安裝的開發裝置 App 並保留私有資料。簽章設定依序讀取環境變數與使用者層級的 `~/.gradle/gradle.properties`；環境變數優先，Android Studio 的 Gradle Sync／Build 會自動讀取後者。
+
+```properties
+MONEYLOOK_KEYSTORE_PATH=/absolute/path/to/moneylook-release.jks
+MONEYLOOK_KEY_ALIAS=<key-alias>
+MONEYLOOK_KEYSTORE_PASSWORD=<keystore-password>
+MONEYLOOK_KEY_PASSWORD=<key-password>
+```
+
+請使用絕對路徑；Gradle property 中的 `~` 不會自動展開。上述設定只應存放在使用者層級的 Gradle properties，不可加入 repository，並建議限制檔案權限：
+
+```bash
+chmod 600 ~/.gradle/gradle.properties
+```
+
+CI 或臨時 shell 可改用既有的 `KEYSTORE_PATH`、`KEY_ALIAS`、`KEYSTORE_PASSWORD`、`KEY_PASSWORD` 環境變數覆寫。若設定了 keystore path，其他三個簽章值也必須完整提供；設定不完整或檔案不存在時，Gradle 會直接停止，避免意外產生不同簽章的 APK。未提供任何 keystore path 時，`debug` 維持 Android 預設 debug signing，`release` 維持未簽章。
+
 ## 模組結構
 
 ```text
