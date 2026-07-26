@@ -60,7 +60,7 @@ class Migration16To17Test {
     }
 
     @Test
-    fun `migration chain passes the complete Room v22 schema validation`() {
+    fun `migration chain passes the complete Room v23 schema validation`() {
         val context = RuntimeEnvironment.getApplication()
         Room.databaseBuilder(context, MoneylookDatabase::class.java, databaseName)
             .allowMainThreadQueries()
@@ -73,7 +73,7 @@ class Migration16To17Test {
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(databaseName)
-                .callback(object : SupportSQLiteOpenHelper.Callback(22) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(23) {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(
                         db: SupportSQLiteDatabase,
@@ -94,18 +94,20 @@ class Migration16To17Test {
                 MIGRATION_19_20,
                 MIGRATION_20_21,
                 MIGRATION_21_22,
+                MIGRATION_22_23,
             )
             .allowMainThreadQueries()
             .build()
             .also { database ->
                 val migrated = database.openHelper.writableDatabase
-                assertEquals(22, migrated.version)
+                assertEquals(23, migrated.version)
                 assertTrue(tableExists(migrated, "auto_category_rule_sets"))
                 assertTrue(tableExists(migrated, "auto_category_rule_conditions"))
                 assertTrue(tableExists(migrated, "ingestion_runs"))
                 assertTrue(tableExists(migrated, "sync_diagnostics"))
                 assertTrue(tableExists(migrated, "source_documents"))
                 assertTrue(tableExists(migrated, "transfer_field_observations"))
+                assertTrue(columnExists(migrated, "ingestion_runs", "failureDiagnosticJson"))
                 database.close()
             }
     }
@@ -301,4 +303,11 @@ class Migration16To17Test {
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
             arrayOf(name),
         ).use { it.moveToFirst() }
+
+    private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
+        db.query("PRAGMA table_info(`$table`)").use { cursor ->
+            val name = cursor.getColumnIndexOrThrow("name")
+            generateSequence { if (cursor.moveToNext()) cursor.getString(name) else null }
+                .any { it == column }
+        }
 }

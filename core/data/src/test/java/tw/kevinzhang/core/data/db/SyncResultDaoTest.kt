@@ -42,6 +42,42 @@ class SyncResultDaoTest {
     }
 
     @Test
+    fun `failed ingestion atomically retains all raw failure fields on its run`() = runBlocking {
+        database.syncResultDao().recordFailedIngestion(
+            extensionId = "extension",
+            ingestionContext = IngestionContext(
+                runId = "failed-run",
+                startedAt = 10,
+                completedAt = 20,
+                extensionVersion = 9,
+                artifactRevision = "revision",
+                artifactSha256 = "sha",
+                trigger = IngestionTrigger.USER_SYNC,
+                status = IngestionStatus.FAILED,
+                sourceFingerprint = "fingerprint",
+                fingerprintKeyVersion = 1,
+                transferFingerprints = emptyMap(),
+                failureOrigin = "SCRIPT",
+                failureCode = "BANK_REJECTED",
+                failureMessage = "authenticated response was rejected",
+                failureStack = "Error: authenticated response was rejected\n at bank.js:71:9",
+                failureDiagnosticJson = """{"thrown":{"credential":"test-secret"}}""",
+                failureScriptFrame = "line 71, column 9",
+            ),
+            accountCount = 0,
+            transferCount = 0,
+        )
+
+        val run = database.ingestionProvenanceDao().getRecentRuns("extension").single()
+        assertEquals("SCRIPT", run.failureOrigin)
+        assertEquals("BANK_REJECTED", run.failureCode)
+        assertEquals("authenticated response was rejected", run.failureMessage)
+        assertTrue(requireNotNull(run.failureStack).contains("bank.js:71:9"))
+        assertEquals("""{"thrown":{"credential":"test-secret"}}""", run.failureDiagnosticJson)
+        assertEquals("line 71, column 9", run.failureScriptFrame)
+    }
+
+    @Test
     fun `completed ranges replace only their history and preserve older data in one transaction`() = runBlocking {
         val store = database.syncResultDao()
         val account = account("account")

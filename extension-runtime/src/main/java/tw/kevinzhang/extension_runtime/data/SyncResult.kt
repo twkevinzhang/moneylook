@@ -12,10 +12,17 @@ sealed class SyncResult {
         val runStartedAt: Long? = null,
     ) : SyncResult()
     data class Error(
+        /** Stable summary retained for existing callers; see raw fields for complete evidence. */
         val message: String,
+        /** Stable producer of this failure, such as SCRIPT, NATIVE_BRIDGE, RUNTIME, or PARSER. */
+        val origin: String = "PARSER",
         val cause: Throwable? = null,
         val code: String? = null,
         val scriptFrame: String? = null,
+        val rawMessage: String? = null,
+        val rawStack: String? = null,
+        /** Exact diagnostic JSON received from the JavaScript wrapper. */
+        val rawDiagnosticJson: String? = null,
         val sourceDocuments: List<CapturedSourceDocument> = emptyList(),
         val runId: String? = null,
         val runStartedAt: Long? = null,
@@ -55,4 +62,7 @@ data class KindSyncResult(
     val kind: AssetKind,
     val status: KindSyncStatus,
     val code: String? = null,
+    val rawMessage: String? = null,
+    val rawStack: String? = null,
+    val rawDiagnosticJson: String? = null,
 )

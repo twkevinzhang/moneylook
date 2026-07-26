@@ -65,7 +65,8 @@ internal data class BrowserXhrResponse(
 internal class SafeBrowserException(
     val code: String,
     message: String,
-) : Exception(message)
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
 internal object BrowserBridgeRequestValidator {
     fun validate(json: String) {
@@ -159,7 +160,7 @@ internal object BrowserRequestJsonParser {
         return try {
             gson.fromJson(json, JsonObject::class.java)
         } catch (e: Exception) {
-            throw invalid("request must be valid JSON")
+            throw invalid("request must be valid JSON", e)
         } ?: throw invalid("request must be an object")
     }
 
@@ -195,7 +196,7 @@ internal object BrowserRequestJsonParser {
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
                 .encode(CharBuffer.wrap(body))
         } catch (e: CharacterCodingException) {
-            throw SafeBrowserException("INVALID_BODY", "body is not valid UTF-8 text")
+            throw SafeBrowserException("INVALID_BODY", "body is not valid UTF-8 text", e)
         }
         if (buffer.remaining() > MAX_REQUEST_BODY_BYTES) {
             throw SafeBrowserException("BODY_TOO_LARGE", "request body exceeds size limit")
@@ -282,7 +283,10 @@ internal object BrowserRequestJsonParser {
             value
         } ?: default
 
-    private fun invalid(message: String) = SafeBrowserException("INVALID_REQUEST", message)
+    private fun invalid(
+        message: String,
+        cause: Throwable? = null,
+    ) = SafeBrowserException("INVALID_REQUEST", message, cause)
 
     private val METHOD_PATTERN = Regex("^[!#$%&'*+.^_`|~0-9A-Z-]+$")
     private val BODY_ENCODINGS = setOf("utf8", "base64")

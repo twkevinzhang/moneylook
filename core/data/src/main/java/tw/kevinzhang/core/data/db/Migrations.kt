@@ -800,3 +800,15 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
         DefaultClassificationSeeder.upgradeGenericMerchantRulesToV4(db)
     }
 }
+
+/** Retains complete extension/runtime failure diagnostics on the ingestion run that produced them. */
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `ingestion_runs` ADD COLUMN `failureOrigin` TEXT")
+        db.execSQL("ALTER TABLE `ingestion_runs` ADD COLUMN `failureCode` TEXT")
+        db.execSQL("ALTER TABLE `ingestion_runs` ADD COLUMN `failureMessage` TEXT")
+        db.execSQL("ALTER TABLE `ingestion_runs` ADD COLUMN `failureStack` TEXT")
+        db.execSQL("ALTER TABLE `ingestion_runs` ADD COLUMN `failureDiagnosticJson` TEXT")
+        db.execSQL("ALTER TABLE `ingestion_runs` ADD COLUMN `failureScriptFrame` TEXT")
+    }
+}

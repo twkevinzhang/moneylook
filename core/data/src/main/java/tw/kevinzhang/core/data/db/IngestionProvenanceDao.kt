@@ -13,6 +13,28 @@ import tw.kevinzhang.core.data.model.TransferFieldObservation
 import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
 import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
 
+/**
+ * Bounded-list projection for ingestion history.
+ *
+ * Complete failure message/stack/diagnostic JSON are intentionally absent so merely opening the
+ * history does not read or compose every potentially multi-megabyte failure payload.
+ */
+data class IngestionRunSummary(
+    val id: String,
+    val startedAt: Long,
+    val completedAt: Long,
+    val extensionId: String,
+    val extensionVersion: Int,
+    val trigger: String,
+    val status: String,
+    val classificationStatus: String,
+    val accountCount: Int,
+    val transferCount: Int,
+    val failureOrigin: String?,
+    val failureCode: String?,
+    val failureScriptFrame: String?,
+)
+
 /** Safe, aggregate-only quality signals. No transaction text is selected by this DAO. */
 data class MonthlyClassificationAggregate(
     val month: String,
@@ -85,6 +107,26 @@ interface IngestionProvenanceDao {
         """,
     )
     suspend fun getRecentRuns(extensionId: String, limit: Int = 100): List<IngestionRun>
+
+    @Query(
+        """
+        SELECT id, startedAt, completedAt, extensionId, extensionVersion, trigger, status,
+            classificationStatus, accountCount, transferCount, failureOrigin, failureCode,
+            failureScriptFrame
+        FROM ingestion_runs
+        WHERE extensionId = :extensionId
+        ORDER BY startedAt DESC, id DESC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    suspend fun getRunSummaries(
+        extensionId: String,
+        limit: Int,
+        offset: Int,
+    ): List<IngestionRunSummary>
+
+    @Query("SELECT * FROM ingestion_runs WHERE id = :runId LIMIT 1")
+    suspend fun getIngestionRun(runId: String): IngestionRun?
 
     @Query(
         """

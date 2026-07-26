@@ -26,6 +26,7 @@ import kotlinx.coroutines.withTimeout
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.ByteString.Companion.decodeBase64
+import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
@@ -164,7 +165,7 @@ internal class BrowserWebViewSession(
             view.stopLoading()
             if (e is TimeoutCancellationException) {
                 if (state != State.CLOSED) state = State.FAILED
-                throw SafeBrowserException("BROWSER_TIMEOUT", "browser navigation timed out")
+                throw SafeBrowserException("BROWSER_TIMEOUT", "browser navigation timed out", e)
             }
             throw e
         } catch (e: SafeBrowserException) {
@@ -172,7 +173,7 @@ internal class BrowserWebViewSession(
             throw e
         } catch (e: Exception) {
             if (state != State.CLOSED) state = State.FAILED
-            throw SafeBrowserException("BROWSER_NAVIGATION", "browser navigation failed")
+            throw SafeBrowserException("BROWSER_NAVIGATION", "browser navigation failed", e)
         } finally {
             if (openEvents === events) openEvents = null
             events.cancel()
@@ -224,13 +225,13 @@ internal class BrowserWebViewSession(
                 }
             } catch (e: CancellationException) {
                 if (e is TimeoutCancellationException) {
-                    throw SafeBrowserException("BROWSER_TIMEOUT", "browser request timed out")
+                    throw SafeBrowserException("BROWSER_TIMEOUT", "browser request timed out", e)
                 }
                 throw e
             } catch (e: SafeBrowserException) {
                 throw e
             } catch (e: Exception) {
-                throw SafeBrowserException("BROWSER_ERROR", "browser request failed")
+                throw SafeBrowserException("BROWSER_ERROR", "browser request failed", e)
             } finally {
                 if (webView === view) {
                     view.evaluateJavascript(BrowserXhrScriptBuilder.cleanup(slot, gson), null)
@@ -325,7 +326,11 @@ internal class BrowserWebViewSession(
         } catch (e: Exception) {
             view.destroy()
             BrowserProfileLifecycle.delete(name)
-            throw SafeBrowserException("BROWSER_PROFILE_UNSUPPORTED", "browser profile could not be created")
+            throw SafeBrowserException(
+                "BROWSER_PROFILE_UNSUPPORTED",
+                "browser profile could not be created",
+                e,
+            )
         }
         profileName = name
         webView = view
@@ -354,7 +359,7 @@ internal class BrowserWebViewSession(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                throw SafeBrowserException("BROWSER_ERROR", "browser request state is invalid")
+                throw SafeBrowserException("BROWSER_ERROR", "browser request state is invalid", e)
             }
             when (poll.get("state")?.asString) {
                 "done" -> return PayloadMetadata(
@@ -396,7 +401,7 @@ internal class BrowserWebViewSession(
         val root = try {
             gson.fromJson(metadata, JsonObject::class.java)
         } catch (e: Exception) {
-            throw SafeBrowserException("BROWSER_ERROR", "browser response is invalid")
+            throw SafeBrowserException("BROWSER_ERROR", "browser response is invalid", e)
         }
         if (root.get("ok")?.asBoolean != true) {
             val code = root.get("code")?.asString?.takeIf { it in SAFE_XHR_ERROR_CODES } ?: "BROWSER_ERROR"
@@ -405,7 +410,7 @@ internal class BrowserWebViewSession(
         val response = try {
             gson.fromJson(root.getAsJsonObject("response"), BrowserXhrResponse::class.java).copy(body = body)
         } catch (e: Exception) {
-            throw SafeBrowserException("BROWSER_ERROR", "browser response is invalid")
+            throw SafeBrowserException("BROWSER_ERROR", "browser response is invalid", e)
         }
         return BrowserResponseValidator.validate(response)
     }
@@ -486,24 +491,40 @@ internal class BrowserWebViewSession(
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-            if (request.isForMainFrame) failNavigation("BROWSER_NAVIGATION")
+            if (request.isForMainFrame) {
+                failNavigation(
+                    "BROWSER_NAVIGATION",
+                    IOException("WebView error ${error.errorCode}: ${error.description}"),
+                )
+            }
         }
 
         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
             handler.cancel()
-            failNavigation("BROWSER_SSL")
+            failNavigation(
+                "BROWSER_SSL",
+                IOException("WebView SSL error ${error.primaryError}: ${error.url}"),
+            )
         }
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            failNavigation("BROWSER_RENDERER_GONE")
+            failNavigation(
+                "BROWSER_RENDERER_GONE",
+                IllegalStateException(
+                    "WebView renderer gone: didCrash=${detail.didCrash()}, priority=${detail.rendererPriorityAtExit()}",
+                ),
+            )
             state = State.FAILED
             return true
         }
 
-        private fun failNavigation(code: String) {
+        private fun failNavigation(
+            code: String,
+            cause: Throwable,
+        ) {
             state = State.FAILED
             openEvents?.trySend(
-                OpenEvent.Failed(SafeBrowserException(code, "browser navigation failed")),
+                OpenEvent.Failed(SafeBrowserException(code, "browser navigation failed", cause)),
             )
         }
     }
