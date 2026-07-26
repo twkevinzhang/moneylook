@@ -358,6 +358,18 @@ fun filterGlobalTransactions(
         .toList()
 }
 
+/**
+ * Applies the main screen's explicit conditions, then narrows the result to a
+ * category selected from the category report.  A null [categoryId] represents
+ * the uncategorized bucket, rather than an omitted category constraint.
+ */
+fun filterCategoryTransactions(
+    items: List<GlobalTransactionItem>,
+    filter: GlobalTransactionsFilter,
+    categoryId: String?,
+): List<GlobalTransactionItem> = filterGlobalTransactions(items, filter)
+    .filter { item -> item.categoryId == categoryId }
+
 /** Income and expense selections intentionally follow the transaction sign, not category metadata. */
 private fun matchesGlobalDirectionFilter(
     item: GlobalTransactionItem,

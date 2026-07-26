@@ -12,6 +12,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -27,7 +29,9 @@ import tw.kevinzhang.moneylook.ui.marketplace.MarketplaceScreen
 import tw.kevinzhang.moneylook.ui.settings.SettingsScreen
 import tw.kevinzhang.moneylook.ui.transactions.AutoRuleScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryManagementScreen
+import tw.kevinzhang.moneylook.ui.transactions.CategoryTransactionsScreen
 import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionsScreen
+import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionsViewModel
 import tw.kevinzhang.moneylook.ui.transactions.TagManagementScreen
 import tw.kevinzhang.moneylook.ui.transactions.TransactionDetailScreen
 
@@ -119,7 +123,35 @@ fun AppNavHost(navController: NavHostController) {
                 onNavigateToTransaction = { transferId ->
                     navController.navigate(Screen.TransactionDetail.route(transferId))
                 },
+                onNavigateToCategoryTransactions = { categoryId ->
+                    navController.navigate(Screen.CategoryTransactions.route(categoryId))
+                },
                 analysisContent = { state -> GlobalLedgerAnalysisContent(state) },
+            )
+        }
+        composable(
+            route = Screen.CategoryTransactions.route,
+            arguments = listOf(
+                navArgument("categoryId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { backStackEntry ->
+            val parentEntry = remember(backStackEntry) {
+                navController.getBackStackEntry(Screen.GlobalTransactions.route)
+            }
+            val viewModel: GlobalTransactionsViewModel = hiltViewModel(parentEntry)
+            val categoryId = backStackEntry.arguments?.getString("categoryId")
+                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+            CategoryTransactionsScreen(
+                categoryId = categoryId,
+                viewModel = viewModel,
+                onNavigateUp = { navController.popBackStack() },
+                onNavigateToTransaction = { transferId ->
+                    navController.navigate(Screen.TransactionDetail.route(transferId))
+                },
             )
         }
         composable(Screen.Settings.route) {

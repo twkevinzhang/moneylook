@@ -4,6 +4,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -41,11 +42,11 @@ class GlobalTransactionsInteractionTest {
             GlobalTransactionsUiState(
                 dateRange = anchor,
                 datePagerAnchor = anchor,
-                filter = GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE),
+                filter = GlobalTransactionsFilter(),
                 activeTab = GlobalTransactionsTab.CATEGORY,
                 categoryDirection = GlobalTransactionDirection.EXPENSE,
                 allItems = listOf(income, expense),
-                items = listOf(expense),
+                items = listOf(income, expense),
                 summary = GlobalTransactionsSummary(income = 100.0, expense = 200.0),
                 missingExchangeCurrencies = listOf("JPY"),
                 exchangeRatesLoading = false,
@@ -68,14 +69,7 @@ class GlobalTransactionsInteractionTest {
                     onClearFilters = {},
                     onSelectTab = { tab -> state.value = state.value.copy(activeTab = tab) },
                     onSelectReportDirection = { direction ->
-                        state.value = state.value.copy(
-                            filter = state.value.filter.copy(direction = direction),
-                            categoryDirection = direction,
-                            items = filterGlobalTransactions(
-                                state.value.allItems,
-                                state.value.filter.copy(direction = direction),
-                            ),
-                        )
+                        state.value = state.value.copy(categoryDirection = direction)
                     },
                     onCategoryClick = {},
                 )
@@ -217,6 +211,177 @@ class GlobalTransactionsInteractionTest {
             .onNode(hasScrollAction() and hasAnyDescendant(hasText("已出帳")))
             .performScrollToNode(hasText("未出帳"))
         composeRule.onNodeWithText("未出帳").assertExists()
+    }
+
+    @Test
+    fun categoryClickOnlyRequestsIndependentCategoryNavigation() {
+        val range = GlobalDateRange.thisMonth(LocalDate.now())
+        val selectedCategory = GlobalCategorySummary(
+            id = "food",
+            name = "餐飲",
+            emoji = "🍜",
+            amount = 360.0,
+            percentage = 1f,
+            transactionCount = 1,
+        )
+        val state = mutableStateOf(
+            GlobalTransactionsUiState(
+                dateRange = range,
+                filter = GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE),
+                activeTab = GlobalTransactionsTab.CATEGORY,
+                categories = listOf(selectedCategory),
+            ),
+        )
+        var requestedCategoryId: String? = "not-clicked"
+
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                GlobalTransactionsContent(
+                    state = state.value,
+                    onNavigateToTransaction = {},
+                    onSelectDateRange = {},
+                    onResetToThisMonth = {},
+                    onSetDateRange = { _, _ -> true },
+                    onSetQuery = {},
+                    onUpdateFilter = {},
+                    onClearFilters = {},
+                    onSelectTab = {},
+                    onSelectReportDirection = {},
+                    onCategoryClick = { requestedCategoryId = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("餐飲").performClick()
+        composeRule.runOnIdle {
+            assertEquals("food", requestedCategoryId)
+            assertEquals(GlobalTransactionsTab.CATEGORY, state.value.activeTab)
+            assertEquals(null, state.value.filter.categoryId)
+        }
+    }
+
+    @Test
+    fun detailsTabShowsAllCurrentResultsAfterCategoryNavigationRequest() {
+        val range = GlobalDateRange.thisMonth(LocalDate.now())
+        val income = item("salary", 20_000.0, "TWD").copy(
+            description = "七月薪資",
+            categoryId = "salary",
+            categoryName = "薪資",
+        )
+        val food = item("food", -360.0, "TWD").copy(
+            description = "午餐",
+            categoryId = "food",
+            categoryName = "餐飲",
+        )
+        val uncategorized = item("uncategorized", -80.0, "TWD").copy(
+            description = "未分類消費",
+        )
+        val allCurrentResults = listOf(income, food, uncategorized)
+        val state = mutableStateOf(
+            GlobalTransactionsUiState(
+                dateRange = range,
+                filter = GlobalTransactionsFilter(),
+                activeTab = GlobalTransactionsTab.CATEGORY,
+                allItems = allCurrentResults,
+                items = allCurrentResults,
+                categories = listOf(
+                    GlobalCategorySummary(
+                        id = "food",
+                        name = "餐飲",
+                        emoji = "🍜",
+                        amount = 360.0,
+                        percentage = 1f,
+                        transactionCount = 1,
+                    ),
+                ),
+            ),
+        )
+        var requestedCategoryId: String? = null
+
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                GlobalTransactionsContent(
+                    state = state.value,
+                    onNavigateToTransaction = {},
+                    onSelectDateRange = {},
+                    onResetToThisMonth = {},
+                    onSetDateRange = { _, _ -> true },
+                    onSetQuery = {},
+                    onUpdateFilter = {},
+                    onClearFilters = {},
+                    onSelectTab = { tab -> state.value = state.value.copy(activeTab = tab) },
+                    onSelectReportDirection = {},
+                    onCategoryClick = { requestedCategoryId = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("餐飲").performClick()
+        composeRule.runOnIdle {
+            assertEquals("food", requestedCategoryId)
+            assertEquals(null, state.value.filter.categoryId)
+        }
+
+        composeRule.onNode(hasText("明細") and hasClickAction()).performClick()
+        composeRule.onNodeWithText("七月薪資").assertExists()
+        composeRule.onNodeWithText("午餐").assertExists()
+        composeRule.onNodeWithText("未分類消費").assertExists()
+    }
+
+    @Test
+    fun categoryTransactionsContentShowsCategoryRowsAndDispatchesBackAndTransactionCallbacks() {
+        var backCount = 0
+        var selectedTransferId: String? = null
+        val categoryItem = item("food-1", -360.0, "TWD").copy(
+            description = "午餐",
+            categoryId = "food",
+            categoryName = "餐飲",
+        )
+
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                CategoryTransactionsContent(
+                    categoryName = "餐飲",
+                    items = listOf(categoryItem),
+                    onNavigateUp = { backCount += 1 },
+                    onNavigateToTransaction = { selectedTransferId = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("餐飲 明細").assertExists()
+        composeRule.onNodeWithText("午餐").performClick()
+        composeRule.onNodeWithContentDescription("返回").performClick()
+        composeRule.runOnIdle {
+            assertEquals("food-1", selectedTransferId)
+            assertEquals(1, backCount)
+        }
+    }
+
+    @Test
+    fun categoryTransactionsContentSupportsUncategorizedAndEmptyStates() {
+        val uncategorized = item("uncategorized-1", -80.0, "TWD").copy(
+            description = "未分類消費",
+        )
+        val state = mutableStateOf(listOf(uncategorized))
+
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                CategoryTransactionsContent(
+                    categoryName = "尚未分類",
+                    items = state.value,
+                    onNavigateUp = {},
+                    onNavigateToTransaction = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("尚未分類 明細").assertExists()
+        composeRule.onNodeWithText("未分類消費").assertExists()
+
+        composeRule.runOnUiThread { state.value = emptyList() }
+        composeRule.onNodeWithText("未分類消費").assertDoesNotExist()
+        composeRule.onNodeWithText("這個條件下沒有尚未分類明細").assertExists()
     }
 
     private fun item(id: String, amount: Double, currency: String) = GlobalTransactionItem(

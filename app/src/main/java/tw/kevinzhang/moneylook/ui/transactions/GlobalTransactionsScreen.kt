@@ -93,6 +93,7 @@ import kotlin.math.abs
 @Composable
 fun GlobalTransactionsScreen(
     onNavigateToTransaction: (String) -> Unit,
+    onNavigateToCategoryTransactions: (String?) -> Unit,
     analysisContent: @Composable (GlobalTransactionsUiState) -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     viewModel: GlobalTransactionsViewModel = hiltViewModel(),
@@ -109,10 +110,87 @@ fun GlobalTransactionsScreen(
         onClearFilters = viewModel::clearFilters,
         onSelectTab = viewModel::selectTab,
         onSelectReportDirection = viewModel::selectReportDirection,
-        onCategoryClick = viewModel::showCategoryDetails,
+        onCategoryClick = onNavigateToCategoryTransactions,
         analysisContent = analysisContent,
         bottomBar = bottomBar,
     )
+}
+
+/**
+ * A focused, pushed destination for a category-report row.  It observes the
+ * same parent ledger state, so changing the parent date range, search query,
+ * or explicit filter is immediately reflected here without encoding those
+ * transient conditions in the navigation route.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CategoryTransactionsScreen(
+    categoryId: String?,
+    onNavigateUp: () -> Unit,
+    onNavigateToTransaction: (String) -> Unit,
+    viewModel: GlobalTransactionsViewModel,
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val categoryItems = remember(state.allItems, state.filter, categoryId) {
+        filterCategoryTransactions(state.allItems, state.filter, categoryId)
+    }
+    val categoryName = remember(state.allItems, categoryId) {
+        if (categoryId == null) {
+            "尚未分類"
+        } else {
+            state.allItems.firstOrNull { it.categoryId == categoryId }
+                ?.categoryName
+                ?.takeIf(String::isNotBlank)
+                ?: "分類明細"
+        }
+    }
+
+    CategoryTransactionsContent(
+        categoryName = categoryName,
+        items = categoryItems,
+        onNavigateUp = onNavigateUp,
+        onNavigateToTransaction = onNavigateToTransaction,
+    )
+}
+
+/** Stateless category-detail content, intentionally reusable by Compose tests. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CategoryTransactionsContent(
+    categoryName: String,
+    items: List<GlobalTransactionItem>,
+    onNavigateUp: () -> Unit,
+    onNavigateToTransaction: (String) -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("$categoryName 明細") },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateUp) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        if (items.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("這個條件下沒有${categoryName}明細", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+            ) {
+                items(items, key = GlobalTransactionItem::transferId) { item ->
+                    GlobalTransactionRow(item, onClick = { onNavigateToTransaction(item.transferId) })
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -236,7 +314,7 @@ fun GlobalTransactionsContent(
                 GlobalSummaryCards(
                     summary = state.summary,
                     currency = "TWD",
-                    selectedDirection = state.filter.direction,
+                    selectedDirection = state.categoryDirection,
                     onIncome = { onSelectReportDirection(GlobalTransactionDirection.INCOME) },
                     onExpense = { onSelectReportDirection(GlobalTransactionDirection.EXPENSE) },
                 )
@@ -467,7 +545,7 @@ private fun CategorySummaryRow(item: GlobalCategorySummary, currency: String, on
 }
 
 @Composable
-private fun GlobalTransactionRow(item: GlobalTransactionItem, onClick: () -> Unit) {
+fun GlobalTransactionRow(item: GlobalTransactionItem, onClick: () -> Unit) {
     val amountColor = when (globalTransactionAmountTone(item)) {
         GlobalTransactionAmountTone.POSITIVE -> MaterialTheme.colorScheme.primary
         GlobalTransactionAmountTone.NEGATIVE -> MaterialTheme.colorScheme.error
