@@ -45,8 +45,11 @@ enum class ClassificationOutcome {
 }
 
 /**
- * One immutable import attempt. It intentionally stores no credentials, PANs, merchant names,
- * descriptions, or account numbers. [artifactSha256] identifies the installed code artifact.
+ * One immutable import attempt. [artifactSha256] identifies the installed code artifact.
+ *
+ * Failure fields intentionally retain the complete extension/runtime diagnostic, even when it
+ * contains authenticated response fragments, request metadata, or credentials. They are
+ * app-private debugging evidence and belong to the same run as its archived source documents.
  */
 @Entity(tableName = "ingestion_runs", indices = [Index(value = ["extensionId", "startedAt"]), Index(value = ["status"])])
 data class IngestionRun(
@@ -66,6 +69,14 @@ data class IngestionRun(
     /** Per-install keyed fingerprint of the extension/source context, never raw source data. */
     val sourceFingerprint: String,
     val fingerprintKeyVersion: Int,
+    /** SCRIPT, NATIVE_BRIDGE, RUNTIME, PARSER, PERSISTENCE, or another stable origin. */
+    val failureOrigin: String? = null,
+    val failureCode: String? = null,
+    val failureMessage: String? = null,
+    val failureStack: String? = null,
+    /** Exact JSON emitted by the script wrapper; null for failures outside JavaScript. */
+    val failureDiagnosticJson: String? = null,
+    val failureScriptFrame: String? = null,
 )
 
 /**

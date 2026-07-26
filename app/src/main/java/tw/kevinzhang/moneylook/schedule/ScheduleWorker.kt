@@ -54,7 +54,17 @@ class ScheduleWorker @AssistedInject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            syncResultPersister.recordFailure(extension, IngestionTrigger.SCHEDULED_SYNC)
+            syncResultPersister.recordFailure(
+                extension = extension,
+                trigger = IngestionTrigger.SCHEDULED_SYNC,
+                failure = SyncResult.Error(
+                    message = "sync runtime failed",
+                    origin = "RUNTIME",
+                    cause = e,
+                    rawMessage = e.message ?: e.toString(),
+                    rawStack = e.stackTraceToString(),
+                ),
+            )
             return handleFailure(profile)
         }
         return when (result) {
@@ -82,6 +92,7 @@ class ScheduleWorker @AssistedInject constructor(
                         result.sourceDocuments,
                         result.runId,
                         result.runStartedAt,
+                        result,
                     )
                     handleFailure(profile)
                 }

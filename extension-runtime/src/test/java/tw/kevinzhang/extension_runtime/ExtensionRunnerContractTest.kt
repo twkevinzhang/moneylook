@@ -1,6 +1,8 @@
 package tw.kevinzhang.extension_runtime
 
 import com.google.gson.Gson
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,9 +13,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
+import tw.kevinzhang.extension_runtime.bridge.ResponseCaptureOptions
+import tw.kevinzhang.extension_runtime.capture.ResponseCaptureCollector
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
+import java.io.IOException
 
 @RunWith(RobolectricTestRunner::class)
 class ExtensionRunnerContractTest {
@@ -73,6 +78,17 @@ class ExtensionRunnerContractTest {
         assertTrue(wrapper.contains("__browserPending.forEach"))
         assertTrue(wrapper.contains("pending.reject({ code: 'BROWSER_CLOSED'"))
         assertTrue(wrapper.contains("__native_browser__.close()"))
+        assertTrue(wrapper.contains("names = Object.getOwnPropertyNames(value)"))
+        assertTrue(wrapper.contains("'[property-names-error]'"))
+        assertTrue(wrapper.contains("const codeProperty = isObject"))
+        assertTrue(wrapper.contains("diagnosticRead(error, 'message')"))
+        assertTrue(wrapper.contains("diagnosticRead(error, 'stack')"))
+        assertTrue(wrapper.contains("diagnosticRead(error, 'origin')"))
+        assertTrue(wrapper.contains("'[diagnostic serialization failed]'"))
+        assertTrue(wrapper.contains("thrown: thrown"))
+        assertTrue(wrapper.contains("origin: origin"))
+        assertTrue(wrapper.contains("message: message"))
+        assertTrue(wrapper.contains("stack: stack"))
         assertTrue(wrapper.contains("finally {\n        browser.close();"))
     }
 
@@ -106,20 +122,141 @@ class ExtensionRunnerContractTest {
     }
 
     @Test
-    fun safeErrorsNeverExposeExceptionContent() {
+    fun bridgeErrorsRetainCompleteNativeExceptionContent() {
         val secret = "Authorization: Bearer top-secret; body=private; password=hunter2"
+        val ioCause = IOException("socket failure includes response=private")
 
-        val rejected = safeBridgeError(SafeHttpException("INVALID_REQUEST", secret))
+        val rejected = safeBridgeError(SafeHttpException("NETWORK_ERROR", "network request failed", ioCause))
         val unexpected = safeBridgeError(IllegalStateException(secret))
 
-        assertEquals("INVALID_REQUEST", rejected.code)
-        assertFalse(rejected.message.contains("secret"))
-        assertFalse(unexpected.message.contains("private"))
-        assertFalse(unexpected.message.contains("hunter2"))
+        assertEquals("NETWORK_ERROR", rejected.code)
+        assertEquals("NATIVE_BRIDGE", rejected.origin)
+        assertEquals("network request failed", rejected.message)
+        assertTrue(rejected.stack.contains("SafeHttpException: network request failed"))
+        assertTrue(rejected.stack.contains("Caused by: java.io.IOException: socket failure includes response=private"))
+        assertTrue(unexpected.message.contains("private"))
+        assertTrue(unexpected.message.contains("hunter2"))
+        assertTrue(unexpected.stack.contains("IllegalStateException"))
+        assertEquals(IllegalStateException::class.java.name, unexpected.exceptionType)
     }
 
     @Test
-    fun parsesAccountsAndTransfersWithoutEchoingInvalidPayload() {
+    fun outerRuntimeFailureKeepsAlreadyCapturedDocumentsAndOriginalCause() {
+        val collector = ResponseCaptureCollector(Gson())
+        collector.capture(
+            options = ResponseCaptureOptions("authenticated-overview", true, "application/json"),
+            transport = "native_http",
+            method = "GET",
+            url = "https://bank.example/accounts",
+            statusCode = 200,
+            headers = mapOf("X-Trace" to listOf("private-trace")),
+            body = """{"account":"private"}""",
+            bodyEncoding = "text",
+            representation = "exact_bytes",
+        )
+        val cause = IllegalStateException("WebView cleanup failed after authenticated response")
+
+        val result = runtimeFailure(cause, collector)
+            .withAttemptIdentity("runtime-attempt-1", 1_721_966_400_000L) as SyncResult.Error
+
+        assertEquals("RUNTIME", result.origin)
+        assertEquals("extension runtime failed", result.message)
+        assertEquals("runtime-attempt-1", result.runId)
+        assertEquals(1_721_966_400_000L, result.runStartedAt)
+        assertEquals(cause, result.cause)
+        assertTrue(requireNotNull(result.rawStack).contains("WebView cleanup failed"))
+        assertEquals("authenticated-overview", result.sourceDocuments.single().stage)
+        assertEquals(
+            """{"account":"private"}""",
+            result.sourceDocuments.single().bodyBytes.toString(Charsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun cleanupFailureKeepsCollectorAndCompletedExtensionErrorDocuments() = runBlocking {
+        val collector = ResponseCaptureCollector(Gson())
+        collector.capture(
+            options = ResponseCaptureOptions("authenticated-detail", true, "application/json"),
+            transport = "browser_xhr",
+            method = "POST",
+            url = "https://bank.example/detail",
+            statusCode = 200,
+            headers = emptyMap(),
+            body = """{"detail":"private"}""",
+            bodyEncoding = "text",
+            representation = "decoded_text",
+        )
+        val deferred = CompletableDeferred<SyncResult>()
+        val diagnostic =
+            """{"origin":"SCRIPT","code":"BANK_REJECTED","message":"private failure","stack":"Error: private failure","thrown":{"body":"private"}}"""
+        ScriptResultBridge(deferred, Gson()).onError(diagnostic)
+        val completedOutcome = deferred.await()
+        val cleanupError = IOException("WebView destroy failed")
+
+        val result = runtimeCleanupFailure(cleanupError, collector, completedOutcome)
+
+        assertEquals("RUNTIME", result.origin)
+        assertEquals(cleanupError, result.cause)
+        assertTrue(requireNotNull(result.rawStack).contains("WebView destroy failed"))
+        assertEquals(diagnostic, result.rawDiagnosticJson)
+        assertEquals(
+            listOf("authenticated-detail", "extension.error"),
+            result.sourceDocuments.map { it.stage },
+        )
+        assertEquals(
+            diagnostic,
+            result.sourceDocuments.last().bodyBytes.toString(Charsets.UTF_8),
+        )
+
+        val successDeferred = CompletableDeferred<SyncResult>()
+        ScriptResultBridge(successDeferred, Gson()).onResult("""{"accounts":[]}""")
+        val successCleanupFailure = runtimeCleanupFailure(
+            IOException("WebView stopLoading failed"),
+            ResponseCaptureCollector(Gson()),
+            successDeferred.await(),
+        )
+        assertEquals(
+            listOf("extension.result"),
+            successCleanupFailure.sourceDocuments.map { it.stage },
+        )
+    }
+
+    @Test
+    fun scriptResultBridgeRetainsThrownPlainObjectAndExactDiagnosticJson() = runBlocking {
+        val deferred = CompletableDeferred<SyncResult>()
+        val diagnostic = """{"origin":"SCRIPT","code":"BANK_REJECTED","message":"secret response body","stack":"Error: secret response body\n at bank.js:71:9","frame":"line 71, column 9","thrown":{"response":{"credential":"hunter2"},"retry":false}}"""
+
+        ScriptResultBridge(deferred, Gson()).onError(diagnostic)
+
+        val result = deferred.await() as SyncResult.Error
+        assertEquals("SCRIPT", result.origin)
+        assertEquals("BANK_REJECTED", result.code)
+        assertEquals("secret response body", result.rawMessage)
+        assertTrue(requireNotNull(result.rawStack).contains("bank.js:71:9"))
+        assertEquals("line 71, column 9", result.scriptFrame)
+        assertEquals(diagnostic, result.rawDiagnosticJson)
+        assertTrue(requireNotNull(result.rawDiagnosticJson).contains("\"credential\":\"hunter2\""))
+        assertEquals("extension.error", result.sourceDocuments.single().stage)
+        assertEquals(diagnostic, result.sourceDocuments.single().bodyBytes.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun scriptResultBridgeRetainsCompleteRejectedResultPayload() = runBlocking {
+        val deferred = CompletableDeferred<SyncResult>()
+        val rawResult = """{"accounts":[{"name":"private","balance":"not-a-number"}],"authenticatedBody":"secret"}"""
+
+        ScriptResultBridge(deferred, Gson()).onResult(rawResult)
+
+        val result = deferred.await() as SyncResult.Error
+        assertEquals("PARSER", result.origin)
+        assertEquals("script result contains invalid account balance", result.rawMessage)
+        assertEquals(rawResult, result.rawDiagnosticJson)
+        assertEquals("extension.result", result.sourceDocuments.single().stage)
+        assertEquals(rawResult, result.sourceDocuments.single().bodyBytes.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun parsesAccountsAndTransfersAndRetainsInvalidPayloadDiagnostic() {
         val parsed = parseAccounts(
             """{"accounts":[{"name":"Checking","balance":12.5,"transfers":[{"txnDateTime":"2026-01-01","amount":-2.0}]}]}""",
             Gson(),
@@ -131,7 +268,9 @@ class ExtensionRunnerContractTest {
         val secret = "credential-should-not-escape"
         val invalid = parseAccounts("{invalid:$secret", Gson()) as SyncResult.Error
         assertFalse(invalid.message.contains(secret))
-        assertEquals(null, invalid.cause)
+        assertTrue(invalid.cause != null)
+        assertEquals("{invalid:$secret", invalid.rawDiagnosticJson)
+        assertTrue(requireNotNull(invalid.rawStack).contains("JsonSyntaxException"))
     }
 
     @Test
@@ -337,7 +476,10 @@ class ExtensionRunnerContractTest {
             ],"kindSync":[
                 {"kind":"deposit","status":"complete"},
                 {"kind":"time_deposit","status":"complete"},
-                {"kind":"credit_card","status":"failed","code":"NO_PRODUCT"}
+                {"kind":"credit_card","status":"failed","code":"NO_PRODUCT",
+                 "rawMessage":"authenticated card response rejected",
+                 "rawStack":"Error: rejected\n at cards.js:11:4",
+                 "rawDiagnosticJson":"{\"response\":{\"secret\":\"value\"}}"}
             ]}""".trimIndent(),
             Gson(),
         ) as SyncResult.Success
@@ -347,7 +489,14 @@ class ExtensionRunnerContractTest {
             listOf(
                 KindSyncResult(AssetKind.DEPOSIT, KindSyncStatus.COMPLETE),
                 KindSyncResult(AssetKind.TIME_DEPOSIT, KindSyncStatus.COMPLETE),
-                KindSyncResult(AssetKind.CREDIT_CARD, KindSyncStatus.FAILED, "NO_PRODUCT"),
+                KindSyncResult(
+                    AssetKind.CREDIT_CARD,
+                    KindSyncStatus.FAILED,
+                    "NO_PRODUCT",
+                    "authenticated card response rejected",
+                    "Error: rejected\n at cards.js:11:4",
+                    """{"response":{"secret":"value"}}""",
+                ),
             ),
             parsed.kindSync,
         )
@@ -378,6 +527,11 @@ class ExtensionRunnerContractTest {
             """{"accounts":[{"name":"Loan","balance":1,"kind":"loan"}],"kindSync":[{"kind":"deposit","status":"complete"}]}""",
             // At least one kind must have completed.
             """{"accounts":[],"kindSync":[{"kind":"loan","status":"failed","code":"NO_PRODUCT"}]}""",
+            // Every failed checkpoint must retain its raw message and serialized caught value.
+            """{"accounts":[{"name":"Deposit","balance":1,"kind":"deposit"}],"kindSync":[
+                {"kind":"deposit","status":"complete"},
+                {"kind":"loan","status":"failed","code":"LOAN_SYNC_FAILED"}
+            ]}""".trimIndent(),
             // Codes are fixed operational identifiers, not bank messages or payload data.
             """{"accounts":[],"kindSync":[{"kind":"deposit","status":"complete"},{"kind":"loan","status":"failed","code":"$secret"}]}""",
             """{"accounts":[],"kindSync":[{"kind":"deposit","status":"complete"},{"kind":"loan","status":"failed","code":"${"A".repeat(33)}"}]}""",

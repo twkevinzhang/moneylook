@@ -16,7 +16,7 @@ data class TransferFingerprintEvidence(
     val payloadFingerprint: String,
 )
 
-/** Privacy-safe facts associated with one completed snapshot write. */
+/** Complete facts associated with one snapshot attempt, including raw failure diagnostics. */
 data class IngestionContext(
     val runId: String,
     val startedAt: Long,
@@ -33,6 +33,12 @@ data class IngestionContext(
     val transferFingerprints: Map<String, TransferFingerprintEvidence>,
     val sourceDocuments: List<SourceDocument> = emptyList(),
     val fieldObservations: List<TransferFieldObservation> = emptyList(),
+    val failureOrigin: String? = null,
+    val failureCode: String? = null,
+    val failureMessage: String? = null,
+    val failureStack: String? = null,
+    val failureDiagnosticJson: String? = null,
+    val failureScriptFrame: String? = null,
 )
 
 /** A successful inclusive date range whose transactions may safely replace local history. */
@@ -99,7 +105,7 @@ interface TransferSyncStore {
         )
     }
 
-    /** Safe failure ledger entry for a run whose snapshot transaction did not commit. */
+    /** Failure ledger entry for a run whose snapshot transaction did not commit. */
     suspend fun recordFailedIngestion(
         extensionId: String,
         ingestionContext: IngestionContext,
@@ -113,4 +119,15 @@ interface TransferSyncStore {
         status: IngestionClassificationStatus,
         completedAt: Long?,
     ) = Unit
+
+    /** Records the complete classifier failure on the already-committed ingestion run. */
+    suspend fun updateClassificationFailure(
+        runId: String,
+        completedAt: Long,
+        origin: String,
+        message: String,
+        stack: String,
+    ) {
+        updateClassificationStatus(runId, IngestionClassificationStatus.FAILED, completedAt)
+    }
 }

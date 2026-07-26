@@ -58,12 +58,27 @@ class SyncResultPersisterTest {
             ),
             sourceRunId = "failed-run",
             sourceRunStartedAt = 200,
+            failure = SyncResult.Error(
+                message = "extension script failed",
+                origin = "SCRIPT",
+                code = "BANK_REJECTED",
+                scriptFrame = "line 71, column 9",
+                rawMessage = "complete authenticated rejection",
+                rawStack = "Error: complete authenticated rejection\n at bank.js:71:9",
+                rawDiagnosticJson = """{"thrown":{"credential":"test-secret"}}""",
+            ),
         )
 
         requireNotNull(store.failedContext).also {
             assertEquals("failed-run", it.runId)
             assertEquals(200, it.startedAt)
             assertEquals("failed-doc", it.sourceDocuments.single().id)
+            assertEquals("SCRIPT", it.failureOrigin)
+            assertEquals("BANK_REJECTED", it.failureCode)
+            assertEquals("complete authenticated rejection", it.failureMessage)
+            assertTrue(requireNotNull(it.failureStack).contains("bank.js:71:9"))
+            assertEquals("""{"thrown":{"credential":"test-secret"}}""", it.failureDiagnosticJson)
+            assertEquals("line 71, column 9", it.failureScriptFrame)
         }
         Unit
     }
@@ -402,7 +417,14 @@ class SyncResultPersisterTest {
             accounts = listOf(AccountData("活期", 1.0, "TWD", kind = AssetKind.DEPOSIT)),
             kindSync = listOf(
                 KindSyncResult(AssetKind.DEPOSIT, KindSyncStatus.COMPLETE, null),
-                KindSyncResult(AssetKind.TIME_DEPOSIT, KindSyncStatus.FAILED, "TERM_QUERY_REJECTED"),
+                KindSyncResult(
+                    AssetKind.TIME_DEPOSIT,
+                    KindSyncStatus.FAILED,
+                    "TERM_QUERY_REJECTED",
+                    rawMessage = "complete term response rejection",
+                    rawStack = "Error: complete term response rejection\n at term.js:3:2",
+                    rawDiagnosticJson = """{"authenticated":"secret"}""",
+                ),
             ),
         )
 
@@ -411,6 +433,11 @@ class SyncResultPersisterTest {
         assertEquals(setOf(AssetKind.DEPOSIT), store.replaceKinds)
         assertTrue(result.hasPartialSyncFailure)
         assertEquals("partial", result.appLastRunStatus)
+        assertEquals("PARTIAL_KIND", store.ingestionContext?.failureOrigin)
+        assertEquals("TERM_QUERY_REJECTED", store.ingestionContext?.failureCode)
+        assertEquals("complete term response rejection", store.ingestionContext?.failureMessage)
+        assertTrue(requireNotNull(store.ingestionContext?.failureStack).contains("term.js:3:2"))
+        assertTrue(requireNotNull(store.ingestionContext?.failureDiagnosticJson).contains("authenticated"))
     }
 
     @Test
@@ -470,6 +497,9 @@ class SyncResultPersisterTest {
 
         assertTrue(error is IllegalStateException)
         assertEquals(IngestionClassificationStatus.FAILED, store.classificationStatus)
+        assertEquals("CLASSIFIER", store.classificationFailureOrigin)
+        assertEquals("fictional failure", store.classificationFailureMessage)
+        assertTrue(store.classificationFailureStack?.contains("IllegalStateException") == true)
         assertTrue(store.failedContext == null)
     }
 
@@ -526,6 +556,36 @@ class SyncResultPersisterTest {
         assertEquals(0, store.failedTransferCount)
         assertEquals(IngestionClassificationStatus.FAILED, store.failedContext?.classificationStatus)
     }
+
+    @Test
+    fun `runtime failure uses documents carried by the error when caller omits duplicate argument`() =
+        runBlocking {
+            val store = RecordingStore()
+            val document = CapturedSourceDocument(
+                id = "error-doc",
+                capturedAt = 101,
+                stage = "extension.error",
+                transport = "extension_runtime",
+                method = "RETURN",
+                url = "extension-runtime://script/error",
+                statusCode = null,
+                responseHeadersJson = "{}",
+                mediaKind = "application/json",
+                bodyEncoding = "utf-8",
+                representation = "decoded_text",
+                bodyBytes = """{"secret":"complete"}""".toByteArray(),
+            )
+
+            SyncResultPersister(store).recordFailure(
+                extension = extension(),
+                failure = SyncResult.Error(
+                    message = "failed",
+                    sourceDocuments = listOf(document),
+                ),
+            )
+
+            assertEquals(listOf("error-doc"), store.failedContext?.sourceDocuments?.map { it.id })
+        }
 
     @Test
     fun `stable account and transfer ids are opaque and deterministic`() {
@@ -590,6 +650,9 @@ class SyncResultPersisterTest {
         var failedAccountCount = -1
         var failedTransferCount = -1
         var classificationStatus: IngestionClassificationStatus? = null
+        var classificationFailureOrigin: String? = null
+        var classificationFailureMessage: String? = null
+        var classificationFailureStack: String? = null
         var failedRunCount = 0
         var ingestionContext: IngestionContext? = null
 
@@ -657,6 +720,19 @@ class SyncResultPersisterTest {
             completedAt: Long?,
         ) {
             classificationStatus = status
+        }
+
+        override suspend fun updateClassificationFailure(
+            runId: String,
+            completedAt: Long,
+            origin: String,
+            message: String,
+            stack: String,
+        ) {
+            classificationStatus = IngestionClassificationStatus.FAILED
+            classificationFailureOrigin = origin
+            classificationFailureMessage = message
+            classificationFailureStack = stack
         }
     }
 

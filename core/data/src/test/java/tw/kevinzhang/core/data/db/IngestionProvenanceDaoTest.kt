@@ -4,6 +4,7 @@ import androidx.room.Room
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,6 +24,7 @@ import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.ClassificationOutcome
 import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.IngestionClassificationStatus
+import tw.kevinzhang.core.data.model.IngestionRun
 
 @RunWith(RobolectricTestRunner::class)
 class IngestionProvenanceDaoTest {
@@ -225,6 +227,51 @@ class IngestionProvenanceDaoTest {
         assertEquals(IngestionStatus.SUCCESS, complete.status)
         assertEquals(IngestionClassificationStatus.COMPLETE, complete.classificationStatus)
         assertEquals(10L, complete.classificationCompletedAt)
+    }
+
+    @Test
+    fun `run summaries page without loading giant failure detail`() = runBlocking {
+        val dao = database.ingestionProvenanceDao()
+        repeat(25) { index ->
+            dao.insertRun(
+                IngestionRun(
+                    id = "run-${index.toString().padStart(2, '0')}",
+                    startedAt = index.toLong(),
+                    completedAt = index.toLong() + 1,
+                    extensionId = "ext",
+                    extensionVersion = 3,
+                    artifactRevision = null,
+                    artifactSha256 = null,
+                    trigger = IngestionTrigger.USER_SYNC,
+                    status = IngestionStatus.FAILED,
+                    classificationStatus = IngestionClassificationStatus.FAILED,
+                    accountCount = 0,
+                    transferCount = 0,
+                    sourceFingerprint = "fingerprint",
+                    fingerprintKeyVersion = 1,
+                    failureOrigin = "SCRIPT",
+                    failureCode = "CODE-$index",
+                    failureMessage = "message-$index-" + "m".repeat(100_000),
+                    failureStack = "stack-$index-" + "s".repeat(100_000),
+                    failureDiagnosticJson = """{"index":$index,"body":"${"d".repeat(100_000)}"}""",
+                    failureScriptFrame = "line ${index + 1}",
+                ),
+            )
+        }
+
+        val firstPage = dao.getRunSummaries("ext", limit = 10, offset = 0)
+        val thirdPage = dao.getRunSummaries("ext", limit = 10, offset = 20)
+
+        assertEquals((24 downTo 15).map { "run-${it.toString().padStart(2, '0')}" }, firstPage.map { it.id })
+        assertEquals((4 downTo 0).map { "run-${it.toString().padStart(2, '0')}" }, thirdPage.map { it.id })
+        assertEquals("SCRIPT", firstPage.first().failureOrigin)
+        assertEquals("CODE-24", firstPage.first().failureCode)
+        assertEquals("line 25", firstPage.first().failureScriptFrame)
+
+        val selectedDetail = requireNotNull(dao.getIngestionRun("run-24"))
+        assertTrue(requireNotNull(selectedDetail.failureMessage).startsWith("message-24-"))
+        assertTrue(requireNotNull(selectedDetail.failureStack).startsWith("stack-24-"))
+        assertTrue(requireNotNull(selectedDetail.failureDiagnosticJson).contains("\"index\":24"))
     }
 
     private fun context(

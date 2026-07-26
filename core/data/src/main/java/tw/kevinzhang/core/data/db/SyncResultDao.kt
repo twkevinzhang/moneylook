@@ -83,6 +83,12 @@ abstract class SyncResultDao : TransferSyncStore {
                 transferCount = transfers.size,
                 sourceFingerprint = ingestionContext.sourceFingerprint,
                 fingerprintKeyVersion = ingestionContext.fingerprintKeyVersion,
+                failureOrigin = ingestionContext.failureOrigin,
+                failureCode = ingestionContext.failureCode,
+                failureMessage = ingestionContext.failureMessage,
+                failureStack = ingestionContext.failureStack,
+                failureDiagnosticJson = ingestionContext.failureDiagnosticJson,
+                failureScriptFrame = ingestionContext.failureScriptFrame,
             ),
         )
         if (ingestionContext.sourceDocuments.isNotEmpty()) {
@@ -148,6 +154,12 @@ abstract class SyncResultDao : TransferSyncStore {
                 transferCount = transferCount,
                 sourceFingerprint = ingestionContext.sourceFingerprint,
                 fingerprintKeyVersion = ingestionContext.fingerprintKeyVersion,
+                failureOrigin = ingestionContext.failureOrigin,
+                failureCode = ingestionContext.failureCode,
+                failureMessage = ingestionContext.failureMessage,
+                failureStack = ingestionContext.failureStack,
+                failureDiagnosticJson = ingestionContext.failureDiagnosticJson,
+                failureScriptFrame = ingestionContext.failureScriptFrame,
             ),
         )
         if (ingestionContext.sourceDocuments.isNotEmpty()) {
@@ -166,6 +178,25 @@ abstract class SyncResultDao : TransferSyncStore {
         runId: String,
         status: IngestionClassificationStatus,
         completedAt: Long?,
+    )
+
+    @Query(
+        """
+        UPDATE ingestion_runs
+        SET classificationStatus = 'FAILED',
+            classificationCompletedAt = :completedAt,
+            failureOrigin = :origin,
+            failureMessage = :message,
+            failureStack = :stack
+        WHERE id = :runId
+        """,
+    )
+    override abstract suspend fun updateClassificationFailure(
+        runId: String,
+        completedAt: Long,
+        origin: String,
+        message: String,
+        stack: String,
     )
 
     @Transaction

@@ -34,6 +34,7 @@ import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
 import tw.kevinzhang.extension_runtime.capture.ResponseCaptureCollector
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.CardData
+import tw.kevinzhang.extension_runtime.data.CapturedSourceDocument
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
@@ -59,15 +60,18 @@ class ExtensionRunnerImpl @Inject constructor(
     ): SyncResult = withContext(Dispatchers.IO) {
         val runId = UUID.randomUUID().toString()
         val runStartedAt = System.currentTimeMillis()
+        val captureCollector = ResponseCaptureCollector(gson)
         val scriptFile = File(extension.syncTriggerCachePath)
         if (!scriptFile.isFile) return@withContext SyncResult.Error(
-            "extension script file not found",
+            message = "extension script file not found",
+            origin = "RUNTIME",
             runId = runId,
             runStartedAt = runStartedAt,
         )
         if (scriptFile.length() > MAX_SCRIPT_BYTES) {
             return@withContext SyncResult.Error(
-                "extension script exceeds size limit",
+                message = "extension script exceeds size limit",
+                origin = "RUNTIME",
                 runId = runId,
                 runStartedAt = runStartedAt,
             )
@@ -78,32 +82,45 @@ class ExtensionRunnerImpl @Inject constructor(
             throw e
         } catch (e: Exception) {
             return@withContext SyncResult.Error(
-                "extension script could not be read",
+                message = "extension script could not be read",
+                origin = "RUNTIME",
+                rawMessage = e.message,
+                rawStack = e.stackTraceToString(),
                 runId = runId,
                 runStartedAt = runStartedAt,
             )
         }
         val canonicalCredentialJson = canonicalCredentialJson(credential.json)
             ?: return@withContext SyncResult.Error(
-                "stored credential JSON is invalid",
+                message = "stored credential JSON is invalid",
+                origin = "RUNTIME",
                 runId = runId,
                 runStartedAt = runStartedAt,
             )
-        when (val outcome = runInWebView(script, ExtensionCredential(canonicalCredentialJson), syncContext)) {
-            is SyncResult.Success -> outcome.copy(runId = runId, runStartedAt = runStartedAt)
-            is SyncResult.Error -> outcome.copy(runId = runId, runStartedAt = runStartedAt)
+        val outcome = try {
+            runInWebView(
+                script = script,
+                credential = ExtensionCredential(canonicalCredentialJson),
+                syncContext = syncContext,
+                captureCollector = captureCollector,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            runtimeFailure(e, captureCollector)
         }
+        outcome.withAttemptIdentity(runId, runStartedAt)
     }
 
     private suspend fun runInWebView(
         script: String,
         credential: ExtensionCredential,
         syncContext: ExtensionSyncContext,
+        captureCollector: ResponseCaptureCollector,
     ): SyncResult = withContext(Dispatchers.Main) {
         val deferred = CompletableDeferred<SyncResult>()
         val webView = WebView(context)
         val requestBudget = RunRequestBudget()
-        val captureCollector = ResponseCaptureCollector(gson)
         val httpBridge = NativeSdkHttpBridge(
             webView = webView,
             transport = NativeHttpTransport(okHttpClient),
@@ -145,23 +162,74 @@ class ExtensionRunnerImpl @Inject constructor(
             }
         }
         webView.loadData("<html><body></body></html>", "text/html", "utf-8")
-        val outcome = try {
+        var pendingFailure: Exception? = null
+        val outcome: SyncResult? = try {
             withTimeout(SCRIPT_TIMEOUT_MS) { deferred.await() }
         } catch (e: TimeoutCancellationException) {
-            SyncResult.Error("extension script timed out")
-        } finally {
-            browserBridge.cancel()
-            httpBridge.cancel()
-            webView.removeJavascriptInterface("__native_http__")
-            webView.removeJavascriptInterface("__native_browser__")
-            webView.removeJavascriptInterface("__result_bridge__")
-            webView.stopLoading()
-            webView.destroy()
+            SyncResult.Error(
+                origin = "RUNTIME",
+                message = "extension script timed out",
+                rawMessage = e.message,
+                rawStack = e.stackTraceToString(),
+            )
+        } catch (e: CancellationException) {
+            pendingFailure = e
+            null
+        } catch (e: Exception) {
+            pendingFailure = e
+            null
         }
-        when (outcome) {
-            is SyncResult.Success -> outcome.copy(sourceDocuments = captureCollector.snapshot())
-            is SyncResult.Error -> outcome.copy(sourceDocuments = captureCollector.snapshot())
+        val cleanupFailure = cleanupRunResources(browserBridge, httpBridge, webView)
+        pendingFailure?.let { failure ->
+            cleanupFailure?.let(failure::addSuppressed)
+            throw failure
         }
+        val completedOutcome = checkNotNull(outcome) { "extension outcome was not completed" }
+        if (cleanupFailure != null) {
+            if (cleanupFailure is CancellationException) throw cleanupFailure
+            return@withContext runtimeCleanupFailure(
+                error = cleanupFailure,
+                captureCollector = captureCollector,
+                completedOutcome = completedOutcome,
+            )
+        }
+        completedOutcome.withCapturedSources(captureCollector)
+    }
+
+    private fun cleanupRunResources(
+        browserBridge: NativeSdkBrowserBridge,
+        httpBridge: NativeSdkHttpBridge,
+        webView: WebView,
+    ): Exception? {
+        var failure: Exception? = null
+        fun record(error: Exception) {
+            val first = failure
+            when {
+                first == null -> failure = error
+                error is CancellationException && first !is CancellationException -> {
+                    error.addSuppressed(first)
+                    failure = error
+                }
+                else -> first.addSuppressed(error)
+            }
+        }
+        fun attempt(block: () -> Unit) {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                record(e)
+            } catch (e: Exception) {
+                record(e)
+            }
+        }
+        attempt(browserBridge::cancel)
+        attempt(httpBridge::cancel)
+        attempt { webView.removeJavascriptInterface("__native_http__") }
+        attempt { webView.removeJavascriptInterface("__native_browser__") }
+        attempt { webView.removeJavascriptInterface("__result_bridge__") }
+        attempt(webView::stopLoading)
+        attempt(webView::destroy)
+        return failure
     }
 
     internal fun buildWrappedScript(
@@ -194,9 +262,14 @@ class ExtensionRunnerImpl @Inject constructor(
                         __pending.set(id, { resolve: resolve, reject: reject });
                         try {
                             __native_http__.request(id, JSON.stringify(options || {}));
-                        } catch (_) {
+                        } catch (bridgeError) {
                             __pending.delete(id);
-                            reject({ code: 'BRIDGE_ERROR', message: 'native HTTP bridge failed' });
+                            reject({
+                                origin: 'NATIVE_BRIDGE',
+                                code: 'BRIDGE_ERROR',
+                                message: 'native HTTP bridge invocation failed',
+                                bridgeError: bridgeError
+                            });
                         }
                     });
                 };
@@ -233,9 +306,14 @@ class ExtensionRunnerImpl @Inject constructor(
                             } else {
                                 __native_browser__.request(id, JSON.stringify(options || {}));
                             }
-                        } catch (_) {
+                        } catch (bridgeError) {
                             __browserPending.delete(id);
-                            reject({ code: 'BRIDGE_ERROR', message: 'native browser bridge failed' });
+                            reject({
+                                origin: 'NATIVE_BRIDGE',
+                                code: 'BRIDGE_ERROR',
+                                message: 'native browser bridge invocation failed',
+                                bridgeError: bridgeError
+                            });
                         }
                     });
                 };
@@ -258,6 +336,77 @@ class ExtensionRunnerImpl @Inject constructor(
                     });
                     return Object.freeze(value);
                 };
+                const diagnosticText = function(value, fallback) {
+                    try {
+                        return String(value);
+                    } catch (_) {
+                        return fallback;
+                    }
+                };
+                const diagnosticRead = function(value, name) {
+                    try {
+                        return { ok: true, value: value[name] };
+                    } catch (readError) {
+                        return {
+                            ok: false,
+                            error: diagnosticText(readError, '[unprintable-property-error]')
+                        };
+                    }
+                };
+                const diagnosticValue = function(value, seen, depth) {
+                    try {
+                        if (value === null || value === undefined) {
+                            return value === undefined ? '[undefined]' : null;
+                        }
+                        const type = typeof value;
+                        if (type === 'string' || type === 'boolean') return value;
+                        if (type === 'number') return Number.isFinite(value) ? value : diagnosticText(value, '[number]');
+                        if (type === 'bigint' || type === 'symbol' || type === 'function') {
+                            return diagnosticText(value, '[unprintable-' + type + ']');
+                        }
+                        if (depth > 12) return '[max-depth]';
+                        if (seen.indexOf(value) !== -1) return '[circular]';
+                        seen.push(value);
+                        let names;
+                        try {
+                            names = Object.getOwnPropertyNames(value);
+                        } catch (propertyNamesError) {
+                            seen.pop();
+                            return {
+                                '[property-names-error]': diagnosticText(
+                                    propertyNamesError,
+                                    '[unprintable-property-names-error]'
+                                )
+                            };
+                        }
+                        let result;
+                        try {
+                            result = Array.isArray(value) ? [] : {};
+                        } catch (arrayCheckError) {
+                            result = {
+                                '[array-check-error]': diagnosticText(
+                                    arrayCheckError,
+                                    '[unprintable-array-check-error]'
+                                )
+                            };
+                        }
+                        names.forEach(function(name) {
+                            const property = diagnosticRead(value, name);
+                            result[name] = property.ok
+                                ? diagnosticValue(property.value, seen, depth + 1)
+                                : '[property-error: ' + property.error + ']';
+                        });
+                        seen.pop();
+                        return result;
+                    } catch (diagnosticError) {
+                        return {
+                            '[diagnostic-error]': diagnosticText(
+                                diagnosticError,
+                                '[unprintable-diagnostic-error]'
+                            )
+                        };
+                    }
+                };
                 const sdk = Object.freeze({
                     credential: deepFreeze($credentialLiteral),
                     sync: deepFreeze($syncContextLiteral),
@@ -268,16 +417,60 @@ class ExtensionRunnerImpl @Inject constructor(
                     const result = await eval($scriptLiteral);
                     __result_bridge__.onResult(JSON.stringify(result));
                 } catch (error) {
-                    const candidate = typeof error === 'object' && error && typeof error.code === 'string'
-                        ? error.code
-                        : (typeof error === 'object' && error && typeof error.message === 'string'
-                            ? error.message : null);
-                    const code = typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{0,47}$/.test(candidate)
-                        ? candidate : null;
-                    const stack = typeof error === 'object' && error && typeof error.stack === 'string' ? error.stack : '';
+                    const isObject = (typeof error === 'object' && error !== null) ||
+                        typeof error === 'function';
+                    const codeProperty = isObject
+                        ? diagnosticRead(error, 'code')
+                        : { ok: true, value: null };
+                    const messageProperty = isObject
+                        ? diagnosticRead(error, 'message')
+                        : { ok: true, value: null };
+                    const stackProperty = isObject
+                        ? diagnosticRead(error, 'stack')
+                        : { ok: true, value: null };
+                    const originProperty = isObject
+                        ? diagnosticRead(error, 'origin')
+                        : { ok: true, value: null };
+                    const code = codeProperty.ok && typeof codeProperty.value === 'string'
+                        ? codeProperty.value : null;
+                    const stack = stackProperty.ok && typeof stackProperty.value === 'string'
+                        ? stackProperty.value : '';
                     const match = stack.match(/:(\\d+):(\\d+)/);
                     const frame = match ? ('line ' + match[1] + ', column ' + match[2]) : null;
-                    __result_bridge__.onError(JSON.stringify({ code: code, frame: frame }));
+                    const thrown = diagnosticValue(error, [], 0);
+                    const message = messageProperty.ok && typeof messageProperty.value === 'string'
+                        ? messageProperty.value
+                        : (typeof error === 'string'
+                            ? error
+                            : diagnosticText(error, '[unprintable-thrown-value]'));
+                    const origin = originProperty.ok && originProperty.value === 'NATIVE_BRIDGE'
+                        ? 'NATIVE_BRIDGE' : 'SCRIPT';
+                    let diagnosticJson;
+                    try {
+                        diagnosticJson = JSON.stringify({
+                            origin: origin,
+                            code: code,
+                            message: message,
+                            stack: stack,
+                            frame: frame,
+                            thrown: thrown
+                        });
+                    } catch (serializationError) {
+                        diagnosticJson = JSON.stringify({
+                            origin: 'SCRIPT',
+                            code: null,
+                            message: '[diagnostic serialization failed]',
+                            stack: '',
+                            frame: null,
+                            thrown: {
+                                '[serialization-error]': diagnosticText(
+                                    serializationError,
+                                    '[unprintable-serialization-error]'
+                                )
+                            }
+                        });
+                    }
+                    __result_bridge__.onError(diagnosticJson);
                 } finally {
                     browser.close();
                 }
@@ -377,32 +570,138 @@ private class NativeSdkHttpBridge(
     }
 }
 
-internal data class SafeBridgeError(val code: String, val message: String)
+internal fun runtimeFailure(
+    error: Exception,
+    captureCollector: ResponseCaptureCollector,
+): SyncResult.Error = SyncResult.Error(
+    message = "extension runtime failed",
+    origin = "RUNTIME",
+    cause = error,
+    rawMessage = error.message ?: error.toString(),
+    rawStack = error.stackTraceToString(),
+    sourceDocuments = captureCollector.snapshot(),
+)
 
-internal fun safeBridgeError(error: Exception): SafeBridgeError = when (error) {
-    is SafeHttpException -> SafeBridgeError(error.code, "HTTP request rejected")
-    else -> SafeBridgeError("HTTP_ERROR", "HTTP request failed")
+internal fun runtimeCleanupFailure(
+    error: Exception,
+    captureCollector: ResponseCaptureCollector,
+    completedOutcome: SyncResult,
+): SyncResult.Error {
+    if (completedOutcome is SyncResult.Error) {
+        completedOutcome.cause
+            ?.takeUnless { it === error }
+            ?.let(error::addSuppressed)
+    }
+    val failure = runtimeFailure(error, captureCollector)
+    val completedDocuments = when (completedOutcome) {
+        is SyncResult.Success -> completedOutcome.sourceDocuments
+        is SyncResult.Error -> completedOutcome.sourceDocuments
+    }
+    return failure.copy(
+        rawDiagnosticJson = (completedOutcome as? SyncResult.Error)?.rawDiagnosticJson,
+        sourceDocuments = failure.sourceDocuments + completedDocuments,
+    )
 }
 
-private class ScriptResultBridge(
+internal fun SyncResult.withCapturedSources(
+    captureCollector: ResponseCaptureCollector,
+): SyncResult = when (this) {
+    is SyncResult.Success -> copy(
+        sourceDocuments = captureCollector.snapshot() + sourceDocuments,
+    )
+    is SyncResult.Error -> copy(
+        sourceDocuments = captureCollector.snapshot() + sourceDocuments,
+    )
+}
+
+internal fun SyncResult.withAttemptIdentity(
+    runId: String,
+    runStartedAt: Long,
+): SyncResult = when (this) {
+    is SyncResult.Success -> copy(runId = runId, runStartedAt = runStartedAt)
+    is SyncResult.Error -> copy(runId = runId, runStartedAt = runStartedAt)
+}
+
+internal data class SafeBridgeError(
+    val origin: String = "NATIVE_BRIDGE",
+    val code: String,
+    val message: String,
+    val stack: String,
+    val exceptionType: String,
+)
+
+internal fun safeBridgeError(error: Exception): SafeBridgeError = SafeBridgeError(
+    code = if (error is SafeHttpException) error.code else "HTTP_ERROR",
+    message = error.message ?: error.toString(),
+    stack = error.stackTraceToString(),
+    exceptionType = error.javaClass.name,
+)
+
+internal class ScriptResultBridge(
     private val deferred: CompletableDeferred<SyncResult>,
     private val gson: Gson,
 ) {
     @JavascriptInterface
     fun onResult(json: String) {
-        deferred.complete(parseAccounts(json, gson) ?: SyncResult.Error("script result missing 'accounts'"))
+        val result = parseAccounts(json, gson) ?: SyncResult.Error("script result missing 'accounts'")
+        val rawResultDocument = rawExtensionDocument("extension.result", "result", json)
+        deferred.complete(
+            when (result) {
+                is SyncResult.Error -> result.copy(
+                    rawMessage = result.rawMessage ?: result.message,
+                    rawDiagnosticJson = result.rawDiagnosticJson ?: json,
+                    sourceDocuments = result.sourceDocuments + rawResultDocument,
+                )
+                is SyncResult.Success -> result.copy(
+                    sourceDocuments = result.sourceDocuments + rawResultDocument,
+                )
+            },
+        )
     }
 
     @JavascriptInterface
     fun onError(diagnosticJson: String) {
-        // Extension exceptions may embed credentials, request headers, or response bodies.
         val values = runCatching {
             @Suppress("UNCHECKED_CAST") gson.fromJson(diagnosticJson, Map::class.java) as Map<String, Any?>
         }.getOrNull().orEmpty()
-        val code = (values["code"] as? String)?.takeIf { it.matches(Regex("[A-Z][A-Z0-9_]{0,47}")) }
-        val frame = (values["frame"] as? String)?.takeIf { it.matches(Regex("line \\d{1,6}, column \\d{1,6}")) }
-        deferred.complete(SyncResult.Error("extension script failed", code = code, scriptFrame = frame))
+        val origin = values["origin"] as? String ?: "SCRIPT"
+        val code = values["code"] as? String
+        val frame = values["frame"] as? String
+        val rawMessage = values["message"] as? String
+        val rawStack = values["stack"] as? String
+        val rawErrorDocument = rawExtensionDocument("extension.error", "error", diagnosticJson)
+        deferred.complete(
+            SyncResult.Error(
+                origin = origin,
+                message = "extension script failed",
+                code = code,
+                scriptFrame = frame,
+                rawMessage = rawMessage,
+                rawStack = rawStack,
+                rawDiagnosticJson = diagnosticJson,
+                sourceDocuments = listOf(rawErrorDocument),
+            ),
+        )
     }
+
+    private fun rawExtensionDocument(
+        stage: String,
+        path: String,
+        json: String,
+    ) = CapturedSourceDocument(
+        id = UUID.randomUUID().toString(),
+        capturedAt = System.currentTimeMillis(),
+        stage = stage,
+        transport = "extension_runtime",
+        method = "RETURN",
+        url = "extension-runtime://script/$path",
+        statusCode = null,
+        responseHeadersJson = "{}",
+        mediaKind = "application/json",
+        bodyEncoding = "utf-8",
+        representation = "decoded_text",
+        bodyBytes = json.toByteArray(Charsets.UTF_8),
+    )
 }
 
 internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
@@ -514,7 +813,14 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
 } catch (e: CancellationException) {
     throw e
 } catch (e: Exception) {
-    SyncResult.Error("failed to parse script result")
+    SyncResult.Error(
+        message = "failed to parse script result",
+        origin = "PARSER",
+        cause = e,
+        rawMessage = e.message ?: e.toString(),
+        rawStack = e.stackTraceToString(),
+        rawDiagnosticJson = json,
+    )
 }
 
 private data class OptionalValue<T>(val value: T?)
@@ -540,7 +846,23 @@ private fun parseKindSync(
             result["code"] is String && KIND_SYNC_CODE_PATTERN.matches(result["code"] as String) -> result["code"] as String
             else -> return null
         }
-        KindSyncResult(kind, status, code)
+        val rawMessage = optionalString(result, "rawMessage") ?: return null
+        val rawStack = optionalString(result, "rawStack") ?: return null
+        val rawDiagnosticJson = optionalString(result, "rawDiagnosticJson") ?: return null
+        if (
+            status == KindSyncStatus.FAILED &&
+            (rawMessage.value == null || rawDiagnosticJson.value == null)
+        ) {
+            return null
+        }
+        KindSyncResult(
+            kind = kind,
+            status = status,
+            code = code,
+            rawMessage = rawMessage.value,
+            rawStack = rawStack.value,
+            rawDiagnosticJson = rawDiagnosticJson.value,
+        )
     }
     if (results.map { it.kind }.distinct().size != results.size) return null
     if (results.none { it.status == KindSyncStatus.COMPLETE }) return null

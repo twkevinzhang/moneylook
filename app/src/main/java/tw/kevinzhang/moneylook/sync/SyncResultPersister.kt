@@ -47,12 +47,13 @@ class SyncResultPersister @Inject constructor(
     ) {
         val startedAt = result.runStartedAt ?: System.currentTimeMillis()
         val runId = result.runId ?: UUID.randomUUID().toString()
-        val capturedDocuments = result.sourceDocuments.map {
-            it.toEntity(runId = runId, extensionId = extension.id)
-        }
+        val capturedDocuments = mutableListOf<SourceDocument>()
         var ingestionContext: IngestionContext? = null
         var snapshotCommitted = false
         try {
+        result.sourceDocuments.forEach {
+            capturedDocuments += it.toEntity(runId = runId, extensionId = extension.id)
+        }
         validateResultEvidence(result)
         validateRichTransferValues(result)
         val legacyIdentityByProposedId = result.accounts.associate { data ->
@@ -252,6 +253,7 @@ class SyncResultPersister @Inject constructor(
                 payloadFingerprint = payloadFingerprint.value,
             )
         }
+        val failedKinds = result.kindSync.orEmpty().filter { it.status == KindSyncStatus.FAILED }
         val preparedContext = IngestionContext(
             runId = runId,
             startedAt = startedAt,
@@ -297,6 +299,19 @@ class SyncResultPersister @Inject constructor(
                     )
                 })
             },
+            failureOrigin = "PARTIAL_KIND".takeIf { failedKinds.isNotEmpty() },
+            failureCode = when (failedKinds.size) {
+                0 -> null
+                1 -> failedKinds.single().code
+                else -> "MULTIPLE_KIND_FAILURES"
+            },
+            failureMessage = failedKinds.mapNotNull { it.rawMessage }
+                .joinToString("\n\n")
+                .takeIf(String::isNotEmpty),
+            failureStack = failedKinds.mapNotNull { it.rawStack }
+                .joinToString("\n\n")
+                .takeIf(String::isNotEmpty),
+            failureDiagnosticJson = failedKinds.takeIf { it.isNotEmpty() }?.let(gson::toJson),
         )
         ingestionContext = preparedContext
         transferSyncStore.replaceSnapshot(
@@ -333,12 +348,16 @@ class SyncResultPersister @Inject constructor(
             if (!snapshotCommitted) {
                 recordFailedRunOrSuppress(
                     extensionId = extension.id,
-                    context = ingestionContext ?: failedPreprocessingContext(
+                    context = (ingestionContext ?: failedPreprocessingContext(
                         extension = extension,
                         trigger = trigger,
                         startedAt = startedAt,
                         runId = runId,
                         sourceDocuments = capturedDocuments,
+                    )).copy(
+                        failureOrigin = "PERSISTENCE",
+                        failureMessage = error.message ?: error.toString(),
+                        failureStack = error.stackTraceToString(),
                     ),
                     accountCount = result.accounts.size,
                     transferCount = result.accounts.sumOf { it.transfers.size },
@@ -372,17 +391,23 @@ class SyncResultPersister @Inject constructor(
         sourceDocuments = sourceDocuments,
     )
 
-    /** Records an extension/runtime failure without retaining its message or any private payload. */
+    /** Records an extension/runtime failure with its complete raw diagnostic evidence. */
     suspend fun recordFailure(
         extension: InstalledExtension,
         trigger: IngestionTrigger = IngestionTrigger.USER_SYNC,
         sourceDocuments: List<CapturedSourceDocument> = emptyList(),
         sourceRunId: String? = null,
         sourceRunStartedAt: Long? = null,
+        failure: SyncResult.Error? = null,
     ) {
         val now = System.currentTimeMillis()
         val runId = sourceRunId ?: UUID.randomUUID().toString()
         val startedAt = sourceRunStartedAt ?: now
+        val completeSourceDocuments = if (sourceDocuments.isNotEmpty()) {
+            sourceDocuments
+        } else {
+            failure?.sourceDocuments.orEmpty()
+        }
         val fingerprint = sourceFingerprintProtector.fingerprint(
             "ingestion-run",
             extension.id,
@@ -406,7 +431,15 @@ class SyncResultPersister @Inject constructor(
                 sourceFingerprint = fingerprint.value,
                 fingerprintKeyVersion = fingerprint.keyVersion,
                 transferFingerprints = emptyMap(),
-                sourceDocuments = sourceDocuments.map { it.toEntity(runId = runId, extensionId = extension.id) },
+                sourceDocuments = completeSourceDocuments.map {
+                    it.toEntity(runId = runId, extensionId = extension.id)
+                },
+                failureOrigin = failure?.origin,
+                failureCode = failure?.code,
+                failureMessage = failure?.rawMessage ?: failure?.message,
+                failureStack = failure?.rawStack ?: failure?.cause?.stackTraceToString(),
+                failureDiagnosticJson = failure?.rawDiagnosticJson,
+                failureScriptFrame = failure?.scriptFrame,
             ),
             accountCount = 0,
             transferCount = 0,
@@ -436,10 +469,12 @@ class SyncResultPersister @Inject constructor(
 
     private suspend fun markClassificationFailedOrSuppress(runId: String, original: Exception) {
         try {
-            transferSyncStore.updateClassificationStatus(
-                runId,
-                tw.kevinzhang.core.data.model.IngestionClassificationStatus.FAILED,
-                System.currentTimeMillis(),
+            transferSyncStore.updateClassificationFailure(
+                runId = runId,
+                completedAt = System.currentTimeMillis(),
+                origin = "CLASSIFIER",
+                message = original.message ?: original.toString(),
+                stack = original.stackTraceToString(),
             )
         } catch (auditError: CancellationException) {
             throw auditError

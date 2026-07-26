@@ -124,10 +124,22 @@ internal class NativeSdkBrowserBridge(
     }
 }
 
-internal data class SafeBrowserBridgeError(val code: String, val message: String)
+internal data class SafeBrowserBridgeError(
+    val origin: String = "NATIVE_BRIDGE",
+    val code: String,
+    val message: String,
+    val stack: String,
+    val exceptionType: String,
+)
 
-internal fun safeBrowserBridgeError(error: Exception): SafeBrowserBridgeError = when (error) {
-    is SafeBrowserException -> SafeBrowserBridgeError(error.code, "browser request failed")
-    is SafeHttpException -> SafeBrowserBridgeError(error.code, "browser request failed")
-    else -> SafeBrowserBridgeError("BROWSER_ERROR", "browser request failed")
-}
+internal fun safeBrowserBridgeError(error: Exception): SafeBrowserBridgeError =
+    SafeBrowserBridgeError(
+        code = when (error) {
+            is SafeBrowserException -> error.code
+            is SafeHttpException -> error.code
+            else -> "BROWSER_ERROR"
+        },
+        message = error.message ?: error.toString(),
+        stack = error.stackTraceToString(),
+        exceptionType = error.javaClass.name,
+    )

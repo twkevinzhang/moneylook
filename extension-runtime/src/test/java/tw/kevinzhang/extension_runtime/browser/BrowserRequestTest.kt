@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 import okio.ByteString.Companion.toByteString
 import java.nio.charset.StandardCharsets
 
@@ -55,6 +56,17 @@ class BrowserRequestTest {
         assertFalse(request.withCredentials)
         assertEquals("history", request.capture?.stage)
         assertTrue(request.capture?.authenticated == true)
+    }
+
+    @Test
+    fun malformedJsonKeepsParserCauseWithoutChangingStableError() {
+        val error = assertThrows(SafeBrowserException::class.java) {
+            BrowserRequestJsonParser.parseRequest("{not-json", gson)
+        }
+
+        assertEquals("INVALID_REQUEST", error.code)
+        assertEquals("request must be valid JSON", error.message)
+        assertTrue(error.cause != null)
     }
 
     @Test
@@ -296,14 +308,23 @@ class BrowserRequestTest {
     }
 
     @Test
-    fun browserBridgeErrorsAreAlwaysRedacted() {
+    fun browserBridgeErrorsRetainCompleteNativeDiagnostics() {
         val secret = "Cookie: session=top-secret; password=hunter2"
-        val known = safeBrowserBridgeError(SafeBrowserException("INVALID_REQUEST", secret))
+        val ioCause = IOException("WebView transport detail: $secret")
+        val known = safeBrowserBridgeError(
+            SafeBrowserException("BROWSER_NETWORK", "browser request failed", ioCause),
+        )
         val unexpected = safeBrowserBridgeError(IllegalStateException(secret))
 
-        assertEquals("INVALID_REQUEST", known.code)
-        assertFalse(known.message.contains("secret"))
-        assertFalse(unexpected.message.contains("hunter2"))
+        assertEquals("BROWSER_NETWORK", known.code)
+        assertEquals("NATIVE_BRIDGE", known.origin)
+        assertEquals("browser request failed", known.message)
+        assertTrue(known.stack.contains("SafeBrowserException: browser request failed"))
+        assertTrue(known.stack.contains("Caused by: java.io.IOException: WebView transport detail"))
+        assertTrue(known.stack.contains("top-secret"))
+        assertTrue(unexpected.message.contains("hunter2"))
+        assertTrue(unexpected.stack.contains("IllegalStateException"))
+        assertEquals(IllegalStateException::class.java.name, unexpected.exceptionType)
     }
 
     @Test

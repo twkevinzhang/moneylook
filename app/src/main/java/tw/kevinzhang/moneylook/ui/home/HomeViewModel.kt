@@ -368,7 +368,13 @@ class HomeViewModel @Inject constructor(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        SyncResult.Error(e.message ?: "unknown error")
+        SyncResult.Error(
+            message = "sync runtime failed",
+            origin = "RUNTIME",
+            cause = e,
+            rawMessage = e.message ?: e.toString(),
+            rawStack = e.stackTraceToString(),
+        )
     }
 
     private suspend fun handleSyncResult(extension: InstalledExtension, result: SyncResult) {
@@ -395,6 +401,7 @@ class HomeViewModel @Inject constructor(
                     result.sourceDocuments,
                     result.runId,
                     result.runStartedAt,
+                    result,
                 )
                 credentialProfileDao.updateLastRun(extension.id, now, "error")
                 updateStatus(extension.id) {

@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -124,6 +125,51 @@ class NativeHttpTransportTest {
         NativeHttpTransport(sharedClient).execute(request("/safe", followRedirects = false))
 
         assertFalse(interceptorCalled)
+    }
+
+    @Test
+    fun malformedJsonKeepsParserCauseWithoutChangingStableError() {
+        val error = try {
+            HttpRequestJsonParser.parse("{not-json", Gson())
+            null
+        } catch (e: SafeHttpException) {
+            e
+        }
+
+        assertEquals("INVALID_REQUEST", error?.code)
+        assertEquals("request must be valid JSON", error?.message)
+        assertNotNull(error?.cause)
+    }
+
+    @Test
+    fun networkFailureKeepsIOExceptionCauseWithoutChangingStableError() = runBlocking {
+        val unavailable = MockWebServer()
+        unavailable.start()
+        val url = unavailable.url("/unavailable").toString()
+        unavailable.shutdown()
+
+        val error = try {
+            NativeHttpTransport(OkHttpClient()).execute(
+                NativeHttpRequest(
+                    method = "GET",
+                    url = url,
+                    headers = emptyMap(),
+                    body = null,
+                    bodyEncoding = "utf8",
+                    responseEncoding = "text",
+                    followRedirects = false,
+                    timeoutMs = 1_000,
+                ),
+            )
+            null
+        } catch (e: SafeHttpException) {
+            e
+        }
+
+        assertEquals("NETWORK_ERROR", error?.code)
+        assertEquals("network request failed", error?.message)
+        assertTrue(error?.cause is java.io.IOException)
+        assertTrue(requireNotNull(error).stackTraceToString().contains("Caused by: java.net.ConnectException"))
     }
 
     private fun request(

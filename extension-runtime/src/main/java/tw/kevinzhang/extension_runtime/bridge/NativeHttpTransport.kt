@@ -52,7 +52,8 @@ internal data class ResponseCaptureOptions(
 internal class SafeHttpException(
     val code: String,
     message: String,
-) : Exception(message)
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
 internal object HttpRequestJsonParser {
     fun parse(json: String, gson: Gson): NativeHttpRequest {
@@ -61,7 +62,7 @@ internal object HttpRequestJsonParser {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            throw SafeHttpException("INVALID_REQUEST", "request must be valid JSON")
+            throw SafeHttpException("INVALID_REQUEST", "request must be valid JSON", e)
         } ?: throw SafeHttpException("INVALID_REQUEST", "request must be an object")
 
         val url = root.string("url") ?: throw SafeHttpException("INVALID_REQUEST", "url is required")
@@ -209,7 +210,7 @@ internal class NativeHttpTransport(okHttpClient: OkHttpClient) {
                 request.headers.forEach { (name, values) -> values.forEach { add(name, it) } }
             }.build()
         } catch (e: IllegalArgumentException) {
-            throw SafeHttpException("INVALID_HEADERS", "request headers are invalid")
+            throw SafeHttpException("INVALID_HEADERS", "request headers are invalid", e)
         }
         val contentType = headers["Content-Type"]?.toMediaTypeOrNull()
         val requestBody = when {
@@ -224,7 +225,7 @@ internal class NativeHttpTransport(okHttpClient: OkHttpClient) {
                 .method(request.method, requestBody)
                 .build()
         } catch (e: IllegalArgumentException) {
-            throw SafeHttpException("INVALID_REQUEST", "HTTP request is invalid")
+            throw SafeHttpException("INVALID_REQUEST", "HTTP request is invalid", e)
         }
     }
 
@@ -259,7 +260,9 @@ internal class NativeHttpTransport(okHttpClient: OkHttpClient) {
         enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 if (continuation.isActive) {
-                    continuation.resumeWithException(SafeHttpException("NETWORK_ERROR", "network request failed"))
+                    continuation.resumeWithException(
+                        SafeHttpException("NETWORK_ERROR", "network request failed", e),
+                    )
                 }
             }
 
