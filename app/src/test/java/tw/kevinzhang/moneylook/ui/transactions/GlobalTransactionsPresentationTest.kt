@@ -70,6 +70,56 @@ class GlobalTransactionsPresentationTest {
     }
 
     @Test
+    fun `details default and search include every transaction direction across categories`() {
+        val items = listOf(
+            item("expense", -120.0, description = "咖啡", categoryId = "food", categoryName = "餐飲"),
+            item("income", 120.0, description = "咖啡退款", categoryId = "refund", categoryName = "退款", categoryKind = CategoryKind.INCOME),
+            item("transfer", -120.0, description = "咖啡儲值", categoryId = "move", categoryName = "帳戶移轉", categoryKind = CategoryKind.TRANSFER),
+        )
+
+        assertNull(GlobalTransactionsFilter().direction)
+        assertEquals(
+            setOf("expense", "income", "transfer"),
+            filterGlobalTransactions(items, GlobalTransactionsFilter()).map { it.transferId }.toSet(),
+        )
+        assertEquals(
+            setOf("expense", "income", "transfer"),
+            filterGlobalTransactions(items, GlobalTransactionsFilter(query = "咖啡")).map { it.transferId }.toSet(),
+        )
+    }
+
+    @Test
+    fun `category details add the selected category while retaining explicit filters including uncategorized`() {
+        val items = listOf(
+            item("food-expense", -120.0, description = "咖啡", categoryId = "food", categoryName = "餐飲"),
+            item("food-income", 120.0, description = "咖啡退款", categoryId = "food", categoryName = "餐飲", categoryKind = CategoryKind.INCOME),
+            item("travel-expense", -80.0, description = "咖啡", categoryId = "travel", categoryName = "旅遊"),
+            item("uncategorized", -60.0, description = "咖啡"),
+        )
+        val explicitFilter = GlobalTransactionsFilter(
+            query = "咖啡",
+            direction = GlobalTransactionDirection.EXPENSE,
+        )
+
+        assertEquals(
+            listOf("food-expense"),
+            filterCategoryTransactions(items, explicitFilter, "food").map { it.transferId },
+        )
+        assertEquals(
+            listOf("uncategorized"),
+            filterCategoryTransactions(items, explicitFilter, null).map { it.transferId },
+        )
+        assertEquals(
+            listOf("travel-expense"),
+            filterCategoryTransactions(
+                items,
+                explicitFilter.copy(categoryId = "travel"),
+                "travel",
+            ).map { it.transferId },
+        )
+    }
+
+    @Test
     fun `direction filters use strict transaction signs rather than category kinds`() {
         val items = listOf(
             item("income", 100.0, categoryKind = CategoryKind.EXPENSE),

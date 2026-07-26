@@ -12,6 +12,12 @@ sealed class Screen(val route: String) {
     object TransactionDetail : Screen("transaction/{transferId}") {
         fun route(transferId: String) = "transaction/${java.net.URLEncoder.encode(transferId, "UTF-8")}"
     }
+    /** `categoryId` is omitted for the uncategorized report bucket. */
+    object CategoryTransactions : Screen("category_transactions?categoryId={categoryId}") {
+        fun route(categoryId: String?): String = categoryId
+            ?.let { "category_transactions?categoryId=${java.net.URLEncoder.encode(it, "UTF-8")}" }
+            ?: "category_transactions"
+    }
     object Categories : Screen("categories")
     object Tags : Screen("tags")
     object AutoRules : Screen("auto_rules")

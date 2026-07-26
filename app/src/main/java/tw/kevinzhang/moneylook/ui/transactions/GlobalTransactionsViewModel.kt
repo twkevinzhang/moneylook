@@ -31,10 +31,14 @@ class GlobalTransactionsViewModel @Inject constructor(
     private val today = LocalDate.now()
     private val initialRange = GlobalDateRange.thisMonth(today)
     private val periodSelection = MutableStateFlow(PeriodSelection(initialRange, initialRange))
-    private val filter = MutableStateFlow(
-        GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE),
-    )
+    /**
+     * Conditions explicitly selected from the detail filter sheet.  The
+     * category report direction deliberately lives in [categoryDirection], so
+     * touching a report card cannot silently narrow the detail ledger.
+     */
+    private val filter = MutableStateFlow(GlobalTransactionsFilter())
     private val activeTab = MutableStateFlow(GlobalTransactionsTab.CATEGORY)
+    private val categoryDirection = MutableStateFlow(GlobalTransactionDirection.EXPENSE)
     private val exchangeRateState = MutableStateFlow(ExchangeRateState())
 
     init {
@@ -68,31 +72,28 @@ class GlobalTransactionsViewModel @Inject constructor(
         combine(rawItems, rawTrendItems) { current, trend -> current to trend },
         periodSelection,
         filter,
-        activeTab,
+        combine(activeTab, categoryDirection) { tab, direction -> tab to direction },
         exchangeRateState,
-    ) { itemSets, currentPeriod, currentFilter, currentTab, rates ->
+    ) { itemSets, currentPeriod, currentFilter, tabState, rates ->
         val currentRange = currentPeriod.range
         val allItems = itemSets.first.map { it.toGlobalTransactionItem(rates.ratesPerTwd) }
         val trendItems = itemSets.second.map { it.toGlobalTransactionItem(rates.ratesPerTwd) }
         val sharedFilter = currentFilter.copy(direction = null)
         val reportItems = globalReportableTransactions(filterGlobalTransactions(allItems, sharedFilter))
         val visibleItems = filterGlobalTransactions(allItems, currentFilter)
-        val selectedDirection = currentFilter.direction
-            ?.takeIf { it != GlobalTransactionDirection.TRANSFER }
-            ?: GlobalTransactionDirection.EXPENSE
         GlobalTransactionsUiState(
             dateRange = currentRange,
             datePagerAnchor = currentPeriod.anchor,
             filter = currentFilter,
-            activeTab = currentTab,
-            categoryDirection = selectedDirection,
+            activeTab = tabState.first,
+            categoryDirection = tabState.second,
             allItems = allItems,
             items = visibleItems,
             // The analysis chart always needs both income and expense series;
             // it shares every other filter with this screen.
             trendItems = globalReportableTransactions(filterGlobalTransactions(trendItems, sharedFilter)),
             summary = globalTransactionsSummary(reportItems),
-            categories = globalCategorySummaries(reportItems, selectedDirection),
+            categories = globalCategorySummaries(reportItems, tabState.second),
             missingExchangeCurrencies = missingExchangeCurrencies(reportItems),
             exchangeRatesLoading = rates.loading,
         )
@@ -132,24 +133,15 @@ class GlobalTransactionsViewModel @Inject constructor(
     }
     fun setCurrency(value: String) { filter.update { it.copy(currency = value) } }
     fun setQuery(value: String) { filter.update { it.copy(query = value) } }
-    fun updateFilter(transform: (GlobalTransactionsFilter) -> GlobalTransactionsFilter) {
-        filter.update { current ->
-            val updated = transform(current)
-            updated.copy(direction = updated.direction ?: current.direction ?: GlobalTransactionDirection.EXPENSE)
-        }
-    }
+    fun updateFilter(transform: (GlobalTransactionsFilter) -> GlobalTransactionsFilter) = filter.update(transform)
     fun clearFilters() {
-        filter.update { current -> GlobalTransactionsFilter(direction = current.direction ?: GlobalTransactionDirection.EXPENSE) }
+        filter.value = GlobalTransactionsFilter()
     }
     fun selectTab(value: GlobalTransactionsTab) { activeTab.value = value }
     fun selectReportDirection(value: GlobalTransactionDirection) {
         if (value == GlobalTransactionDirection.INCOME || value == GlobalTransactionDirection.EXPENSE) {
-            filter.update { it.copy(direction = value) }
+            categoryDirection.value = value
         }
-    }
-    fun showCategoryDetails(categoryId: String?) {
-        filter.update { it.copy(categoryId = categoryId) }
-        activeTab.value = GlobalTransactionsTab.DETAILS
     }
 }
 
