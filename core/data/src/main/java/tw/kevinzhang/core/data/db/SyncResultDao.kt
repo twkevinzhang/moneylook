@@ -13,6 +13,8 @@ import tw.kevinzhang.core.data.model.TransferObservation
 import tw.kevinzhang.core.data.model.TransferIngestionEvent
 import tw.kevinzhang.core.data.model.IngestionClassificationStatus
 import tw.kevinzhang.core.data.model.IngestionStatus
+import tw.kevinzhang.core.data.model.SourceDocument
+import tw.kevinzhang.core.data.model.TransferFieldObservation
 import java.util.UUID
 
 /**
@@ -36,6 +38,18 @@ abstract class SyncResultDao : TransferSyncStore {
     ) {
         require(ingestionContext.transferFingerprints.keys.containsAll(transfers.map(Transfer::id))) {
             "every transfer requires keyed provenance fingerprints"
+        }
+        val accountIdRewrites = resolveAccountIdRewrites(
+            extensionId,
+            accounts,
+            legacyIdentityByAccountId,
+        )
+        val retainedFieldObservations = ingestionContext.fieldObservations.map { observation ->
+            if (observation.assetType == "ACCOUNT") {
+                observation.copy(assetId = accountIdRewrites[observation.assetId] ?: observation.assetId)
+            } else {
+                observation
+            }
         }
         val previousTransfers = if (transfers.isEmpty()) {
             emptyMap()
@@ -71,6 +85,12 @@ abstract class SyncResultDao : TransferSyncStore {
                 fingerprintKeyVersion = ingestionContext.fingerprintKeyVersion,
             ),
         )
+        if (ingestionContext.sourceDocuments.isNotEmpty()) {
+            insertSourceDocuments(ingestionContext.sourceDocuments)
+        }
+        if (retainedFieldObservations.isNotEmpty()) {
+            insertFieldObservations(retainedFieldObservations)
+        }
         if (transfers.isNotEmpty()) {
             insertIngestionEvents(
                 transfers.map { transfer ->
@@ -130,6 +150,9 @@ abstract class SyncResultDao : TransferSyncStore {
                 fingerprintKeyVersion = ingestionContext.fingerprintKeyVersion,
             ),
         )
+        if (ingestionContext.sourceDocuments.isNotEmpty()) {
+            insertSourceDocuments(ingestionContext.sourceDocuments)
+        }
     }
 
     @Query(
@@ -166,14 +189,7 @@ abstract class SyncResultDao : TransferSyncStore {
             "scoped snapshot contains an account outside its authoritative kinds"
         }
 
-        val idRewrites = accounts.associate { account ->
-            val reusedId = account.sourceAccountKey?.let { sourceKey ->
-                findSourceAccountIds(extensionId, sourceKey, account.kind, account.currency).singleOrNull()
-            } ?: legacyIdentityByAccountId[account.id]?.let { identity ->
-                findLegacyAccountIds(extensionId, identity.accountNo, identity.kind, identity.currency).singleOrNull()
-            }
-            account.id to (reusedId ?: account.id)
-        }
+        val idRewrites = resolveAccountIdRewrites(extensionId, accounts, legacyIdentityByAccountId)
         val resolvedAccounts = accounts.map { account -> account.copy(id = idRewrites.getValue(account.id)) }
         val resolvedTransfers = transfers.map { transfer ->
             transfer.copy(accountId = idRewrites[transfer.accountId] ?: transfer.accountId)
@@ -237,6 +253,24 @@ abstract class SyncResultDao : TransferSyncStore {
         if (resolvedTransfers.isNotEmpty()) upsertTransfers(resolvedTransfers)
     }
 
+    private suspend fun resolveAccountIdRewrites(
+        extensionId: String,
+        accounts: List<Account>,
+        legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
+    ): Map<String, String> = accounts.associate { account ->
+        val reusedId = account.sourceAccountKey?.let { sourceKey ->
+            findSourceAccountIds(extensionId, sourceKey, account.kind, account.currency).singleOrNull()
+        } ?: legacyIdentityByAccountId[account.id]?.let { identity ->
+            findLegacyAccountIds(
+                extensionId,
+                identity.accountNo,
+                identity.kind,
+                identity.currency,
+            ).singleOrNull()
+        }
+        account.id to (reusedId ?: account.id)
+    }
+
     @Upsert
     protected abstract suspend fun upsertAccounts(accounts: List<Account>)
 
@@ -254,6 +288,12 @@ abstract class SyncResultDao : TransferSyncStore {
 
     @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.ABORT)
     protected abstract suspend fun insertIngestionEvents(events: List<TransferIngestionEvent>)
+
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertSourceDocuments(documents: List<SourceDocument>)
+
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.ABORT)
+    protected abstract suspend fun insertFieldObservations(observations: List<TransferFieldObservation>)
 
     @Query("DELETE FROM accounts WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteAccountsByExtensionId(extensionId: String)

@@ -73,7 +73,7 @@ class DefaultClassificationCatalogTest {
     }
 
     @Test
-    fun `public generic v3 rules exclude private scopes and sensitive fragments`() {
+    fun `public generic v4 rules exclude private scopes and search structured merchant facts`() {
         val privateContext = Regex(
             "台北|新北|桃園|台中|台南|高雄|基隆|新竹|嘉義|彰化|中壢|內湖|信義|板橋|新店|" +
                 "分行|分店|門市|卡號|訂單|序號|先生|小姐",
@@ -119,6 +119,7 @@ class DefaultClassificationCatalogTest {
                         AutoCategoryRuleConditionField.DESCRIPTION,
                         AutoCategoryRuleConditionField.MEMO,
                         AutoCategoryRuleConditionField.TYPE,
+                        AutoCategoryRuleConditionField.SEARCHABLE_TEXT,
                     ),
                 )
                 assertFalse(privateContext.containsMatchIn(condition.pattern))
@@ -127,5 +128,10 @@ class DefaultClassificationCatalogTest {
                 assertFalse('@' in condition.pattern)
             }
         }
+        assertTrue(
+            DefaultClassificationCatalog.publicGenericRules
+                .filter { it.rule.priority >= 29 }
+                .all { it.conditions.single().field == AutoCategoryRuleConditionField.SEARCHABLE_TEXT },
+        )
     }
 }

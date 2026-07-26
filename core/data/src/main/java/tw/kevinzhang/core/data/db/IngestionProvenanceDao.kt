@@ -8,6 +8,10 @@ import tw.kevinzhang.core.data.model.IngestionRun
 import tw.kevinzhang.core.data.model.TransferAnnotationEvent
 import tw.kevinzhang.core.data.model.TransferIngestionEvent
 import tw.kevinzhang.core.data.model.IngestionClassificationStatus
+import tw.kevinzhang.core.data.model.SourceDocument
+import tw.kevinzhang.core.data.model.TransferFieldObservation
+import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
+import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
 
 /** Safe, aggregate-only quality signals. No transaction text is selected by this DAO. */
 data class MonthlyClassificationAggregate(
@@ -27,6 +31,25 @@ data class StructuredFieldPresenceAggregate(
     val purposeCount: Int,
     val memoCount: Int,
     val typeCount: Int,
+)
+
+/** Raw body is deliberately excluded; detail screens load it only after an explicit user action. */
+data class SourceDocumentSummary(
+    val id: String,
+    val runId: String,
+    val extensionId: String,
+    val capturedAt: Long,
+    val stage: String,
+    val transport: String,
+    val method: String,
+    val url: String,
+    val statusCode: Int?,
+    val responseHeadersJson: String,
+    val mediaKind: String?,
+    val bodyEncoding: String,
+    val representation: String,
+    val bodyByteCount: Long,
+    val bodySha256: String,
 )
 
 @Dao
@@ -74,12 +97,117 @@ interface IngestionProvenanceDao {
 
     @Query(
         """
+        SELECT r.* FROM ingestion_runs r
+        WHERE r.id IN (
+            SELECT e.runId FROM transfer_ingestion_events e WHERE e.transferId = :transferId
+        )
+        ORDER BY r.startedAt DESC, r.id DESC
+        """,
+    )
+    suspend fun getIngestionRunsForTransfer(transferId: String): List<IngestionRun>
+
+    @Query(
+        """
         SELECT * FROM transfer_annotation_events
         WHERE transferId = :transferId
         ORDER BY occurredAt DESC, id DESC
         """,
     )
     suspend fun getTransferAnnotationEvents(transferId: String): List<TransferAnnotationEvent>
+
+    @Query(
+        """
+        SELECT d.id, d.runId, d.extensionId, d.capturedAt, d.stage, d.transport,
+            d.method, d.url, d.statusCode, d.responseHeadersJson, d.mediaKind, d.bodyEncoding,
+            d.representation,
+            d.bodyByteCount, d.bodySha256
+        FROM source_documents d
+        WHERE d.runId IN (
+            SELECT e.runId FROM transfer_ingestion_events e WHERE e.transferId = :transferId
+        )
+        ORDER BY d.capturedAt DESC, d.id DESC
+        """,
+    )
+    suspend fun getSourceDocumentsForTransfer(transferId: String): List<SourceDocumentSummary>
+
+    @Query(
+        """
+        SELECT d.id, d.runId, d.extensionId, d.capturedAt, d.stage, d.transport,
+            d.method, d.url, d.statusCode, d.responseHeadersJson, d.mediaKind, d.bodyEncoding,
+            d.representation,
+            d.bodyByteCount, d.bodySha256
+        FROM source_documents d
+        WHERE d.runId IN (
+            SELECT f.runId FROM transfer_field_observations f
+            WHERE f.assetType = :assetType AND f.assetId = :assetId
+        )
+        ORDER BY d.capturedAt DESC, d.id DESC
+        """,
+    )
+    suspend fun getSourceDocumentsForAsset(
+        assetType: String,
+        assetId: String,
+    ): List<SourceDocumentSummary>
+
+    @Query(
+        """
+        SELECT d.id, d.runId, d.extensionId, d.capturedAt, d.stage, d.transport,
+            d.method, d.url, d.statusCode, d.responseHeadersJson, d.mediaKind, d.bodyEncoding,
+            d.representation, d.bodyByteCount, d.bodySha256
+        FROM source_documents d
+        WHERE d.runId = :runId
+        ORDER BY d.capturedAt DESC, d.id DESC
+        """,
+    )
+    suspend fun getSourceDocumentsForRun(runId: String): List<SourceDocumentSummary>
+
+    @Query(
+        """
+        SELECT * FROM transfer_field_observations
+        WHERE transferId = :transferId
+        ORDER BY observedAt DESC, fieldName, id
+        """,
+    )
+    suspend fun getTransferFieldObservations(transferId: String): List<TransferFieldObservation>
+
+    @Query(
+        """
+        SELECT * FROM transfer_field_observations
+        WHERE assetType = :assetType AND assetId = :assetId
+        ORDER BY observedAt DESC, fieldName, id
+        """,
+    )
+    suspend fun getFieldObservationsForAsset(
+        assetType: String,
+        assetId: String,
+    ): List<TransferFieldObservation>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertRuleEvaluations(evaluations: List<ClassificationRuleEvaluation>)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertConditionEvaluations(evaluations: List<ClassificationConditionEvaluation>)
+
+    @Query(
+        """
+        SELECT * FROM classification_rule_evaluations
+        WHERE transferId = :transferId
+        ORDER BY evaluatedAt DESC, ruleId, id
+        """,
+    )
+    suspend fun getRuleEvaluations(transferId: String): List<ClassificationRuleEvaluation>
+
+    @Query(
+        """
+        SELECT * FROM classification_condition_evaluations
+        WHERE transferId = :transferId
+        ORDER BY evaluatedAt DESC, ruleEvaluationId, position
+        """,
+    )
+    suspend fun getConditionEvaluations(transferId: String): List<ClassificationConditionEvaluation>
+
+    @Query("SELECT * FROM source_documents WHERE id = :id LIMIT 1")
+    suspend fun getSourceDocument(id: String): SourceDocument?
 
     @Query(
         """

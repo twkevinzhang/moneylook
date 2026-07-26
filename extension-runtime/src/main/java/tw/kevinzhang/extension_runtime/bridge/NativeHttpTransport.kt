@@ -30,6 +30,7 @@ internal data class NativeHttpRequest(
     val responseEncoding: String,
     val followRedirects: Boolean,
     val timeoutMs: Long,
+    val capture: ResponseCaptureOptions? = null,
 )
 
 internal data class NativeHttpResponse(
@@ -38,6 +39,14 @@ internal data class NativeHttpResponse(
     val headers: Map<String, List<String>>,
     val body: String,
     val bodyEncoding: String,
+    val sourceDocumentId: String? = null,
+    @Transient val exactBodyBytes: ByteArray = ByteArray(0),
+)
+
+internal data class ResponseCaptureOptions(
+    val stage: String,
+    val authenticated: Boolean,
+    val mediaKind: String?,
 )
 
 internal class SafeHttpException(
@@ -98,6 +107,21 @@ internal object HttpRequestJsonParser {
                 it.asBoolean
             } ?: false,
             timeoutMs = timeoutMs,
+            capture = root.getAsJsonObject("capture")?.let { capture ->
+                val stage = capture.string("stage")
+                    ?.takeIf { it.isNotBlank() && it.length <= 128 }
+                    ?: throw SafeHttpException("INVALID_REQUEST", "capture.stage is required")
+                ResponseCaptureOptions(
+                    stage = stage,
+                    authenticated = capture.get("authenticated")?.takeUnless { it.isJsonNull }?.let {
+                        if (!it.isJsonPrimitive || !it.asJsonPrimitive.isBoolean) {
+                            throw SafeHttpException("INVALID_REQUEST", "capture.authenticated must be a boolean")
+                        }
+                        it.asBoolean
+                    } ?: false,
+                    mediaKind = capture.string("mediaKind")?.takeIf { it.length <= 64 },
+                )
+            },
         )
     }
 
@@ -226,6 +250,7 @@ internal class NativeHttpTransport(okHttpClient: OkHttpClient) {
             headers = headers.toMultimap(),
             body = encodedBody,
             bodyEncoding = responseEncoding,
+            exactBodyBytes = bytes,
         )
     }
 

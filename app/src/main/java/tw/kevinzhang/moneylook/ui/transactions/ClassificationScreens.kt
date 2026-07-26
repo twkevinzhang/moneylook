@@ -26,6 +26,7 @@ fun TransactionDetailScreen(
             state = detail,
             onNavigateUp = onNavigateUp,
             onSave = { draft -> viewModel.saveDetail(draft, onNavigateUp) },
+            onLoadSourceBody = viewModel::loadSourceDocumentBody,
         )
     }
 }

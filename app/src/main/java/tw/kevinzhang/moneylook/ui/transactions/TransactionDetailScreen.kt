@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -74,6 +75,40 @@ data class TransactionDetailUiState(
     val status: String? = null,
     val isManualOverride: Boolean = false,
     val isSaving: Boolean = false,
+    val sourceFields: List<SourceFieldAuditUi> = emptyList(),
+    val auditTimeline: List<String> = emptyList(),
+    val sourceDocuments: List<SourceDocumentAuditUi> = emptyList(),
+)
+
+data class SourceFieldAuditUi(
+    val fieldName: String,
+    val valueJson: String,
+    val sourcePath: String?,
+    val parserVersion: String?,
+    val sourceDocumentId: String?,
+    val runId: String,
+    val extensionId: String,
+    val observedAt: Long,
+    val sourceFieldJson: String?,
+)
+
+data class SourceDocumentAuditUi(
+    val id: String,
+    val stage: String,
+    val method: String,
+    val url: String,
+    val statusCode: Int?,
+    val capturedAt: Long,
+    val byteCount: Long,
+    val sha256: String,
+    val bodyEncoding: String,
+    val runId: String,
+    val extensionId: String,
+    val transport: String,
+    val mediaKind: String?,
+    val representation: String,
+    val responseHeadersJson: String,
+    val bodyText: String? = null,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +117,7 @@ fun TransactionDetailContent(
     state: TransactionDetailUiState,
     onNavigateUp: () -> Unit,
     onSave: (TransactionDetailDraft) -> Unit,
+    onLoadSourceBody: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var draft by remember(state.selectedCategoryId, state.selectedTagIds, state.userNote) {
@@ -194,6 +230,7 @@ fun TransactionDetailContent(
                 onCategoryClick = { showCategoryPicker = true },
             )
             ReadOnlyFacts(state)
+            TraceabilitySections(state, onLoadSourceBody)
             HorizontalDivider()
             Text("標籤", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -243,6 +280,68 @@ fun TransactionDetailContent(
                     Text(if (draft.resumeAutomatic) "已在儲存時恢復自動分類" else "恢復自動分類")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TraceabilitySections(
+    state: TransactionDetailUiState,
+    onLoadSourceBody: (String) -> Unit,
+) {
+    var fieldsExpanded by remember { mutableStateOf(false) }
+    var timelineExpanded by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        HorizontalDivider()
+        TextButton(onClick = { fieldsExpanded = !fieldsExpanded }) {
+            Text(if (fieldsExpanded) "收合來源欄位" else "來源欄位（${state.sourceFields.size}）")
+        }
+        if (fieldsExpanded) {
+            state.sourceFields.forEach { field ->
+                ReadOnlyFact(
+                    field.fieldName,
+                    buildString {
+                        append(field.valueJson)
+                        field.sourcePath?.let { append("\n來源：").append(it) }
+                        field.sourceDocumentId?.let { append("\n文件：").append(it) }
+                        field.parserVersion?.let { append("\nParser：").append(it) }
+                        append("\nrun：").append(field.runId)
+                        append("\nextension：").append(field.extensionId)
+                        append("\nobservedAt：").append(field.observedAt)
+                        field.sourceFieldJson?.let { append("\nSourceField：").append(it) }
+                    },
+                )
+            }
+            state.sourceDocuments.forEach { document ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text("${document.stage} · ${document.transport} · ${document.method} · HTTP ${document.statusCode ?: "不可取得"}")
+                        Text(document.url, style = MaterialTheme.typography.bodySmall)
+                        Text("文件 ${document.id} · run ${document.runId} · ${document.extensionId}")
+                        Text("${document.capturedAt} · ${document.mediaKind ?: "unknown"} · ${document.bodyEncoding} · ${document.representation}")
+                        Text("Response headers：${document.responseHeadersJson}", style = MaterialTheme.typography.bodySmall)
+                        Text("${document.byteCount} bytes · SHA-256 ${document.sha256}")
+                        if (document.bodyText == null) {
+                            TextButton(onClick = { onLoadSourceBody(document.id) }) {
+                                Text("載入 authenticated response 預覽（完整封存保留）")
+                            }
+                        } else {
+                            SelectionContainer {
+                                Text(document.bodyText, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        TextButton(onClick = { timelineExpanded = !timelineExpanded }) {
+            Text(if (timelineExpanded) "收合稽核時間線" else "稽核時間線（${state.auditTimeline.size}）")
+        }
+        if (timelineExpanded) {
+            state.auditTimeline.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
         }
     }
 }

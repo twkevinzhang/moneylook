@@ -41,7 +41,8 @@ class NativeHttpTransportTest {
                 "bodyEncoding":"base64",
                 "responseEncoding":"base64",
                 "followRedirects":true,
-                "timeoutMs":1234
+                "timeoutMs":1234,
+                "capture":{"stage":"account-history","authenticated":true,"mediaKind":"application/json"}
             }""".trimIndent(),
             Gson(),
         )
@@ -52,6 +53,8 @@ class NativeHttpTransportTest {
         assertEquals("base64", request.responseEncoding)
         assertTrue(request.followRedirects)
         assertEquals(1234L, request.timeoutMs)
+        assertEquals("account-history", request.capture?.stage)
+        assertTrue(request.capture?.authenticated == true)
     }
 
     @Test
@@ -87,6 +90,7 @@ class NativeHttpTransportTest {
         assertEquals("payload", recorded.body.readUtf8())
         assertEquals(listOf("sid=one; Path=/", "token=two; Path=/"), result.headers["Set-Cookie"])
         assertEquals("hello", result.body)
+        assertEquals("hello".toByteArray().toList(), result.exactBodyBytes.toList())
     }
 
     @Test

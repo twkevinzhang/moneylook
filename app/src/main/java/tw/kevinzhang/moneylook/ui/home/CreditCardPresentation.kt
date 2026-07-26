@@ -23,6 +23,10 @@ data class CreditCardDisplay(
     val creditLimit: Double?,
     val availableCredit: Double?,
     val canRevealPan: Boolean = false,
+    val sourceRecordJson: String? = null,
+    val sourceFieldsJson: String? = null,
+    val sourceFactsJson: String? = null,
+    val parserVersion: String? = null,
 )
 
 internal fun CreditCardDisplay.title(): String =
@@ -70,4 +74,8 @@ internal fun CreditCardInstrumentMetadata.toDisplay() = CreditCardDisplay(
     creditLimit = creditLimit,
     availableCredit = availableCredit,
     canRevealPan = canRevealPan,
+    sourceRecordJson = sourceRecordJson,
+    sourceFieldsJson = sourceFieldsJson,
+    sourceFactsJson = sourceFactsJson,
+    parserVersion = parserVersion,
 )

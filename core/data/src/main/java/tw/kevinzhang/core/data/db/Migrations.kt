@@ -679,3 +679,124 @@ val MIGRATION_20_21 = object : Migration(20, 21) {
         db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_diagnostics_extensionId_createdAt ON sync_diagnostics (extensionId, createdAt)")
     }
 }
+
+/** Adds complete authenticated response archives and field/rule-level reconciliation lineage. */
+val MIGRATION_21_22 = object : Migration(21, 22) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        fun addColumnIfMissing(table: String, definition: String) {
+            val column = definition.substringBefore(' ')
+            val exists = db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                generateSequence { if (cursor.moveToNext()) cursor.getString(nameIndex) else null }
+                    .any { it == column }
+            }
+            if (!exists) {
+                db.execSQL("ALTER TABLE `$table` ADD COLUMN `$column` ${definition.substringAfter(' ')}")
+            }
+        }
+        listOf(
+            "authorizationDateTime TEXT",
+            "valueDateTime TEXT",
+            "referenceNumber TEXT",
+            "authorizationCode TEXT",
+            "channel TEXT",
+            "direction TEXT",
+            "transactionCode TEXT",
+            "originalAmount REAL",
+            "originalCurrency TEXT",
+            "settlementAmount REAL",
+            "settlementCurrency TEXT",
+            "exchangeRate REAL",
+            "feeAmount REAL",
+            "feeCurrency TEXT",
+            "taxAmount REAL",
+            "taxCurrency TEXT",
+            "merchantLocation TEXT",
+            "counterpartyAccount TEXT",
+            "counterpartyBank TEXT",
+            "installmentNumber INTEGER",
+            "installmentTotal INTEGER",
+            "isRefund INTEGER",
+            "isReversal INTEGER",
+            "originalTransactionSourceId TEXT",
+            "sourceRecordJson TEXT",
+            "sourceFieldsJson TEXT",
+            "sourceFactsJson TEXT",
+            "parserVersion TEXT",
+        ).forEach { definition ->
+            addColumnIfMissing("transfers", definition)
+        }
+        listOf(
+            "sourceRecordJson TEXT",
+            "sourceFieldsJson TEXT",
+            "sourceFactsJson TEXT",
+            "parserVersion TEXT",
+        ).forEach { definition ->
+            addColumnIfMissing("accounts", definition)
+            addColumnIfMissing("credit_card_instruments", definition)
+        }
+
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `source_documents` (
+                `id` TEXT NOT NULL, `runId` TEXT NOT NULL, `extensionId` TEXT NOT NULL,
+                `capturedAt` INTEGER NOT NULL, `stage` TEXT NOT NULL, `transport` TEXT NOT NULL,
+                `method` TEXT NOT NULL, `url` TEXT NOT NULL, `statusCode` INTEGER,
+                `responseHeadersJson` TEXT NOT NULL, `mediaKind` TEXT,
+                `bodyEncoding` TEXT NOT NULL, `representation` TEXT NOT NULL,
+                `bodyByteCount` INTEGER NOT NULL,
+                `bodySha256` TEXT NOT NULL, `bodyGzip` BLOB NOT NULL,
+                PRIMARY KEY(`id`)
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_source_documents_runId_capturedAt` ON `source_documents` (`runId`, `capturedAt`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_source_documents_extensionId_capturedAt` ON `source_documents` (`extensionId`, `capturedAt`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_source_documents_bodySha256` ON `source_documents` (`bodySha256`)")
+
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `transfer_field_observations` (
+                `id` TEXT NOT NULL, `runId` TEXT NOT NULL, `transferId` TEXT,
+                `extensionId` TEXT NOT NULL, `observedAt` INTEGER NOT NULL,
+                `fieldName` TEXT NOT NULL, `valueJson` TEXT NOT NULL,
+                `sourceDocumentId` TEXT, `sourcePath` TEXT, `sourceRecordJson` TEXT,
+                `sourceFieldJson` TEXT,
+                `parserVersion` TEXT, `assetType` TEXT NOT NULL, `assetId` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfer_field_observations_transferId_observedAt` ON `transfer_field_observations` (`transferId`, `observedAt`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfer_field_observations_runId` ON `transfer_field_observations` (`runId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfer_field_observations_sourceDocumentId` ON `transfer_field_observations` (`sourceDocumentId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfer_field_observations_fieldName` ON `transfer_field_observations` (`fieldName`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfer_field_observations_assetType_assetId_observedAt` ON `transfer_field_observations` (`assetType`, `assetId`, `observedAt`)")
+
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `classification_rule_evaluations` (
+                `id` TEXT NOT NULL, `runId` TEXT, `transferId` TEXT NOT NULL,
+                `extensionId` TEXT NOT NULL, `evaluatedAt` INTEGER NOT NULL,
+                `trigger` TEXT NOT NULL, `ruleId` TEXT NOT NULL, `ruleSetId` TEXT,
+                `ruleContentSha256` TEXT, `scopeMatched` INTEGER NOT NULL,
+                `conditionsMatched` INTEGER NOT NULL, `categoryCompatible` INTEGER NOT NULL,
+                `matched` INTEGER NOT NULL, `selected` INTEGER NOT NULL, `score` INTEGER,
+                `reasonCode` TEXT NOT NULL, `classifierVersion` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_rule_evaluations_transferId_evaluatedAt` ON `classification_rule_evaluations` (`transferId`, `evaluatedAt`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_rule_evaluations_runId` ON `classification_rule_evaluations` (`runId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_rule_evaluations_ruleId` ON `classification_rule_evaluations` (`ruleId`)")
+
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `classification_condition_evaluations` (
+                `id` TEXT NOT NULL, `ruleEvaluationId` TEXT NOT NULL,
+                `transferId` TEXT NOT NULL, `evaluatedAt` INTEGER NOT NULL,
+                `position` INTEGER NOT NULL, `conditionGroup` TEXT NOT NULL,
+                `field` TEXT NOT NULL, `matchMode` TEXT NOT NULL, `pattern` TEXT NOT NULL,
+                `candidateValuesJson` TEXT NOT NULL, `matched` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )""".trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_condition_evaluations_ruleEvaluationId_position` ON `classification_condition_evaluations` (`ruleEvaluationId`, `position`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_condition_evaluations_transferId_evaluatedAt` ON `classification_condition_evaluations` (`transferId`, `evaluatedAt`)")
+        DefaultClassificationSeeder.upgradeGenericMerchantRulesToV4(db)
+    }
+}

@@ -76,7 +76,13 @@ class ScheduleWorker @AssistedInject constructor(
                     }
                 }
                 is SyncResult.Error -> {
-                    syncResultPersister.recordFailure(extension, IngestionTrigger.SCHEDULED_SYNC)
+                    syncResultPersister.recordFailure(
+                        extension,
+                        IngestionTrigger.SCHEDULED_SYNC,
+                        result.sourceDocuments,
+                        result.runId,
+                        result.runStartedAt,
+                    )
                     handleFailure(profile)
                 }
             }

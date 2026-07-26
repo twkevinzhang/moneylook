@@ -1,5 +1,6 @@
 package tw.kevinzhang.moneylook.sync
 
+import com.google.gson.Gson
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -13,6 +14,7 @@ import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.db.AutoCategoryRuleSetDao
 import tw.kevinzhang.core.data.db.AutomaticClassificationDecision
 import tw.kevinzhang.core.data.db.AutomaticClassificationWriteResult
+import tw.kevinzhang.core.data.db.ClassificationTraceStore
 import tw.kevinzhang.core.data.model.ClassificationOutcome
 import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.AssignmentSource
@@ -27,6 +29,8 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.CategoryKind
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
+import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
+import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
 import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleTextV2
 import java.time.Duration
 import java.time.LocalDate
@@ -42,6 +46,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
+import java.util.UUID
 
 fun interface TransferAutoCategorizer {
     suspend fun categorizeTransferIds(transferIds: List<String>)
@@ -66,7 +71,9 @@ class AutoCategorizer @Inject constructor(
     private val annotationDao: TransferAnnotationDao,
     private val ruleDao: AutoCategoryRuleDao,
     private val categoryDao: CategoryDao,
+    private val classificationTraceStore: ClassificationTraceStore,
     private val ruleSetDao: AutoCategoryRuleSetDao? = null,
+    private val gson: Gson = Gson(),
 ) : TransferAutoCategorizer {
     private val categorizationMutex = Mutex()
 
@@ -184,7 +191,8 @@ class AutoCategorizer @Inject constructor(
                 preservedManualOverrideCount = 0,
             )
         }
-        val rules = ruleDao.getEnabledInPriorityOrder().filter(::isUsableRule)
+        val enabledRules = ruleDao.getEnabledInPriorityOrder()
+        val rules = enabledRules.filter(::isUsableRule)
         var matchedTransferCount = 0
         var preservedManualOverrideCount = 0
 
@@ -198,7 +206,15 @@ class AutoCategorizer @Inject constructor(
                 isInternalTransfer || match != null -> ClassificationOutcome.AUTO_APPLIED
                 else -> ClassificationOutcome.NO_MATCH
             }
-            val writeResult = annotationDao.applyAutomaticDecision(
+            val trace = completeEvaluationTrace(
+                transfer = transfer,
+                candidate = candidate,
+                rules = enabledRules,
+                selectedRuleId = match?.evaluation?.ruleWithTags?.rule?.id,
+                ingestionRunId = ingestionRunId,
+                trigger = trigger,
+            )
+            val writeResult = classificationTraceStore.apply(
                 AutomaticClassificationDecision(
                     transferId = transfer.id,
                     extensionId = transfer.extensionId,
@@ -223,6 +239,8 @@ class AutoCategorizer @Inject constructor(
                     matchScore = match?.evaluation?.score,
                     classifierVersion = CLASSIFIER_VERSION,
                 ),
+                ruleEvaluations = trace.rules,
+                conditionEvaluations = trace.conditions,
             )
             when (writeResult) {
                 AutomaticClassificationWriteResult.APPLIED -> matchedTransferCount += 1
@@ -237,6 +255,92 @@ class AutoCategorizer @Inject constructor(
             preservedManualOverrideCount = preservedManualOverrideCount,
         )
     }
+
+    private fun completeEvaluationTrace(
+        transfer: Transfer,
+        candidate: TransferClassificationCandidate,
+        rules: List<AutoCategoryRuleWithTags>,
+        selectedRuleId: String?,
+        ingestionRunId: String?,
+        trigger: ClassificationTrigger,
+    ): EvaluationTrace {
+        val evaluatedAt = System.currentTimeMillis()
+        val conditionRows = mutableListOf<ClassificationConditionEvaluation>()
+        val ruleRows = rules.map { ruleWithTags ->
+            val evaluationId = UUID.randomUUID().toString()
+            val scopeMatched = ruleWithTags.scopeMatches(candidate)
+            val categoryCompatible = ruleWithTags.categoryIsCompatibleWith(transfer)
+            val conditionMatches = ruleWithTags.conditions.map { condition ->
+                val actualValues = candidate.facts(condition.field)
+                val match = condition.matches(candidate)
+                conditionRows += ClassificationConditionEvaluation(
+                    id = UUID.randomUUID().toString(),
+                    ruleEvaluationId = evaluationId,
+                    transferId = transfer.id,
+                    evaluatedAt = evaluatedAt,
+                    position = condition.position,
+                    conditionGroup = condition.conditionGroup.name,
+                    field = condition.field.name,
+                    matchMode = condition.matchMode.name,
+                    pattern = condition.pattern,
+                    candidateValuesJson = gson.toJson(actualValues),
+                    matched = match.matched,
+                )
+                match
+            }
+            val legacyMatched = if (ruleWithTags.conditions.isEmpty()) {
+                ruleWithTags.legacyMatchScore(transfer) != null
+            } else {
+                true
+            }
+            val conditionsMatched = if (ruleWithTags.conditions.isEmpty()) {
+                legacyMatched
+            } else {
+                val byGroup = ruleWithTags.conditions.zip(conditionMatches)
+                    .groupBy({ it.first.conditionGroup }, { it.second.matched })
+                byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ALL].orEmpty().all { it } &&
+                    byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ANY].orEmpty()
+                        .let { it.isEmpty() || it.any { matched -> matched } } &&
+                    byGroup[AutoCategoryRuleConditionGroup.EXCLUDE_ANY].orEmpty().none { it }
+            }
+            val evaluation = ruleWithTags.evaluate(candidate)
+            val usable = isUsableRule(ruleWithTags)
+            val matched = usable && scopeMatched && conditionsMatched && categoryCompatible && evaluation != null
+            ClassificationRuleEvaluation(
+                id = evaluationId,
+                runId = ingestionRunId,
+                transferId = transfer.id,
+                extensionId = transfer.extensionId,
+                evaluatedAt = evaluatedAt,
+                trigger = trigger,
+                ruleId = ruleWithTags.rule.id,
+                ruleSetId = ruleWithTags.rule.ruleSetId,
+                ruleContentSha256 = ruleWithTags.contentSha256(),
+                scopeMatched = scopeMatched,
+                conditionsMatched = conditionsMatched,
+                categoryCompatible = categoryCompatible,
+                matched = matched,
+                selected = ruleWithTags.rule.id == selectedRuleId,
+                score = evaluation?.score,
+                reasonCode = when {
+                    !usable -> "UNUSABLE_RULE"
+                    !scopeMatched -> "SCOPE_MISMATCH"
+                    !conditionsMatched -> "CONDITION_MISMATCH"
+                    !categoryCompatible -> "CATEGORY_INCOMPATIBLE"
+                    ruleWithTags.rule.id == selectedRuleId -> "SELECTED"
+                    matched -> "MATCHED_NOT_SELECTED"
+                    else -> "NO_MATCH"
+                },
+                classifierVersion = CLASSIFIER_VERSION,
+            )
+        }
+        return EvaluationTrace(ruleRows, conditionRows)
+    }
+
+    private data class EvaluationTrace(
+        val rules: List<ClassificationRuleEvaluation>,
+        val conditions: List<ClassificationConditionEvaluation>,
+    )
 
     private data class ClassificationContext(
         val candidates: List<TransferClassificationCandidate>,
@@ -487,6 +591,9 @@ private fun TransferClassificationCandidate.facts(field: AutoCategoryRuleConditi
         transfer.merchantName.orEmpty(),
         transfer.counterpartyName.orEmpty(),
         transfer.purpose.orEmpty(),
+        transfer.channel.orEmpty(),
+        transfer.referenceNumber.orEmpty(),
+        transfer.merchantLocation.orEmpty(),
     )
     AutoCategoryRuleConditionField.DESCRIPTION -> listOf(transfer.description)
     AutoCategoryRuleConditionField.MEMO -> listOf(transfer.memo)
@@ -496,6 +603,13 @@ private fun TransferClassificationCandidate.facts(field: AutoCategoryRuleConditi
     AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE -> listOf(transfer.merchantCategoryCode.orEmpty())
     AutoCategoryRuleConditionField.COUNTERPARTY_NAME -> listOf(transfer.counterpartyName.orEmpty())
     AutoCategoryRuleConditionField.PURPOSE -> listOf(transfer.purpose.orEmpty())
+    AutoCategoryRuleConditionField.CHANNEL -> listOf(transfer.channel.orEmpty())
+    AutoCategoryRuleConditionField.TRANSACTION_CODE -> listOf(
+        transfer.transactionCode.orEmpty(),
+        transfer.type.orEmpty(),
+    )
+    AutoCategoryRuleConditionField.REFERENCE_NUMBER -> listOf(transfer.referenceNumber.orEmpty())
+    AutoCategoryRuleConditionField.MERCHANT_LOCATION -> listOf(transfer.merchantLocation.orEmpty())
 }
 
 private fun String.tokensContain(expected: String): Boolean {
@@ -511,6 +625,10 @@ private fun evidenceScore(
     AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE,
     AutoCategoryRuleConditionField.COUNTERPARTY_NAME,
     AutoCategoryRuleConditionField.PURPOSE,
+    AutoCategoryRuleConditionField.CHANNEL,
+    AutoCategoryRuleConditionField.TRANSACTION_CODE,
+    AutoCategoryRuleConditionField.REFERENCE_NUMBER,
+    AutoCategoryRuleConditionField.MERCHANT_LOCATION,
     -> when (mode) {
         AutoCategoryRuleConditionMatchMode.EXACT -> 100
         AutoCategoryRuleConditionMatchMode.TOKEN -> 80
