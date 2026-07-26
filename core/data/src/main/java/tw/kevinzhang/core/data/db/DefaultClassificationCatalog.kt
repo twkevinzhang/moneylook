@@ -100,9 +100,9 @@ object DefaultClassificationCatalog {
     val publicGenericRuleSet: AutoCategoryRuleSet by lazy {
         AutoCategoryRuleSet(
             id = PUBLIC_GENERIC_RULE_SET_ID,
-            name = "Moneylook public generic rules v3",
+            name = "Moneylook public generic rules v4",
             origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
-            version = "2026.07.24",
+            version = "2026.07.26",
             canonicalizerVersion = "v2-space-fold",
             contentSha256 = publicRuleCollectionContentSha256(publicGenericRules),
         )
@@ -326,7 +326,14 @@ object DefaultClassificationCatalog {
                 ruleId = id,
                 position = 0,
                 conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
-                field = field,
+                field = if (
+                    priority >= 29 &&
+                    field == AutoCategoryRuleConditionField.DESCRIPTION
+                ) {
+                    AutoCategoryRuleConditionField.SEARCHABLE_TEXT
+                } else {
+                    field
+                },
                 matchMode = matchMode,
                 pattern = pattern,
             ),

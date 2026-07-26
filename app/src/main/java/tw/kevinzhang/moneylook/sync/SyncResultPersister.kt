@@ -1,5 +1,6 @@
 package tw.kevinzhang.moneylook.sync
 
+import com.google.gson.Gson
 import tw.kevinzhang.core.data.db.AccountTransferRefresh
 import tw.kevinzhang.core.data.db.LegacyAccountIdentity
 import tw.kevinzhang.core.data.db.TransferDateRange
@@ -12,6 +13,9 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.core.data.model.Transfer
+import tw.kevinzhang.core.data.model.SourceDocument
+import tw.kevinzhang.core.data.model.TransferFieldObservation
+import tw.kevinzhang.extension_runtime.data.CapturedSourceDocument
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.moneylook.security.CardPanProtector
@@ -25,6 +29,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPOutputStream
 
 @Singleton
 class SyncResultPersister @Inject constructor(
@@ -32,17 +38,23 @@ class SyncResultPersister @Inject constructor(
     private val autoCategorizer: TransferAutoCategorizer = TransferAutoCategorizer { },
     private val cardPanProtector: CardPanProtector = MissingCardPanProtector,
     private val sourceFingerprintProtector: SourceFingerprintProtector = MissingSourceFingerprintProtector,
+    private val gson: Gson = Gson(),
 ) {
     suspend fun persist(
         extension: InstalledExtension,
         result: SyncResult.Success,
         trigger: IngestionTrigger = IngestionTrigger.USER_SYNC,
     ) {
-        val startedAt = System.currentTimeMillis()
-        val runId = UUID.randomUUID().toString()
+        val startedAt = result.runStartedAt ?: System.currentTimeMillis()
+        val runId = result.runId ?: UUID.randomUUID().toString()
+        val capturedDocuments = result.sourceDocuments.map {
+            it.toEntity(runId = runId, extensionId = extension.id)
+        }
         var ingestionContext: IngestionContext? = null
         var snapshotCommitted = false
         try {
+        validateResultEvidence(result)
+        validateRichTransferValues(result)
         val legacyIdentityByProposedId = result.accounts.associate { data ->
             stableAccountId(extension.id, data) to legacyIdentityForSourceKey(data)
         }.filterValues { it != null }.mapValues { (_, identity) -> requireNotNull(identity) }
@@ -68,9 +80,16 @@ class SyncResultPersister @Inject constructor(
                 availableCredit = data.availableCredit,
                 creditLimit = data.creditLimit,
                 transferSyncComplete = data.transferSync?.complete,
+                sourceRecordJson = data.sourceRecord?.let(gson::toJson),
+                sourceFieldsJson = data.sourceFields?.let(gson::toJson),
+                sourceFactsJson = data.sourceFacts?.let(gson::toJson),
+                parserVersion = data.parserVersion ?: "manifest:${extension.version}",
             )
         }
+        val sourceAccountByAccountId = result.accounts.associateBy(::accountId)
         val cardInstrumentIdsByAccountAndRef = mutableMapOf<Pair<String, String>, String>()
+        val sourceCardByInstrumentId =
+            mutableMapOf<String, tw.kevinzhang.extension_runtime.data.CardData>()
         val replaceCardAccountIds = result.accounts
             .filter { it.cardsComplete == true }
             .map(::accountId)
@@ -88,6 +107,7 @@ class SyncResultPersister @Inject constructor(
                     resultLocalRef = card.ref,
                 )
                 cardInstrumentIdsByAccountAndRef[accountId to card.ref] = instrumentId
+                sourceCardByInstrumentId[instrumentId] = card
                 CreditCardInstrument(
                     id = instrumentId,
                     accountId = accountId,
@@ -108,9 +128,14 @@ class SyncResultPersister @Inject constructor(
                     expiryYear = card.expiryYear,
                     creditLimit = card.creditLimit,
                     availableCredit = card.availableCredit,
+                    sourceRecordJson = card.sourceRecord?.let(gson::toJson),
+                    sourceFieldsJson = card.sourceFields?.let(gson::toJson),
+                    sourceFactsJson = card.sourceFacts?.let(gson::toJson),
+                    parserVersion = card.parserVersion ?: "manifest:${extension.version}",
                 )
             }
         }
+        val sourceTransferByTransferId = mutableMapOf<String, tw.kevinzhang.extension_runtime.data.TransferData>()
         val transfers = result.accounts.flatMap { data ->
             val accountId = accountId(data)
             val legacyOccurrences = mutableMapOf<String, Int>()
@@ -129,8 +154,7 @@ class SyncResultPersister @Inject constructor(
                 } else {
                     null
                 }
-                Transfer(
-                    id = stableTransferId(
+                val transferId = stableTransferId(
                         accountId,
                         transfer.id,
                         transfer.txnDateTime,
@@ -139,7 +163,9 @@ class SyncResultPersister @Inject constructor(
                         transfer.balance,
                         transfer.memo,
                         occurrence,
-                    ),
+                    )
+                val persisted = Transfer(
+                    id = transferId,
                     accountId = accountId,
                     extensionId = extension.id,
                     txnDateTime = transfer.txnDateTime,
@@ -154,10 +180,40 @@ class SyncResultPersister @Inject constructor(
                     merchantCategoryCode = transfer.merchantCategoryCode,
                     counterpartyName = transfer.counterpartyName,
                     purpose = transfer.purpose,
+                    authorizationDateTime = transfer.authorizationDateTime,
+                    valueDateTime = transfer.valueDateTime,
+                    referenceNumber = transfer.referenceNumber,
+                    authorizationCode = transfer.authorizationCode,
+                    channel = transfer.channel,
+                    direction = transfer.direction,
+                    transactionCode = transfer.transactionCode,
+                    originalAmount = transfer.originalAmount,
+                    originalCurrency = transfer.originalCurrency,
+                    settlementAmount = transfer.settlementAmount,
+                    settlementCurrency = transfer.settlementCurrency,
+                    exchangeRate = transfer.exchangeRate,
+                    feeAmount = transfer.feeAmount,
+                    feeCurrency = transfer.feeCurrency,
+                    taxAmount = transfer.taxAmount,
+                    taxCurrency = transfer.taxCurrency,
+                    merchantLocation = transfer.merchantLocation,
+                    counterpartyAccount = transfer.counterpartyAccount,
+                    counterpartyBank = transfer.counterpartyBank,
+                    installmentNumber = transfer.installmentNumber,
+                    installmentTotal = transfer.installmentTotal,
+                    isRefund = transfer.isRefund,
+                    isReversal = transfer.isReversal,
+                    originalTransactionSourceId = transfer.originalTransactionSourceId,
+                    sourceRecordJson = transfer.sourceRecord?.let(gson::toJson),
+                    sourceFieldsJson = transfer.sourceFields?.let(gson::toJson),
+                    sourceFactsJson = transfer.sourceFacts?.let(gson::toJson),
+                    parserVersion = transfer.parserVersion ?: "manifest:${extension.version}",
                     cardInstrumentId = transfer.cardRef?.let { ref ->
                         cardInstrumentIdsByAccountAndRef[accountId to ref]
                     },
                 )
+                sourceTransferByTransferId[transferId] = transfer
+                persisted
             }
         }
         val refreshes = result.accounts.map { data ->
@@ -182,22 +238,11 @@ class SyncResultPersister @Inject constructor(
                 extension.id,
                 transfer.id,
             )
+            // The complete persisted payload (including every rich/provenance/parser field) is
+            // canonicalized by Gson's stable data-class property order.
             val payloadFingerprint = sourceFingerprintProtector.fingerprint(
                 "transfer-payload",
-                transfer.id,
-                transfer.txnDateTime,
-                transfer.postingDateTime.orEmpty(),
-                transfer.description,
-                transfer.amount.toString(),
-                transfer.balance?.toString().orEmpty(),
-                transfer.memo,
-                transfer.type.orEmpty(),
-                transfer.status.orEmpty(),
-                transfer.cardInstrumentId.orEmpty(),
-                transfer.merchantName.orEmpty(),
-                transfer.merchantCategoryCode.orEmpty(),
-                transfer.counterpartyName.orEmpty(),
-                transfer.purpose.orEmpty(),
+                gson.toJson(transfer),
             )
             require(sourceFingerprint.keyVersion == payloadFingerprint.keyVersion) {
                 "source fingerprint key version changed during one import"
@@ -219,6 +264,39 @@ class SyncResultPersister @Inject constructor(
             sourceFingerprint = runFingerprint.value,
             fingerprintKeyVersion = runFingerprint.keyVersion,
             transferFingerprints = transferFingerprints,
+            sourceDocuments = capturedDocuments,
+            fieldObservations = buildList {
+                addAll(transfers.flatMap { transfer ->
+                    sourceTransferByTransferId.getValue(transfer.id).toFieldObservations(
+                    transfer = transfer,
+                    runId = runId,
+                    observedAt = completedAt,
+                    extensionId = extension.id,
+                    gson = gson,
+                    parserVersionFallback = "manifest:${extension.version}",
+                    )
+                })
+                addAll(accounts.flatMap { account ->
+                    sourceAccountByAccountId.getValue(account.id).toFieldObservations(
+                        account = account,
+                        runId = runId,
+                        observedAt = completedAt,
+                        extensionId = extension.id,
+                        gson = gson,
+                        parserVersionFallback = "manifest:${extension.version}",
+                    )
+                })
+                addAll(cardInstruments.flatMap { card ->
+                    sourceCardByInstrumentId.getValue(card.id).toFieldObservations(
+                        card = card,
+                        runId = runId,
+                        observedAt = completedAt,
+                        extensionId = extension.id,
+                        gson = gson,
+                        parserVersionFallback = "manifest:${extension.version}",
+                    )
+                })
+            },
         )
         ingestionContext = preparedContext
         transferSyncStore.replaceSnapshot(
@@ -260,6 +338,7 @@ class SyncResultPersister @Inject constructor(
                         trigger = trigger,
                         startedAt = startedAt,
                         runId = runId,
+                        sourceDocuments = capturedDocuments,
                     ),
                     accountCount = result.accounts.size,
                     transferCount = result.accounts.sumOf { it.transfers.size },
@@ -275,6 +354,7 @@ class SyncResultPersister @Inject constructor(
         trigger: IngestionTrigger,
         startedAt: Long,
         runId: String,
+        sourceDocuments: List<SourceDocument>,
     ) = IngestionContext(
         runId = runId,
         startedAt = startedAt,
@@ -289,14 +369,20 @@ class SyncResultPersister @Inject constructor(
         sourceFingerprint = "unavailable",
         fingerprintKeyVersion = 0,
         transferFingerprints = emptyMap(),
+        sourceDocuments = sourceDocuments,
     )
 
     /** Records an extension/runtime failure without retaining its message or any private payload. */
     suspend fun recordFailure(
         extension: InstalledExtension,
         trigger: IngestionTrigger = IngestionTrigger.USER_SYNC,
+        sourceDocuments: List<CapturedSourceDocument> = emptyList(),
+        sourceRunId: String? = null,
+        sourceRunStartedAt: Long? = null,
     ) {
         val now = System.currentTimeMillis()
+        val runId = sourceRunId ?: UUID.randomUUID().toString()
+        val startedAt = sourceRunStartedAt ?: now
         val fingerprint = sourceFingerprintProtector.fingerprint(
             "ingestion-run",
             extension.id,
@@ -307,8 +393,8 @@ class SyncResultPersister @Inject constructor(
         transferSyncStore.recordFailedIngestion(
             extensionId = extension.id,
             ingestionContext = IngestionContext(
-                runId = UUID.randomUUID().toString(),
-                startedAt = now,
+                runId = runId,
+                startedAt = startedAt,
                 completedAt = now,
                 extensionVersion = extension.version,
                 artifactRevision = extension.artifactRevision,
@@ -320,6 +406,7 @@ class SyncResultPersister @Inject constructor(
                 sourceFingerprint = fingerprint.value,
                 fingerprintKeyVersion = fingerprint.keyVersion,
                 transferFingerprints = emptyMap(),
+                sourceDocuments = sourceDocuments.map { it.toEntity(runId = runId, extensionId = extension.id) },
             ),
             accountCount = 0,
             transferCount = 0,
@@ -460,3 +547,302 @@ private fun transferFallbackFingerprint(
     memo: String,
 ): String = listOf(txnDateTime, description, amount.toString(), balance?.toString().orEmpty(), memo)
     .joinToString(separator = "\u001F") { value -> "${value.length}:$value" }
+
+private fun CapturedSourceDocument.toEntity(runId: String, extensionId: String): SourceDocument {
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest(bodyBytes)
+        .joinToString(separator = "") { "%02x".format(it.toInt() and 0xff) }
+    val compressed = ByteArrayOutputStream().use { output ->
+        GZIPOutputStream(output).use { it.write(bodyBytes) }
+        output.toByteArray()
+    }
+    return SourceDocument(
+        id = id,
+        runId = runId,
+        extensionId = extensionId,
+        capturedAt = capturedAt,
+        stage = stage,
+        transport = transport,
+        method = method,
+        url = url,
+        statusCode = statusCode,
+        responseHeadersJson = responseHeadersJson,
+        mediaKind = mediaKind,
+        bodyEncoding = bodyEncoding,
+        representation = representation,
+        bodyByteCount = bodyBytes.size.toLong(),
+        bodySha256 = digest,
+        bodyGzip = compressed,
+    )
+}
+
+private fun tw.kevinzhang.extension_runtime.data.TransferData.toFieldObservations(
+    transfer: Transfer,
+    runId: String,
+    observedAt: Long,
+    extensionId: String,
+    gson: Gson,
+    parserVersionFallback: String,
+): List<TransferFieldObservation> {
+    val values: Map<String, Any?> = buildMap {
+        putAll(linkedMapOf(
+        "id" to id,
+        "txnDateTime" to txnDateTime,
+        "description" to description,
+        "amount" to amount,
+        "balance" to balance,
+        "memo" to memo,
+        "type" to type,
+        "status" to status,
+        "postingDateTime" to postingDateTime,
+        "cardRef" to cardRef,
+        "merchantName" to merchantName,
+        "merchantCategoryCode" to merchantCategoryCode,
+        "counterpartyName" to counterpartyName,
+        "purpose" to purpose,
+        "authorizationDateTime" to authorizationDateTime,
+        "valueDateTime" to valueDateTime,
+        "referenceNumber" to referenceNumber,
+        "authorizationCode" to authorizationCode,
+        "channel" to channel,
+        "direction" to direction,
+        "transactionCode" to transactionCode,
+        "originalAmount" to originalAmount,
+        "originalCurrency" to originalCurrency,
+        "settlementAmount" to settlementAmount,
+        "settlementCurrency" to settlementCurrency,
+        "exchangeRate" to exchangeRate,
+        "feeAmount" to feeAmount,
+        "feeCurrency" to feeCurrency,
+        "taxAmount" to taxAmount,
+        "taxCurrency" to taxCurrency,
+        "merchantLocation" to merchantLocation,
+        "counterpartyAccount" to counterpartyAccount,
+        "counterpartyBank" to counterpartyBank,
+        "installmentNumber" to installmentNumber,
+        "installmentTotal" to installmentTotal,
+        "isRefund" to isRefund,
+        "isReversal" to isReversal,
+        "originalTransactionSourceId" to originalTransactionSourceId,
+        ))
+        sourceFacts.orEmpty().forEach { (key, descriptor) ->
+            put("sourceFact.$key", sourceValue(descriptor))
+        }
+    }
+    val sourceRecordJson = sourceRecord?.let(gson::toJson)
+    val recordDocumentId = sourceRecord?.get("sourceDocumentId") as? String
+    return values.map { (fieldName, value) ->
+        val descriptor = if (fieldName.startsWith("sourceFact.")) {
+            sourceFacts?.get(fieldName.removePrefix("sourceFact."))
+        } else {
+            sourceFields?.get(fieldName)
+        }
+        val locator = descriptor as? Map<*, *>
+        TransferFieldObservation(
+            id = UUID.randomUUID().toString(),
+            runId = runId,
+            transferId = transfer.id,
+            extensionId = extensionId,
+            observedAt = observedAt,
+            fieldName = fieldName,
+            valueJson = gson.toJson(value),
+            sourceDocumentId = ((locator?.get("sourceDocumentId") ?: locator?.get("documentId")) as? String)
+                ?: recordDocumentId,
+            sourcePath = (
+                locator?.get("locator")
+                    ?: locator?.get("sourcePath")
+                    ?: locator?.get("path")
+                ) as? String,
+            sourceRecordJson = sourceRecordJson,
+            sourceFieldJson = descriptor?.let(gson::toJson),
+            parserVersion = parserVersion ?: parserVersionFallback,
+        )
+    }
+}
+
+private fun AccountData.toFieldObservations(
+    account: Account,
+    runId: String,
+    observedAt: Long,
+    extensionId: String,
+    gson: Gson,
+    parserVersionFallback: String,
+): List<TransferFieldObservation> = assetFieldObservations(
+    assetType = "ACCOUNT",
+    assetId = account.id,
+    runId = runId,
+    observedAt = observedAt,
+    extensionId = extensionId,
+    values = linkedMapOf(
+        "name" to name,
+        "balance" to balance,
+        "currency" to currency,
+        "no" to no,
+        "kind" to kind.name,
+        "branchName" to branchName,
+        "availableCredit" to availableCredit,
+        "creditLimit" to creditLimit,
+        "sourceAccountKey" to sourceAccountKey,
+        "transferSync" to transferSync,
+    ),
+    sourceRecord = sourceRecord,
+    sourceFields = sourceFields,
+    sourceFacts = sourceFacts,
+    parserVersion = parserVersion,
+    parserVersionFallback = parserVersionFallback,
+    gson = gson,
+)
+
+private fun tw.kevinzhang.extension_runtime.data.CardData.toFieldObservations(
+    card: CreditCardInstrument,
+    runId: String,
+    observedAt: Long,
+    extensionId: String,
+    gson: Gson,
+    parserVersionFallback: String,
+): List<TransferFieldObservation> = assetFieldObservations(
+    assetType = "CARD",
+    assetId = card.id,
+    runId = runId,
+    observedAt = observedAt,
+    extensionId = extensionId,
+    values = linkedMapOf(
+        "maskedPan" to maskedPan,
+        "ref" to ref,
+        "sourceCardKey" to sourceCardKey,
+        "pan" to pan,
+        "lastFour" to lastFour,
+        "displayName" to displayName,
+        "network" to network,
+        "productType" to productType,
+        "holderRole" to holderRole,
+        "holderName" to holderName,
+        "status" to status,
+        "expiryMonth" to expiryMonth,
+        "expiryYear" to expiryYear,
+        "creditLimit" to creditLimit,
+        "availableCredit" to availableCredit,
+    ),
+    sourceRecord = sourceRecord,
+    sourceFields = sourceFields,
+    sourceFacts = sourceFacts,
+    parserVersion = parserVersion,
+    parserVersionFallback = parserVersionFallback,
+    gson = gson,
+)
+
+private fun assetFieldObservations(
+    assetType: String,
+    assetId: String,
+    runId: String,
+    observedAt: Long,
+    extensionId: String,
+    values: Map<String, Any?>,
+    sourceRecord: Map<String, Any?>?,
+    sourceFields: Map<String, Any?>?,
+    sourceFacts: Map<String, Any?>?,
+    parserVersion: String?,
+    parserVersionFallback: String,
+    gson: Gson,
+): List<TransferFieldObservation> {
+    val completeValues = buildMap {
+        putAll(values)
+        sourceFacts.orEmpty().forEach { (key, descriptor) ->
+            put("sourceFact.$key", sourceValue(descriptor))
+        }
+    }
+    val recordJson = sourceRecord?.let(gson::toJson)
+    val recordDocumentId = sourceRecord?.get("sourceDocumentId") as? String
+    return completeValues.map { (fieldName, value) ->
+        val descriptor = if (fieldName.startsWith("sourceFact.")) {
+            sourceFacts?.get(fieldName.removePrefix("sourceFact."))
+        } else {
+            sourceFields?.get(fieldName)
+        }
+        val locator = descriptor as? Map<*, *>
+        TransferFieldObservation(
+            id = UUID.randomUUID().toString(),
+            runId = runId,
+            transferId = null,
+            extensionId = extensionId,
+            observedAt = observedAt,
+            fieldName = fieldName,
+            valueJson = gson.toJson(value),
+            sourceDocumentId = ((locator?.get("sourceDocumentId") ?: locator?.get("documentId")) as? String)
+                ?: recordDocumentId,
+            sourcePath = (
+                locator?.get("locator")
+                    ?: locator?.get("sourcePath")
+                    ?: locator?.get("path")
+                ) as? String,
+            sourceRecordJson = recordJson,
+            sourceFieldJson = descriptor?.let(gson::toJson),
+            parserVersion = parserVersion ?: parserVersionFallback,
+            assetType = assetType,
+            assetId = assetId,
+        )
+    }
+}
+
+private fun sourceValue(descriptor: Any?): Any? =
+    (descriptor as? Map<*, *>)?.takeIf { "value" in it }?.get("value") ?: descriptor
+
+private fun validateResultEvidence(result: SyncResult.Success) {
+    val capturedIds = result.sourceDocuments.map { it.id }
+    require(capturedIds.size == capturedIds.toSet().size) { "captured source document ids must be unique" }
+    val known = capturedIds.toSet()
+    result.accounts.forEach { account ->
+        validateDocumentReferences(account.sourceRecord, known)
+        validateDocumentReferences(account.sourceFields, known)
+        validateDocumentReferences(account.sourceFacts, known)
+        account.cards.forEach { card ->
+            validateDocumentReferences(card.sourceRecord, known)
+            validateDocumentReferences(card.sourceFields, known)
+            validateDocumentReferences(card.sourceFacts, known)
+        }
+        account.transfers.forEach { transfer ->
+            validateDocumentReferences(transfer.sourceRecord, known)
+            validateDocumentReferences(transfer.sourceFields, known)
+            validateDocumentReferences(transfer.sourceFacts, known)
+        }
+    }
+}
+
+private fun validateDocumentReferences(value: Any?, knownDocumentIds: Set<String>) {
+    when (value) {
+        is Map<*, *> -> value.forEach { (key, child) ->
+            if (key == "sourceDocumentId" || key == "documentId") {
+                require(child is String && child in knownDocumentIds) {
+                    "provenance references a source document outside this ingestion run"
+                }
+            } else {
+                validateDocumentReferences(child, knownDocumentIds)
+            }
+        }
+        is Iterable<*> -> value.forEach { validateDocumentReferences(it, knownDocumentIds) }
+        is Array<*> -> value.forEach { validateDocumentReferences(it, knownDocumentIds) }
+    }
+}
+
+private fun validateRichTransferValues(result: SyncResult.Success) {
+    result.accounts.flatMap(AccountData::transfers).forEach { transfer ->
+        require(transfer.amount.isFinite()) { "transfer amount must be finite" }
+        listOf(
+            "originalAmount" to transfer.originalAmount,
+            "settlementAmount" to transfer.settlementAmount,
+            "feeAmount" to transfer.feeAmount,
+            "taxAmount" to transfer.taxAmount,
+        ).forEach { (name, value) ->
+            require(value == null || value.isFinite() && value >= 0.0) {
+                "$name must be finite and non-negative"
+            }
+        }
+        val exchangeRate = transfer.exchangeRate
+        require(exchangeRate == null || exchangeRate.isFinite() && exchangeRate > 0.0) {
+            "exchangeRate must be finite and positive"
+        }
+        require(transfer.direction == null || transfer.direction in setOf("debit", "credit")) {
+            "direction must be debit or credit"
+        }
+    }
+}

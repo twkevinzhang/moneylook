@@ -17,6 +17,7 @@ internal data class BrowserOpenRequest(
     val settleMs: Long,
     val userAgent: String?,
     val returnAtDocumentStartUrl: String?,
+    val capture: tw.kevinzhang.extension_runtime.bridge.ResponseCaptureOptions? = null,
 )
 
 internal data class BrowserOpenResponse(
@@ -25,6 +26,10 @@ internal data class BrowserOpenResponse(
     val documentUrl: String,
     val documentUrls: List<String>,
     val requestUrls: List<String>,
+    /** Complete serialized authenticated DOM when capture was explicitly requested. */
+    val body: String? = null,
+    val bodyEncoding: String? = null,
+    val sourceDocumentId: String? = null,
 )
 
 internal data class BrowserFormPostRequest(
@@ -32,6 +37,7 @@ internal data class BrowserFormPostRequest(
     val body: ByteArray,
     val timeoutMs: Long,
     val settleMs: Long,
+    val capture: tw.kevinzhang.extension_runtime.bridge.ResponseCaptureOptions? = null,
 )
 
 internal data class BrowserXhrRequest(
@@ -43,6 +49,7 @@ internal data class BrowserXhrRequest(
     val responseEncoding: String,
     val timeoutMs: Long,
     val withCredentials: Boolean,
+    val capture: tw.kevinzhang.extension_runtime.bridge.ResponseCaptureOptions? = null,
 )
 
 internal data class BrowserXhrResponse(
@@ -52,6 +59,7 @@ internal data class BrowserXhrResponse(
     val body: String,
     val bodyEncoding: String,
     val url: String,
+    val sourceDocumentId: String? = null,
 )
 
 internal class SafeBrowserException(
@@ -101,6 +109,7 @@ internal object BrowserRequestJsonParser {
             settleMs = root.long("settleMs", 0, 0, MAX_SETTLE_MS),
             userAgent = userAgent,
             returnAtDocumentStartUrl = root.string("returnAtDocumentStartUrl")?.also(::validateAbsoluteHttpUrl),
+            capture = root.capture(),
         )
     }
 
@@ -114,6 +123,7 @@ internal object BrowserRequestJsonParser {
             body = encodeUtf8Body(body),
             timeoutMs = root.long("timeoutMs", DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
             settleMs = root.long("settleMs", DEFAULT_POST_SETTLE_MS, 0, MAX_SETTLE_MS),
+            capture = root.capture(),
         )
     }
 
@@ -141,6 +151,7 @@ internal object BrowserRequestJsonParser {
             responseEncoding = responseEncoding,
             timeoutMs = root.long("timeoutMs", DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
             withCredentials = root.boolean("withCredentials", true),
+            capture = root.capture(),
         )
     }
 
@@ -226,6 +237,26 @@ internal object BrowserRequestJsonParser {
         }
         it.asString
     }
+
+    private fun JsonObject.capture(): tw.kevinzhang.extension_runtime.bridge.ResponseCaptureOptions? =
+        get("capture")?.takeUnless { it.isJsonNull }?.let { element ->
+            if (!element.isJsonObject) throw invalid("capture must be an object")
+            val value = element.asJsonObject
+            val stage = value.string("stage")
+                ?.takeIf { it.isNotBlank() && it.length <= 128 }
+                ?: throw invalid("capture.stage is required")
+            val authenticated = value.get("authenticated")?.takeUnless { it.isJsonNull }?.let {
+                if (!it.isJsonPrimitive || !it.asJsonPrimitive.isBoolean) {
+                    throw invalid("capture.authenticated must be a boolean")
+                }
+                it.asBoolean
+            } ?: false
+            tw.kevinzhang.extension_runtime.bridge.ResponseCaptureOptions(
+                stage = stage,
+                authenticated = authenticated,
+                mediaKind = value.string("mediaKind")?.takeIf { it.length <= 64 },
+            )
+        }
 
     private fun JsonObject.boolean(name: String, default: Boolean): Boolean =
         get(name)?.takeUnless { it.isJsonNull }?.let {

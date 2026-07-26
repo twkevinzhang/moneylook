@@ -29,4 +29,8 @@ data class Account(
     val creditLimit: Double? = null,
     /** Null means the installed extension still uses the legacy transaction snapshot contract. */
     val transferSyncComplete: Boolean? = null,
+    val sourceRecordJson: String? = null,
+    val sourceFieldsJson: String? = null,
+    val sourceFactsJson: String? = null,
+    val parserVersion: String? = null,
 )

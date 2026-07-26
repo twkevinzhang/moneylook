@@ -20,6 +20,10 @@ data class CardData(
     val expiryYear: Int? = null,
     val creditLimit: Double? = null,
     val availableCredit: Double? = null,
+    val sourceRecord: Map<String, Any?>? = null,
+    val sourceFields: Map<String, Any?>? = null,
+    val sourceFacts: Map<String, Any?>? = null,
+    val parserVersion: String? = null,
 ) {
     override fun toString(): String = "CardData([REDACTED])"
 }

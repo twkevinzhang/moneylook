@@ -20,11 +20,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -33,6 +35,8 @@ import tw.kevinzhang.core.data.db.CreditCardInstrumentDao
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.TransferDao
+import tw.kevinzhang.core.data.db.IngestionProvenanceDao
+import tw.kevinzhang.core.data.db.SourceDocumentSummary
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.IngestionTrigger
 import tw.kevinzhang.core.data.model.InstalledExtension
@@ -46,6 +50,10 @@ import tw.kevinzhang.moneylook.sync.appLastRunStatus
 import tw.kevinzhang.moneylook.sync.hasPartialSyncFailure
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
+import java.security.MessageDigest
+import android.util.Base64
 import javax.inject.Inject
 
 enum class SyncState { IDLE, SYNCING, SUCCESS, PARTIAL, ERROR }
@@ -111,6 +119,7 @@ class HomeViewModel @Inject constructor(
     private val accountDao: AccountDao,
     private val creditCardInstrumentDao: CreditCardInstrumentDao,
     private val transferDao: TransferDao,
+    private val ingestionProvenanceDao: IngestionProvenanceDao,
     private val credentialProfileDao: CredentialProfileDao,
     private val syncCoordinator: BankSyncCoordinator,
     private val syncResultPersister: SyncResultPersister,
@@ -133,6 +142,29 @@ class HomeViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     fun creditCardsForAccount(accountId: String) = creditCardInstrumentDao.observeByAccount(accountId)
+    fun sourceDocumentsForAccount(accountId: String): Flow<List<SourceDocumentSummary>> = flow {
+        emit(ingestionProvenanceDao.getSourceDocumentsForAsset("ACCOUNT", accountId))
+    }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun fieldObservationsForLedger(accountId: String) =
+        creditCardInstrumentDao.observeByAccount(accountId).mapLatest { cards ->
+            ingestionProvenanceDao.getFieldObservationsForAsset("ACCOUNT", accountId) +
+                cards.flatMap { card ->
+                    ingestionProvenanceDao.getFieldObservationsForAsset("CARD", card.id)
+                }
+        }
+
+    private val _sourceDocumentBodies = MutableStateFlow<Map<String, String>>(emptyMap())
+    val sourceDocumentBodies: StateFlow<Map<String, String>> = _sourceDocumentBodies
+
+    fun loadSourceDocumentBody(documentId: String) {
+        if (documentId in _sourceDocumentBodies.value) return
+        viewModelScope.launch {
+            val document = ingestionProvenanceDao.getSourceDocument(documentId) ?: return@launch
+            val body = tw.kevinzhang.moneylook.sync.readArchivedSourceBodyPreview(document)
+            _sourceDocumentBodies.update { it + (documentId to body) }
+        }
+    }
 
     val extensions = installedExtensionDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -357,7 +389,13 @@ class HomeViewModel @Inject constructor(
                 )
             }
             is SyncResult.Error -> {
-                syncResultPersister.recordFailure(extension, IngestionTrigger.USER_SYNC)
+                syncResultPersister.recordFailure(
+                    extension,
+                    IngestionTrigger.USER_SYNC,
+                    result.sourceDocuments,
+                    result.runId,
+                    result.runStartedAt,
+                )
                 credentialProfileDao.updateLastRun(extension.id, now, "error")
                 updateStatus(extension.id) {
                     it.copy(syncState = SyncState.ERROR, errorMessage = "同步失敗，請查看同步紀錄")

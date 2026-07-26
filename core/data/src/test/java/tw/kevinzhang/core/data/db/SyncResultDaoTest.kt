@@ -20,6 +20,9 @@ import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
+import tw.kevinzhang.core.data.model.IngestionStatus
+import tw.kevinzhang.core.data.model.IngestionTrigger
+import tw.kevinzhang.core.data.model.TransferFieldObservation
 
 @RunWith(RobolectricTestRunner::class)
 class SyncResultDaoTest {
@@ -388,6 +391,74 @@ class SyncResultDaoTest {
 
         assertEquals("legacy", database.accountDao().observeAll().first().single().id)
         assertEquals("legacy", database.transferDao().observeByAccount("legacy").first().single { it.id == "next" }.accountId)
+    }
+
+    @Test
+    fun `account field observations use the retained account id after source key upgrade`() = runBlocking {
+        val store = database.syncResultDao()
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(account("legacy", accountNo = "0012345678")),
+            transfers = emptyList(),
+            refreshes = emptyList(),
+        )
+        val identity = LegacyAccountIdentity("0012345678", AssetKind.DEPOSIT, "TWD")
+        val observation = TransferFieldObservation(
+            id = "observation",
+            runId = "run-rewrite",
+            transferId = null,
+            extensionId = "extension",
+            observedAt = 2,
+            fieldName = "balance",
+            valueJson = "1.0",
+            sourceDocumentId = null,
+            sourcePath = "$.balance",
+            sourceRecordJson = "{}",
+            sourceFieldJson = """{"locator":"$.balance"}""",
+            parserVersion = "v1",
+            assetType = "ACCOUNT",
+            assetId = "source-proposed",
+        )
+        store.replaceSnapshot(
+            extensionId = "extension",
+            accounts = listOf(
+                account(
+                    "source-proposed",
+                    accountNo = "0012345678",
+                    sourceAccountKey = "a".repeat(64),
+                ),
+            ),
+            transfers = emptyList(),
+            refreshes = emptyList(),
+            legacyIdentityByAccountId = mapOf("source-proposed" to identity),
+            ingestionContext = IngestionContext(
+                runId = "run-rewrite",
+                startedAt = 1,
+                completedAt = 2,
+                extensionVersion = 1,
+                artifactRevision = null,
+                artifactSha256 = null,
+                trigger = IngestionTrigger.USER_SYNC,
+                status = IngestionStatus.SUCCESS,
+                sourceFingerprint = "source",
+                fingerprintKeyVersion = 1,
+                transferFingerprints = emptyMap(),
+                fieldObservations = listOf(observation),
+            ),
+        )
+
+        assertEquals(
+            "legacy",
+            database.ingestionProvenanceDao()
+                .getFieldObservationsForAsset("ACCOUNT", "legacy")
+                .single()
+                .assetId,
+        )
+        assertTrue(
+            database.ingestionProvenanceDao()
+                .getFieldObservationsForAsset("ACCOUNT", "source-proposed")
+                .isEmpty(),
+        )
     }
 
     @Test

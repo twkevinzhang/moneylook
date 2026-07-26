@@ -16,6 +16,39 @@ object DefaultClassificationSeeder {
     }
 
     /**
+     * V22 broadens merchant/brand rules to all structured searchable fields without touching
+     * transfer-structure rules or user-created rules.
+     */
+    fun upgradeGenericMerchantRulesToV4(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            UPDATE `auto_category_rule_conditions`
+            SET `field` = 'SEARCHABLE_TEXT'
+            WHERE `field` = 'DESCRIPTION'
+              AND `ruleId` IN (
+                SELECT `id` FROM `auto_category_rules`
+                WHERE `ruleSetId` = '${DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID}'
+                  AND `priority` >= 29
+              )
+            """.trimIndent(),
+        )
+        db.compileStatement(
+            """
+            UPDATE `auto_category_rule_sets`
+            SET `name` = ?, `version` = ?, `contentSha256` = ?
+            WHERE `id` = ?
+            """.trimIndent(),
+        ).use { update ->
+            val ruleSet = DefaultClassificationCatalog.publicGenericRuleSet
+            update.bindString(1, ruleSet.name)
+            update.bindString(2, ruleSet.version)
+            update.bindString(3, ruleSet.contentSha256)
+            update.bindString(4, ruleSet.id)
+            update.executeUpdateDelete()
+        }
+    }
+
+    /**
      * Restores the bundled catalog only for a database with no categories and no rules at all.
      *
      * A non-empty category or rule table is user-owned state: it may represent a deliberately

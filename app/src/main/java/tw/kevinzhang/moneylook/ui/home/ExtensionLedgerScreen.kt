@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AssistChip
@@ -26,6 +27,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -37,6 +41,8 @@ import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.db.CreditCardInstrumentMetadata
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.db.TransferListItem
+import tw.kevinzhang.core.data.db.SourceDocumentSummary
+import tw.kevinzhang.core.data.model.TransferFieldObservation
 import tw.kevinzhang.moneylook.ui.transactions.ClassificationViewModel
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -58,6 +64,11 @@ fun ExtensionLedgerScreen(
     val cards by viewModel.creditCardsForAccount(accountId).collectAsStateWithLifecycle(initialValue = emptyList())
     val transfers by classificationViewModel.transfersForAccount(accountId)
         .collectAsStateWithLifecycle(initialValue = emptyList())
+    val sourceDocuments by viewModel.sourceDocumentsForAccount(accountId)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val sourceDocumentBodies by viewModel.sourceDocumentBodies.collectAsStateWithLifecycle()
+    val fieldObservations by viewModel.fieldObservationsForLedger(accountId)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
 
     Scaffold(
         topBar = {
@@ -75,6 +86,10 @@ fun ExtensionLedgerScreen(
             account = account,
             cards = cards,
             transfers = transfers,
+            sourceDocuments = sourceDocuments,
+            sourceDocumentBodies = sourceDocumentBodies,
+            fieldObservations = fieldObservations,
+            onLoadSourceDocument = viewModel::loadSourceDocumentBody,
             onNavigateToTransaction = onNavigateToTransaction,
             modifier = Modifier.fillMaxSize().padding(innerPadding),
         )
@@ -86,6 +101,10 @@ private fun ExtensionLedgerAnnotatedContent(
     account: Account?,
     cards: List<CreditCardInstrumentMetadata>,
     transfers: List<TransferListItem>,
+    sourceDocuments: List<SourceDocumentSummary>,
+    sourceDocumentBodies: Map<String, String>,
+    fieldObservations: List<TransferFieldObservation>,
+    onLoadSourceDocument: (String) -> Unit,
     onNavigateToTransaction: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -97,6 +116,16 @@ private fun ExtensionLedgerAnnotatedContent(
     val cardsById = cards.associateBy(CreditCardInstrumentMetadata::id)
     LazyColumn(modifier = modifier) {
         item(key = "account-header") { LedgerAccountHeader(account) }
+        if (sourceDocuments.isNotEmpty()) {
+            item(key = "source-documents") {
+                AccountSourceDocuments(sourceDocuments, sourceDocumentBodies, onLoadSourceDocument)
+            }
+        }
+        if (fieldObservations.isNotEmpty()) {
+            item(key = "field-observations") {
+                AssetFieldObservations(fieldObservations)
+            }
+        }
         if (account.kind == AssetKind.CREDIT_CARD && cards.isNotEmpty()) {
             item(key = "cards") { CreditCardSection(cards.map(CreditCardInstrumentMetadata::toDisplay), account.currency) }
         }
@@ -120,6 +149,77 @@ private fun ExtensionLedgerAnnotatedContent(
                     onClick = { onNavigateToTransaction(item.transfer.id) },
                 )
                 HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssetFieldObservations(observations: List<TransferFieldObservation>) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            if (expanded) "收合帳戶／卡片欄位來源" else "帳戶／卡片欄位來源（${observations.size}）",
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { expanded = !expanded },
+        )
+        if (expanded) observations.forEach { observation ->
+            Text(
+                "${observation.assetType}:${observation.assetId} · ${observation.fieldName} = ${observation.valueJson}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "run ${observation.runId} · ${observation.extensionId} · ${observation.observedAt} · " +
+                    "doc ${observation.sourceDocumentId ?: "無"} · ${observation.sourcePath ?: "無 locator"}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            observation.sourceFieldJson?.let {
+                Text("SourceField $it", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountSourceDocuments(
+    documents: List<SourceDocumentSummary>,
+    bodies: Map<String, String>,
+    onLoad: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            if (expanded) "收合 authenticated source documents" else "來源文件（${documents.size}）",
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { expanded = !expanded },
+        )
+        if (expanded) {
+            documents.forEach { document ->
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text("${document.stage} · ${document.transport} · HTTP ${document.statusCode ?: "不可取得"}")
+                        Text("${document.id} · run ${document.runId} · ${document.extensionId}", style = MaterialTheme.typography.bodySmall)
+                        Text("${document.capturedAt} · ${document.mediaKind ?: "unknown"} · ${document.bodyEncoding} · ${document.representation}")
+                        Text("Response headers：${document.responseHeadersJson}", style = MaterialTheme.typography.bodySmall)
+                        Text("${document.bodyByteCount} bytes · SHA-256 ${document.bodySha256}")
+                        val body = bodies[document.id]
+                        if (body == null) {
+                            Text(
+                                "載入 authenticated response 預覽（完整封存保留）",
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable { onLoad(document.id) },
+                            )
+                        } else {
+                            SelectionContainer { Text(body, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
+                }
             }
         }
     }
@@ -201,15 +301,14 @@ internal fun ExtensionLedgerContent(
 
 @Composable
 private fun LedgerAccountHeader(account: Account) {
+    var sourceExpanded by remember(account.id, account.lastSyncAt) { mutableStateOf(false) }
     Surface(color = MaterialTheme.colorScheme.primaryContainer) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(
                     text = account.accountName,
                     style = MaterialTheme.typography.titleLarge,
@@ -236,6 +335,24 @@ private fun LedgerAccountHeader(account: Account) {
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
+                }
+            }
+            if (
+                account.sourceRecordJson != null ||
+                account.sourceFieldsJson != null ||
+                account.sourceFactsJson != null
+            ) {
+                Text(
+                    if (sourceExpanded) "收合帳戶來源" else "查看帳戶來源與欄位定位",
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { sourceExpanded = !sourceExpanded },
+                )
+                if (sourceExpanded) {
+                    Text("Parser：${account.parserVersion ?: "未提供"}")
+                    account.sourceRecordJson?.let { Text("Source record\n$it", style = MaterialTheme.typography.bodySmall) }
+                    account.sourceFieldsJson?.let { Text("Source fields\n$it", style = MaterialTheme.typography.bodySmall) }
+                    account.sourceFactsJson?.let { Text("Source facts\n$it", style = MaterialTheme.typography.bodySmall) }
+                }
             }
         }
     }
@@ -348,6 +465,7 @@ private fun CreditCardSection(cards: List<CreditCardDisplay>, currency: String) 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("卡片", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         cards.forEach { card ->
+            var sourceExpanded by remember(card.id) { mutableStateOf(false) }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(card.title(), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                 card.numberLabel()?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
@@ -360,6 +478,23 @@ private fun CreditCardSection(cards: List<CreditCardDisplay>, currency: String) 
                 }
                 card.availableCredit?.takeIf { it.isFinite() }?.let {
                     Text("可用額度 ${formatCurrencyAmount(it, currency)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (
+                    card.sourceRecordJson != null ||
+                    card.sourceFieldsJson != null ||
+                    card.sourceFactsJson != null
+                ) {
+                    Text(
+                        if (sourceExpanded) "收合卡片來源" else "查看卡片來源與欄位定位",
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable { sourceExpanded = !sourceExpanded },
+                    )
+                    if (sourceExpanded) {
+                        Text("Parser：${card.parserVersion ?: "未提供"}")
+                        card.sourceRecordJson?.let { Text("Source record\n$it", style = MaterialTheme.typography.bodySmall) }
+                        card.sourceFieldsJson?.let { Text("Source fields\n$it", style = MaterialTheme.typography.bodySmall) }
+                        card.sourceFactsJson?.let { Text("Source facts\n$it", style = MaterialTheme.typography.bodySmall) }
+                    }
                 }
             }
         }

@@ -21,6 +21,10 @@ import tw.kevinzhang.core.data.model.TransferAnnotationEvent
 import tw.kevinzhang.core.data.model.TransferIngestionEvent
 import tw.kevinzhang.core.data.model.TransferTagCrossRef
 import tw.kevinzhang.core.data.model.SyncDiagnostic
+import tw.kevinzhang.core.data.model.SourceDocument
+import tw.kevinzhang.core.data.model.TransferFieldObservation
+import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
+import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
 
 @Database(
     entities = [
@@ -41,8 +45,12 @@ import tw.kevinzhang.core.data.model.SyncDiagnostic
         TransferIngestionEvent::class,
         TransferTagCrossRef::class,
         SyncDiagnostic::class,
+        SourceDocument::class,
+        TransferFieldObservation::class,
+        ClassificationRuleEvaluation::class,
+        ClassificationConditionEvaluation::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)

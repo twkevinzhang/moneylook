@@ -15,6 +15,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.db.AutoCategoryRuleWithTags
 import tw.kevinzhang.core.data.db.MoneylookDatabase
+import tw.kevinzhang.core.data.db.RoomClassificationTraceStore
 import tw.kevinzhang.core.data.db.TransferClassificationCandidate
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssignmentSource
@@ -65,7 +66,96 @@ class AutoCategorizerTest {
             ruleDao = database.autoCategoryRuleDao(),
             categoryDao = database.categoryDao(),
             ruleSetDao = database.autoCategoryRuleSetDao(),
+            classificationTraceStore = RoomClassificationTraceStore(
+                database,
+                database.transferAnnotationDao(),
+                database.ingestionProvenanceDao(),
+            ),
         )
+    }
+
+    @Test
+    fun `records every enabled rule and complete condition actual values`() = runBlocking {
+        val food = Category("food", "餐飲", "#2E7D32")
+        database.categoryDao().upsert(food)
+        database.autoCategoryRuleDao().upsertWithDetails(
+            rule = AutoCategoryRule(
+                id = "merchant-rule",
+                name = "商家",
+                direction = AutoCategoryRuleDirection.EXPENSE,
+                categoryId = food.id,
+            ),
+            conditions = listOf(
+                AutoCategoryRuleCondition(
+                    ruleId = "merchant-rule",
+                    position = 0,
+                    conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    field = AutoCategoryRuleConditionField.MERCHANT_NAME,
+                    matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    pattern = "fictional",
+                ),
+            ),
+            tagIds = emptySet(),
+        )
+        database.autoCategoryRuleDao().upsertWithTags(
+            AutoCategoryRule(
+                id = "nonmatching-rule",
+                name = "不符合",
+                descriptionContains = "absent",
+                direction = AutoCategoryRuleDirection.EXPENSE,
+                categoryId = food.id,
+            ),
+            emptySet(),
+        )
+        val transfer = transfer("trace-rules", "anything", -10.0)
+            .copy(merchantName = "Fictional Merchant")
+        database.transferDao().upsertAll(listOf(transfer))
+
+        categorizer.categorizeTransferIds(listOf(transfer.id), "run-evaluation")
+
+        val rules = database.ingestionProvenanceDao().getRuleEvaluations(transfer.id)
+        assertEquals(setOf("merchant-rule", "nonmatching-rule"), rules.map { it.ruleId }.toSet())
+        assertTrue(rules.single { it.ruleId == "merchant-rule" }.selected)
+        assertFalse(rules.single { it.ruleId == "nonmatching-rule" }.matched)
+        database.ingestionProvenanceDao().getConditionEvaluations(transfer.id).single().also {
+            assertEquals("MERCHANT_NAME", it.field)
+            assertEquals("""["Fictional Merchant"]""", it.candidateValuesJson)
+            assertTrue(it.matched)
+        }
+        Unit
+    }
+
+    @Test
+    fun `annotation and evaluation trace roll back together when trace insert fails`() = runBlocking {
+        val category = Category("rollback-category", "Rollback", "#000000")
+        database.categoryDao().upsert(category)
+        database.autoCategoryRuleDao().upsertWithTags(
+            AutoCategoryRule(
+                id = "rollback-rule",
+                name = "Rollback rule",
+                direction = AutoCategoryRuleDirection.EXPENSE,
+                categoryId = category.id,
+            ),
+            emptySet(),
+        )
+        val transfer = transfer("rollback-transfer", "anything", -10.0)
+        database.transferDao().upsertAll(listOf(transfer))
+        database.openHelper.writableDatabase.execSQL(
+            """
+            CREATE TRIGGER reject_classification_trace
+            BEFORE INSERT ON classification_rule_evaluations
+            BEGIN SELECT RAISE(ABORT, 'fictional trace failure'); END
+            """.trimIndent(),
+        )
+
+        val failed = runCatching {
+            categorizer.categorizeTransferIds(listOf(transfer.id), "rollback-run")
+        }.isFailure
+
+        assertTrue(failed)
+        assertTrue(database.transferAnnotationDao().getByTransferIds(listOf(transfer.id)).isEmpty())
+        assertTrue(database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id).isEmpty())
+        assertTrue(database.ingestionProvenanceDao().getRuleEvaluations(transfer.id).isEmpty())
     }
 
     @After

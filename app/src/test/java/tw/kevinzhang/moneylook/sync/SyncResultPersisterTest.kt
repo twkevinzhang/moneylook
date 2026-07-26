@@ -26,10 +26,191 @@ import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.extension_runtime.data.TransferData
 import tw.kevinzhang.extension_runtime.data.TransferSyncData
 import tw.kevinzhang.extension_runtime.data.TransferSyncRangeData
+import tw.kevinzhang.extension_runtime.data.CapturedSourceDocument
 import tw.kevinzhang.moneylook.security.CardPanProtector
 import tw.kevinzhang.moneylook.security.ProtectedCardPan
+import tw.kevinzhang.moneylook.security.SourceFingerprintProtector
+import tw.kevinzhang.moneylook.security.ProtectedSourceFingerprint
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
 
 class SyncResultPersisterTest {
+    @Test
+    fun `failed run retains authenticated response archive and original start time`() = runBlocking {
+        val store = RecordingStore()
+        SyncResultPersister(store).recordFailure(
+            extension = extension(),
+            sourceDocuments = listOf(
+                CapturedSourceDocument(
+                    id = "failed-doc",
+                    capturedAt = 201,
+                    stage = "authenticated-error",
+                    transport = "browser_xhr",
+                    method = "GET",
+                    url = "https://bank.invalid/error",
+                    statusCode = 500,
+                    responseHeadersJson = "{}",
+                    mediaKind = "text/html",
+                    bodyEncoding = "text",
+                    representation = "exact_bytes",
+                    bodyBytes = "<html>failure</html>".toByteArray(),
+                ),
+            ),
+            sourceRunId = "failed-run",
+            sourceRunStartedAt = 200,
+        )
+
+        requireNotNull(store.failedContext).also {
+            assertEquals("failed-run", it.runId)
+            assertEquals(200, it.startedAt)
+            assertEquals("failed-doc", it.sourceDocuments.single().id)
+        }
+        Unit
+    }
+
+    @Test
+    fun `persists exact response archive and field lineage under runner lifecycle`() = runBlocking {
+        val store = RecordingStore()
+        val exactBody = byteArrayOf(0, 1, 2, 3, 0xff.toByte())
+        val result = SyncResult.Success(
+            accounts = listOf(
+                AccountData(
+                    name = "Fictional account",
+                    balance = 10.0,
+                    currency = "TWD",
+                    transfers = listOf(
+                        TransferData(
+                            txnDateTime = "2026-07-26",
+                            description = "Fictional merchant",
+                            amount = -10.0,
+                            balance = 0.0,
+                            memo = "",
+                            referenceNumber = "REF-1",
+                            sourceRecord = mapOf("sourceDocumentId" to "doc-1", "row" to 0),
+                            sourceFields = mapOf(
+                                "referenceNumber" to mapOf("locator" to "${'$'}.rows[0].reference"),
+                            ),
+                            sourceFacts = mapOf(
+                                "bankSpecificCode" to mapOf(
+                                    "value" to "X1",
+                                    "locator" to "${'$'}.rows[0].bankCode",
+                                    "rawKey" to "BANK_CODE",
+                                    "confidence" to 0.9,
+                                ),
+                            ),
+                            parserVersion = "fictional-v1",
+                        ),
+                    ),
+                ),
+            ),
+            sourceDocuments = listOf(
+                CapturedSourceDocument(
+                    id = "doc-1",
+                    capturedAt = 101,
+                    stage = "history",
+                    transport = "native_http",
+                    method = "GET",
+                    url = "https://bank.invalid/history",
+                    statusCode = 200,
+                    responseHeadersJson = """{"Content-Type":["application/octet-stream"]}""",
+                    mediaKind = "application/octet-stream",
+                    bodyEncoding = "base64",
+                    representation = "exact_bytes",
+                    bodyBytes = exactBody,
+                ),
+            ),
+            runId = "runner-run",
+            runStartedAt = 100,
+        )
+
+        SyncResultPersister(store).persist(extension(), result)
+
+        val context = requireNotNull(store.ingestionContext)
+        assertEquals("runner-run", context.runId)
+        assertEquals(100, context.startedAt)
+        context.sourceDocuments.single().also { document ->
+            assertEquals(exactBody.size.toLong(), document.bodyByteCount)
+            assertEquals(
+                exactBody.toList(),
+                GZIPInputStream(ByteArrayInputStream(document.bodyGzip)).use { it.readBytes() }.toList(),
+            )
+            assertEquals(64, document.bodySha256.length)
+        }
+        val reference = context.fieldObservations.first { it.fieldName == "referenceNumber" }
+        assertEquals("doc-1", reference.sourceDocumentId)
+        assertEquals("${'$'}.rows[0].reference", reference.sourcePath)
+        context.fieldObservations.single { it.fieldName == "sourceFact.bankSpecificCode" }.also {
+            assertEquals("\"X1\"", it.valueJson)
+            assertEquals("${'$'}.rows[0].bankCode", it.sourcePath)
+            assertTrue(requireNotNull(it.sourceFieldJson).contains("\"rawKey\":\"BANK_CODE\""))
+            assertTrue(it.sourceFieldJson!!.contains("\"confidence\":0.9"))
+        }
+        assertTrue(context.fieldObservations.any {
+            it.assetType == "ACCOUNT" && it.parserVersion == "manifest:1"
+        })
+    }
+
+    @Test
+    fun `dangling source document reference fails preprocessing but retains captured archive`() = runBlocking {
+        val store = RecordingStore()
+        val document = CapturedSourceDocument(
+            id = "captured-doc",
+            capturedAt = 1,
+            stage = "history",
+            transport = "native_http",
+            method = "GET",
+            url = "https://bank.invalid/history",
+            statusCode = 200,
+            responseHeadersJson = "{}",
+            mediaKind = "application/json",
+            bodyEncoding = "text",
+            representation = "exact_bytes",
+            bodyBytes = "{}".toByteArray(),
+        )
+        val result = SyncResult.Success(
+            accounts = listOf(
+                AccountData(
+                    "Account",
+                    1.0,
+                    "TWD",
+                    sourceRecord = mapOf("sourceDocumentId" to "missing-doc"),
+                ),
+            ),
+            sourceDocuments = listOf(document),
+        )
+
+        val error = runCatching { SyncResultPersister(store).persist(extension(), result) }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+        assertEquals(listOf("captured-doc"), store.failedContext?.sourceDocuments?.map { it.id })
+        assertTrue(store.accounts.isEmpty())
+    }
+
+    @Test
+    fun `payload fingerprint changes when a rich or provenance field changes`() = runBlocking {
+        val protector = object : SourceFingerprintProtector {
+            override fun fingerprint(vararg components: String) =
+                ProtectedSourceFingerprint(components.joinToString("\u001f"), 1)
+        }
+        suspend fun fingerprint(transfer: TransferData): String {
+            val store = RecordingStore()
+            SyncResultPersister(store, sourceFingerprintProtector = protector).persist(
+                extension(),
+                SyncResult.Success(
+                    listOf(AccountData("Account", 1.0, "TWD", transfers = listOf(transfer))),
+                ),
+            )
+            return requireNotNull(store.ingestionContext).transferFingerprints.values.single().payloadFingerprint
+        }
+        val base = TransferData("2026-07-26", "Fictional", -10.0, null, "")
+
+        assertNotEquals(fingerprint(base), fingerprint(base.copy(feeAmount = 1.0)))
+        assertNotEquals(fingerprint(base), fingerprint(base.copy(parserVersion = "v2")))
+        assertNotEquals(
+            fingerprint(base),
+            fingerprint(base.copy(sourceFacts = mapOf("raw" to mapOf("value" to "changed")))),
+        )
+    }
     @Test
     fun `encrypts PAN before persistence and maps transactions by card ref`() = runBlocking {
         val store = RecordingStore()
@@ -410,6 +591,7 @@ class SyncResultPersisterTest {
         var failedTransferCount = -1
         var classificationStatus: IngestionClassificationStatus? = null
         var failedRunCount = 0
+        var ingestionContext: IngestionContext? = null
 
         override suspend fun replaceSnapshot(
             extensionId: String,
@@ -430,6 +612,30 @@ class SyncResultPersisterTest {
             this.replaceCardAccountIds = replaceCardAccountIds
             this.legacyIdentityByAccountId = legacyIdentityByAccountId
             this.replaceKinds = replaceKinds
+        }
+
+        override suspend fun replaceSnapshot(
+            extensionId: String,
+            accounts: List<Account>,
+            transfers: List<Transfer>,
+            refreshes: List<AccountTransferRefresh>,
+            cardInstruments: List<CreditCardInstrument>,
+            replaceCardAccountIds: Set<String>,
+            legacyIdentityByAccountId: Map<String, LegacyAccountIdentity>,
+            replaceKinds: Set<AssetKind>?,
+            ingestionContext: IngestionContext,
+        ) {
+            this.ingestionContext = ingestionContext
+            replaceSnapshot(
+                extensionId,
+                accounts,
+                transfers,
+                refreshes,
+                cardInstruments,
+                replaceCardAccountIds,
+                legacyIdentityByAccountId,
+                replaceKinds,
+            )
         }
 
         override suspend fun recordFailedIngestion(

@@ -52,6 +52,7 @@ internal class BrowserWebViewSession(
         timeoutMs = request.timeoutMs,
         settleMs = request.settleMs,
         returnAtDocumentStartUrl = request.returnAtDocumentStartUrl,
+        captureAuthenticatedHtml = request.capture?.authenticated == true,
     ) { view ->
         startOpenNavigation(view, request)
     }
@@ -60,6 +61,7 @@ internal class BrowserWebViewSession(
         timeoutMs = request.timeoutMs,
         settleMs = request.settleMs,
         returnAtDocumentStartUrl = null,
+        captureAuthenticatedHtml = request.capture?.authenticated == true,
     ) { view ->
         startFormPostNavigation(view, request)
     }
@@ -68,6 +70,7 @@ internal class BrowserWebViewSession(
         timeoutMs: Long,
         settleMs: Long,
         returnAtDocumentStartUrl: String?,
+        captureAuthenticatedHtml: Boolean,
         start: (WebView) -> Unit,
     ): BrowserOpenResponse = withContext(Dispatchers.Main.immediate) {
         when (state) {
@@ -81,6 +84,7 @@ internal class BrowserWebViewSession(
         openEvents = events
         state = State.OPENING
         targetNavigationInterceptor.arm(returnAtDocumentStartUrl)
+        var interceptedAtDocumentStart = false
         try {
             val finalUrl = withTimeout<String>(timeoutMs) {
                 documentUrlTracker.reset()
@@ -91,6 +95,7 @@ internal class BrowserWebViewSession(
                         is OpenEvent.Failed -> throw event.error
                         is OpenEvent.TargetIntercepted -> {
                             documentUrlTracker.onNavigationCandidate(event.url)
+                            interceptedAtDocumentStart = true
                             return@withTimeout event.url
                         }
                         is OpenEvent.Finished -> {
@@ -134,12 +139,26 @@ internal class BrowserWebViewSession(
             val documentUrl = documentUrlTracker.resolve(finalUrl)
             currentUrl = finalUrl
             state = State.READY
+            // A return-at-document-start interception deliberately prevents the target document
+            // from loading. Evaluating here would serialize the previous page and falsely label it
+            // as the intercepted target URL, so no target capture is emitted.
+            val html = if (captureAuthenticatedHtml && !interceptedAtDocumentStart) {
+                decodeEvaluateResult(evaluate(view, "document.documentElement ? document.documentElement.outerHTML : '';"))
+                    ?: ""
+            } else {
+                null
+            }
+            if (html != null && html.toByteArray(Charsets.UTF_8).size > BrowserResponseValidator.MAX_RESPONSE_BODY_BYTES) {
+                throw SafeBrowserException("RESPONSE_TOO_LARGE", "browser document exceeds size limit")
+            }
             BrowserOpenResponse(
                 url = finalUrl,
                 origin = parsed.origin(),
                 documentUrl = documentUrl,
                 documentUrls = documentUrlTracker.candidates(finalUrl),
                 requestUrls = resourceUrlTracker.snapshot(),
+                body = html,
+                bodyEncoding = html?.let { "text" },
             )
         } catch (e: CancellationException) {
             view.stopLoading()

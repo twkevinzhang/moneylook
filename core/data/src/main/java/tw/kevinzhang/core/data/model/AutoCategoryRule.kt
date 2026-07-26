@@ -49,6 +49,11 @@ enum class AutoCategoryRuleConditionField {
     MERCHANT_CATEGORY_CODE,
     COUNTERPARTY_NAME,
     PURPOSE,
+    CHANNEL,
+    /** Bank transaction type/code; explicit name retained for rule readability. */
+    TRANSACTION_CODE,
+    REFERENCE_NUMBER,
+    MERCHANT_LOCATION,
 }
 
 enum class AutoCategoryRuleConditionMatchMode {

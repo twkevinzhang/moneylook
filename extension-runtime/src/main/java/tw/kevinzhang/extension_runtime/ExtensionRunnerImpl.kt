@@ -31,6 +31,7 @@ import tw.kevinzhang.extension_runtime.bridge.HttpRequestJsonParser
 import tw.kevinzhang.extension_runtime.bridge.NativeHttpTransport
 import tw.kevinzhang.extension_runtime.bridge.RunRequestBudget
 import tw.kevinzhang.extension_runtime.bridge.SafeHttpException
+import tw.kevinzhang.extension_runtime.capture.ResponseCaptureCollector
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.CardData
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
@@ -42,6 +43,7 @@ import tw.kevinzhang.extension_runtime.data.TransferSyncRangeData
 import java.io.File
 import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.UUID
 import javax.inject.Inject
 
 class ExtensionRunnerImpl @Inject constructor(
@@ -55,21 +57,42 @@ class ExtensionRunnerImpl @Inject constructor(
         credential: ExtensionCredential,
         syncContext: ExtensionSyncContext,
     ): SyncResult = withContext(Dispatchers.IO) {
+        val runId = UUID.randomUUID().toString()
+        val runStartedAt = System.currentTimeMillis()
         val scriptFile = File(extension.syncTriggerCachePath)
-        if (!scriptFile.isFile) return@withContext SyncResult.Error("extension script file not found")
+        if (!scriptFile.isFile) return@withContext SyncResult.Error(
+            "extension script file not found",
+            runId = runId,
+            runStartedAt = runStartedAt,
+        )
         if (scriptFile.length() > MAX_SCRIPT_BYTES) {
-            return@withContext SyncResult.Error("extension script exceeds size limit")
+            return@withContext SyncResult.Error(
+                "extension script exceeds size limit",
+                runId = runId,
+                runStartedAt = runStartedAt,
+            )
         }
         val script = try {
             scriptFile.readText()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            return@withContext SyncResult.Error("extension script could not be read")
+            return@withContext SyncResult.Error(
+                "extension script could not be read",
+                runId = runId,
+                runStartedAt = runStartedAt,
+            )
         }
         val canonicalCredentialJson = canonicalCredentialJson(credential.json)
-            ?: return@withContext SyncResult.Error("stored credential JSON is invalid")
-        runInWebView(script, ExtensionCredential(canonicalCredentialJson), syncContext)
+            ?: return@withContext SyncResult.Error(
+                "stored credential JSON is invalid",
+                runId = runId,
+                runStartedAt = runStartedAt,
+            )
+        when (val outcome = runInWebView(script, ExtensionCredential(canonicalCredentialJson), syncContext)) {
+            is SyncResult.Success -> outcome.copy(runId = runId, runStartedAt = runStartedAt)
+            is SyncResult.Error -> outcome.copy(runId = runId, runStartedAt = runStartedAt)
+        }
     }
 
     private suspend fun runInWebView(
@@ -80,17 +103,20 @@ class ExtensionRunnerImpl @Inject constructor(
         val deferred = CompletableDeferred<SyncResult>()
         val webView = WebView(context)
         val requestBudget = RunRequestBudget()
+        val captureCollector = ResponseCaptureCollector(gson)
         val httpBridge = NativeSdkHttpBridge(
             webView = webView,
             transport = NativeHttpTransport(okHttpClient),
             requestBudget = requestBudget,
             gson = gson,
+            captureCollector = captureCollector,
         )
         val browserBridge = NativeSdkBrowserBridge(
             controllerWebView = webView,
             session = BrowserWebViewSession(context, gson),
             requestBudget = requestBudget,
             gson = gson,
+            captureCollector = captureCollector,
         )
         @Suppress("SetJavaScriptEnabled")
         webView.settings.apply {
@@ -119,7 +145,7 @@ class ExtensionRunnerImpl @Inject constructor(
             }
         }
         webView.loadData("<html><body></body></html>", "text/html", "utf-8")
-        try {
+        val outcome = try {
             withTimeout(SCRIPT_TIMEOUT_MS) { deferred.await() }
         } catch (e: TimeoutCancellationException) {
             SyncResult.Error("extension script timed out")
@@ -131,6 +157,10 @@ class ExtensionRunnerImpl @Inject constructor(
             webView.removeJavascriptInterface("__result_bridge__")
             webView.stopLoading()
             webView.destroy()
+        }
+        when (outcome) {
+            is SyncResult.Success -> outcome.copy(sourceDocuments = captureCollector.snapshot())
+            is SyncResult.Error -> outcome.copy(sourceDocuments = captureCollector.snapshot())
         }
     }
 
@@ -280,6 +310,7 @@ private class NativeSdkHttpBridge(
     private val transport: NativeHttpTransport,
     private val requestBudget: RunRequestBudget,
     private val gson: Gson,
+    private val captureCollector: ResponseCaptureCollector,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -301,7 +332,19 @@ private class NativeSdkHttpBridge(
             try {
                 val request = HttpRequestJsonParser.parse(requestJson, gson)
                 val response = transport.execute(request)
-                postResult(id, gson.toJson(response), null)
+                val sourceDocumentId = captureCollector.capture(
+                    options = request.capture,
+                    transport = "native_http",
+                    method = request.method,
+                    url = request.url,
+                    statusCode = response.status,
+                    headers = response.headers,
+                    body = response.body,
+                    bodyEncoding = response.bodyEncoding,
+                    representation = "exact_bytes",
+                    exactBodyBytes = response.exactBodyBytes,
+                )
+                postResult(id, gson.toJson(response.copy(sourceDocumentId = sourceDocumentId)), null)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -413,6 +456,14 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
         if (kind != AssetKind.DEPOSIT && balance < 0) {
             return SyncResult.Error("script result contains invalid debt balance")
         }
+        val sourceRecord = optionalMap(account, "sourceRecord")
+            ?: return SyncResult.Error("script result contains invalid account source record")
+        val sourceFields = optionalMap(account, "sourceFields")
+            ?: return SyncResult.Error("script result contains invalid account source fields")
+        val sourceFacts = optionalMap(account, "sourceFacts")
+            ?: return SyncResult.Error("script result contains invalid account source facts")
+        val parserVersion = optionalNonBlankString(account, "parserVersion")
+            ?: return SyncResult.Error("script result contains invalid account parser version")
 
         val transferSync = if ("transferSync" in account) {
             parseTransferSync(account) ?: return SyncResult.Error("script result contains invalid transfer sync")
@@ -441,6 +492,10 @@ internal fun parseAccounts(json: String, gson: Gson): SyncResult? = try {
             cardsComplete = cardsComplete,
             transfers = transfers,
             transferSync = transferSync,
+            sourceRecord = sourceRecord.value,
+            sourceFields = sourceFields.value,
+            sourceFacts = sourceFacts.value,
+            parserVersion = parserVersion.value,
         )
     }
     val kindSync = if ("kindSync" in map) {
@@ -529,6 +584,20 @@ private fun optionalInt(account: Map<*, *>, key: String): OptionalValue<Int>? = 
         ?.let(::OptionalValue)
 }
 
+private fun optionalBoolean(account: Map<*, *>, key: String): OptionalValue<Boolean>? = when {
+    key !in account -> OptionalValue(null)
+    account[key] is Boolean -> OptionalValue(account[key] as Boolean)
+    else -> null
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun optionalMap(account: Map<*, *>, key: String): OptionalValue<Map<String, Any?>>? = when {
+    key !in account -> OptionalValue(null)
+    account[key] is Map<*, *> && (account[key] as Map<*, *>).keys.all { it is String } ->
+        OptionalValue(account[key] as Map<String, Any?>)
+    else -> null
+}
+
 private fun finiteNumber(value: Any?): Double? =
     (value as? Number)?.toDouble()?.takeIf { it.isFinite() }
 
@@ -567,6 +636,41 @@ private fun parseTransfers(
         }
         val counterpartyName = optionalNonBlankString(transfer, "counterpartyName") ?: return null
         val purpose = optionalNonBlankString(transfer, "purpose") ?: return null
+        val authorizationDateTime = optionalNonBlankString(transfer, "authorizationDateTime") ?: return null
+        val valueDateTime = optionalNonBlankString(transfer, "valueDateTime") ?: return null
+        val referenceNumber = optionalNonBlankString(transfer, "referenceNumber") ?: return null
+        val authorizationCode = optionalNonBlankString(transfer, "authorizationCode") ?: return null
+        val channel = optionalNonBlankString(transfer, "channel") ?: return null
+        val direction = optionalNonBlankString(transfer, "direction") ?: return null
+        if (direction.value != null && direction.value !in setOf("debit", "credit")) return null
+        val transactionCode = optionalNonBlankString(transfer, "transactionCode") ?: return null
+        val originalAmount = optionalFiniteNumber(transfer, "originalAmount") ?: return null
+        val originalCurrency = optionalNonBlankString(transfer, "originalCurrency") ?: return null
+        val settlementAmount = optionalFiniteNumber(transfer, "settlementAmount") ?: return null
+        val settlementCurrency = optionalNonBlankString(transfer, "settlementCurrency") ?: return null
+        val exchangeRate = optionalFiniteNumber(transfer, "exchangeRate") ?: return null
+        val feeAmount = optionalFiniteNumber(transfer, "feeAmount") ?: return null
+        val feeCurrency = optionalNonBlankString(transfer, "feeCurrency") ?: return null
+        val taxAmount = optionalFiniteNumber(transfer, "taxAmount") ?: return null
+        val taxCurrency = optionalNonBlankString(transfer, "taxCurrency") ?: return null
+        val merchantLocation = optionalNonBlankString(transfer, "merchantLocation") ?: return null
+        val counterpartyAccount = optionalNonBlankString(transfer, "counterpartyAccount") ?: return null
+        val counterpartyBank = optionalNonBlankString(transfer, "counterpartyBank") ?: return null
+        val installmentNumber = optionalInt(transfer, "installmentNumber") ?: return null
+        val installmentTotal = optionalInt(transfer, "installmentTotal") ?: return null
+        if (
+            installmentNumber.value != null &&
+            (installmentNumber.value <= 0 || installmentTotal.value == null ||
+                installmentTotal.value <= 0 || installmentNumber.value > installmentTotal.value)
+        ) return null
+        val isRefund = optionalBoolean(transfer, "isRefund") ?: return null
+        val isReversal = optionalBoolean(transfer, "isReversal") ?: return null
+        val originalTransactionSourceId =
+            optionalNonBlankString(transfer, "originalTransactionSourceId") ?: return null
+        val sourceRecord = optionalMap(transfer, "sourceRecord") ?: return null
+        val sourceFields = optionalMap(transfer, "sourceFields") ?: return null
+        val sourceFacts = optionalMap(transfer, "sourceFacts") ?: return null
+        val parserVersion = optionalNonBlankString(transfer, "parserVersion") ?: return null
         TransferData(
             txnDateTime = txnDateTime,
             description = description.value ?: "",
@@ -582,6 +686,34 @@ private fun parseTransfers(
             merchantCategoryCode = merchantCategoryCode.value,
             counterpartyName = counterpartyName.value,
             purpose = purpose.value,
+            authorizationDateTime = authorizationDateTime.value,
+            valueDateTime = valueDateTime.value,
+            referenceNumber = referenceNumber.value,
+            authorizationCode = authorizationCode.value,
+            channel = channel.value,
+            direction = direction.value,
+            transactionCode = transactionCode.value,
+            originalAmount = originalAmount.value,
+            originalCurrency = originalCurrency.value,
+            settlementAmount = settlementAmount.value,
+            settlementCurrency = settlementCurrency.value,
+            exchangeRate = exchangeRate.value,
+            feeAmount = feeAmount.value,
+            feeCurrency = feeCurrency.value,
+            taxAmount = taxAmount.value,
+            taxCurrency = taxCurrency.value,
+            merchantLocation = merchantLocation.value,
+            counterpartyAccount = counterpartyAccount.value,
+            counterpartyBank = counterpartyBank.value,
+            installmentNumber = installmentNumber.value,
+            installmentTotal = installmentTotal.value,
+            isRefund = isRefund.value,
+            isReversal = isReversal.value,
+            originalTransactionSourceId = originalTransactionSourceId.value,
+            sourceRecord = sourceRecord.value,
+            sourceFields = sourceFields.value,
+            sourceFacts = sourceFacts.value,
+            parserVersion = parserVersion.value,
         )
     }
 }
@@ -617,6 +749,10 @@ private fun parseCards(account: Map<*, *>): List<CardData>? {
         val availableCredit = optionalFiniteNumber(card, "availableCredit") ?: return null
         if (creditLimit.value != null && creditLimit.value < 0.0) return null
         if (availableCredit.value != null && availableCredit.value < 0.0) return null
+        val sourceRecord = optionalMap(card, "sourceRecord") ?: return null
+        val sourceFields = optionalMap(card, "sourceFields") ?: return null
+        val sourceFacts = optionalMap(card, "sourceFacts") ?: return null
+        val parserVersion = optionalNonBlankString(card, "parserVersion") ?: return null
         CardData(
             ref = ref,
             sourceCardKey = sourceCardKey.value,
@@ -633,6 +769,10 @@ private fun parseCards(account: Map<*, *>): List<CardData>? {
             expiryYear = expiryYear.value,
             creditLimit = creditLimit.value,
             availableCredit = availableCredit.value,
+            sourceRecord = sourceRecord.value,
+            sourceFields = sourceFields.value,
+            sourceFacts = sourceFacts.value,
+            parserVersion = parserVersion.value,
         )
     }
     val uniqueRefs = cards.map(CardData::ref).distinct().size == cards.size

@@ -15,6 +15,8 @@ import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.CreditCardInstrumentDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.IngestionProvenanceDao
+import tw.kevinzhang.core.data.db.ClassificationTraceStore
+import tw.kevinzhang.core.data.db.RoomClassificationTraceStore
 import tw.kevinzhang.core.data.db.MIGRATION_5_6
 import tw.kevinzhang.core.data.db.MIGRATION_6_7
 import tw.kevinzhang.core.data.db.MIGRATION_7_8
@@ -31,6 +33,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_17_18
 import tw.kevinzhang.core.data.db.MIGRATION_18_19
 import tw.kevinzhang.core.data.db.MIGRATION_19_20
 import tw.kevinzhang.core.data.db.MIGRATION_20_21
+import tw.kevinzhang.core.data.db.MIGRATION_21_22
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -64,6 +67,7 @@ object DataModule {
                 MIGRATION_18_19,
                 MIGRATION_19_20,
                 MIGRATION_20_21,
+                MIGRATION_21_22,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .build()
@@ -99,6 +103,14 @@ object DataModule {
     @Provides
     fun provideIngestionProvenanceDao(db: MoneylookDatabase): IngestionProvenanceDao =
         db.ingestionProvenanceDao()
+
+    @Provides
+    fun provideClassificationTraceStore(db: MoneylookDatabase): ClassificationTraceStore =
+        RoomClassificationTraceStore(
+            db,
+            db.transferAnnotationDao(),
+            db.ingestionProvenanceDao(),
+        )
 
     @Provides
     fun provideTransferDao(db: MoneylookDatabase): TransferDao = db.transferDao()

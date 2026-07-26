@@ -38,6 +38,10 @@ data class CreditCardInstrument(
     val expiryYear: Int? = null,
     val creditLimit: Double? = null,
     val availableCredit: Double? = null,
+    val sourceRecordJson: String? = null,
+    val sourceFieldsJson: String? = null,
+    val sourceFactsJson: String? = null,
+    val parserVersion: String? = null,
 ) {
     override fun toString(): String = "CreditCardInstrument(id=$id, sensitiveFields=[REDACTED])"
 }

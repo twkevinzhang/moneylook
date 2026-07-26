@@ -8,7 +8,7 @@ import tw.kevinzhang.core.data.model.CreditCardInstrument
 
 data class CardInstrumentCount(val accountId: String, val count: Int)
 
-/** Redaction-safe projection for UI flows. Ciphertext, IV, and fingerprints stay in the DAO. */
+/** UI projection. PAN ciphertext, IV, and fingerprints stay in the DAO; source lineage is shown. */
 data class CreditCardInstrumentMetadata(
     val id: String,
     val displayName: String?,
@@ -24,6 +24,10 @@ data class CreditCardInstrumentMetadata(
     val creditLimit: Double?,
     val availableCredit: Double?,
     val canRevealPan: Boolean,
+    val sourceRecordJson: String? = null,
+    val sourceFieldsJson: String? = null,
+    val sourceFactsJson: String? = null,
+    val parserVersion: String? = null,
 )
 
 @Dao
@@ -32,6 +36,7 @@ interface CreditCardInstrumentDao {
         """
         SELECT id, displayName, maskedPan, lastFour, network, productType, holderRole,
                holderName, status, expiryMonth, expiryYear, creditLimit, availableCredit,
+               sourceRecordJson, sourceFieldsJson, sourceFactsJson, parserVersion,
                CASE
                    WHEN panCiphertext IS NOT NULL AND panIv IS NOT NULL THEN 1
                    ELSE 0
@@ -47,6 +52,7 @@ interface CreditCardInstrumentDao {
         """
         SELECT id, displayName, maskedPan, lastFour, network, productType, holderRole,
                holderName, status, expiryMonth, expiryYear, creditLimit, availableCredit,
+               sourceRecordJson, sourceFieldsJson, sourceFactsJson, parserVersion,
                CASE
                    WHEN panCiphertext IS NOT NULL AND panIv IS NOT NULL THEN 1
                    ELSE 0

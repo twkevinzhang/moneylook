@@ -7,6 +7,8 @@ import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.IngestionStatus
 import tw.kevinzhang.core.data.model.IngestionClassificationStatus
 import tw.kevinzhang.core.data.model.IngestionTrigger
+import tw.kevinzhang.core.data.model.SourceDocument
+import tw.kevinzhang.core.data.model.TransferFieldObservation
 
 /** Keyed, app-private fingerprints for one normalized transfer returned by an extension. */
 data class TransferFingerprintEvidence(
@@ -29,6 +31,8 @@ data class IngestionContext(
     val sourceFingerprint: String,
     val fingerprintKeyVersion: Int,
     val transferFingerprints: Map<String, TransferFingerprintEvidence>,
+    val sourceDocuments: List<SourceDocument> = emptyList(),
+    val fieldObservations: List<TransferFieldObservation> = emptyList(),
 )
 
 /** A successful inclusive date range whose transactions may safely replace local history. */

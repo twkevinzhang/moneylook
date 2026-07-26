@@ -20,7 +20,8 @@ class BrowserRequestTest {
                 "timeoutMs":1234,
                 "settleMs":500,
                 "userAgent":"Mozilla/5.0 Moneylook-Test/1.0",
-                "returnAtDocumentStartUrl":"https://example.com/portal"
+                "returnAtDocumentStartUrl":"https://example.com/portal",
+                "capture":{"stage":"authenticated-home","authenticated":true,"mediaKind":"text/html"}
             }""".trimIndent(),
             gson,
         )
@@ -29,6 +30,8 @@ class BrowserRequestTest {
         assertEquals(500L, open.settleMs)
         assertEquals("Mozilla/5.0 Moneylook-Test/1.0", open.userAgent)
         assertEquals("https://example.com/portal", open.returnAtDocumentStartUrl)
+        assertEquals("authenticated-home", open.capture?.stage)
+        assertTrue(open.capture?.authenticated == true)
 
         val request = BrowserRequestJsonParser.parseRequest(
             """{
@@ -39,7 +42,8 @@ class BrowserRequestTest {
                 "bodyEncoding":"base64",
                 "responseEncoding":"base64",
                 "timeoutMs":2345,
-                "withCredentials":false
+                "withCredentials":false,
+                "capture":{"stage":"history","authenticated":true,"mediaKind":"application/json"}
             }""".trimIndent(),
             gson,
         )
@@ -49,6 +53,8 @@ class BrowserRequestTest {
         assertEquals("base64", request.responseEncoding)
         assertEquals(2345L, request.timeoutMs)
         assertFalse(request.withCredentials)
+        assertEquals("history", request.capture?.stage)
+        assertTrue(request.capture?.authenticated == true)
     }
 
     @Test

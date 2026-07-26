@@ -35,6 +35,7 @@ import tw.kevinzhang.core.data.db.TransactionDetailDraftSave
 import tw.kevinzhang.core.data.db.TransactionDetailDraftStore
 import tw.kevinzhang.core.data.db.TransferAnnotationDao
 import tw.kevinzhang.core.data.db.TransferDetail
+import tw.kevinzhang.core.data.db.IngestionProvenanceDao
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
@@ -52,7 +53,11 @@ import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.moneylook.sync.AutoCategorizer
 import java.net.URLDecoder
 import java.util.UUID
+import java.security.MessageDigest
+import android.util.Base64
 import javax.inject.Inject
+import java.io.ByteArrayInputStream
+import java.util.zip.GZIPInputStream
 
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -67,10 +72,12 @@ class ClassificationViewModel @Inject constructor(
     private val autoCategoryRuleDao: AutoCategoryRuleDao,
     private val transactionDetailDraftStore: TransactionDetailDraftStore,
     private val autoCategorizer: AutoCategorizer,
+    private val ingestionProvenanceDao: IngestionProvenanceDao,
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
     private val isApplyingAllRules = MutableStateFlow(false)
     private val _autoRuleApplicationMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    private val auditState = MutableStateFlow(TransactionAuditUi())
 
     init {
         viewModelScope.launch { ensureDefaultCategories() }
@@ -90,6 +97,9 @@ class ClassificationViewModel @Inject constructor(
     val autoRuleApplicationMessages: SharedFlow<String> = _autoRuleApplicationMessages.asSharedFlow()
 
     private val transferId: String = URLDecoder.decode(savedStateHandle.get<String>("transferId").orEmpty(), "UTF-8")
+    init {
+        viewModelScope.launch { loadAudit() }
+    }
     private val detailWithCard = transferAnnotationDao.observeDetail(transferId)
         .flatMapLatest { detail ->
             val cardId = detail?.transfer?.cardInstrumentId
@@ -97,7 +107,7 @@ class ClassificationViewModel @Inject constructor(
             else creditCardInstrumentDao.observeByIds(listOf(cardId)).map { cards -> detail to cards.firstOrNull() }
         }
 
-    val detail: StateFlow<TransactionDetailUiState?> = combine(
+    private val baseDetail: StateFlow<TransactionDetailUiState?> = combine(
         detailWithCard,
         categoryDao.observeAll(),
         tagDao.observeAll(),
@@ -113,6 +123,97 @@ class ClassificationViewModel @Inject constructor(
         )
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val detail: StateFlow<TransactionDetailUiState?> = combine(baseDetail, auditState) { state, audit ->
+        state?.copy(
+            sourceFields = audit.fields,
+            auditTimeline = audit.timeline,
+            sourceDocuments = audit.documents,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun loadSourceDocumentBody(documentId: String) {
+        if (auditState.value.documents.none { it.id == documentId && it.bodyText == null }) return
+        viewModelScope.launch {
+            val document = ingestionProvenanceDao.getSourceDocument(documentId) ?: return@launch
+            val body = tw.kevinzhang.moneylook.sync.readArchivedSourceBodyPreview(document)
+            auditState.value = auditState.value.copy(
+                documents = auditState.value.documents.map {
+                    if (it.id == documentId) it.copy(bodyText = body) else it
+                },
+            )
+        }
+    }
+
+    private suspend fun loadAudit() {
+        val fields = ingestionProvenanceDao.getTransferFieldObservations(transferId)
+            .map {
+                SourceFieldAuditUi(
+                    fieldName = it.fieldName,
+                    valueJson = it.valueJson,
+                    sourcePath = it.sourcePath,
+                    parserVersion = it.parserVersion,
+                    sourceDocumentId = it.sourceDocumentId,
+                    runId = it.runId,
+                    extensionId = it.extensionId,
+                    observedAt = it.observedAt,
+                    sourceFieldJson = it.sourceFieldJson,
+                )
+            }
+        val documents = ingestionProvenanceDao.getSourceDocumentsForTransfer(transferId)
+            .map {
+                SourceDocumentAuditUi(
+                    id = it.id,
+                    stage = it.stage,
+                    method = it.method,
+                    url = it.url,
+                    statusCode = it.statusCode,
+                    capturedAt = it.capturedAt,
+                    byteCount = it.bodyByteCount,
+                    sha256 = it.bodySha256,
+                    bodyEncoding = it.bodyEncoding,
+                    runId = it.runId,
+                    extensionId = it.extensionId,
+                    transport = it.transport,
+                    mediaKind = it.mediaKind,
+                    representation = it.representation,
+                    responseHeadersJson = it.responseHeadersJson,
+                )
+            }
+        val ingestion = ingestionProvenanceDao.getTransferIngestionEvents(transferId)
+            .map { "${it.occurredAt} · 匯入 ${it.observation} · run ${it.runId} · ${it.extensionId}" }
+        val runs = ingestionProvenanceDao.getIngestionRunsForTransfer(transferId)
+            .map {
+                "${it.startedAt} · run ${it.id} · ${it.trigger} · ${it.status} · " +
+                    "${it.extensionId} v${it.extensionVersion}"
+            }
+        val annotations = ingestionProvenanceDao.getTransferAnnotationEvents(transferId)
+            .map {
+                "${it.occurredAt} · 分類 ${it.outcome} · run ${it.runId ?: "無"} · " +
+                    "規則 ${it.ruleId ?: "無"} · set ${it.ruleSetId ?: "無"} · ${it.trigger} · " +
+                    "score=${it.matchScore ?: "無"} · classifier=${it.classifierVersion ?: "無"}"
+            }
+        val rules = ingestionProvenanceDao.getRuleEvaluations(transferId)
+            .map {
+                "${it.evaluatedAt} · 規則 ${it.ruleId} · ${it.reasonCode} · " +
+                    "run=${it.runId ?: "無"} · set=${it.ruleSetId ?: "無"} · " +
+                    "hash=${it.ruleContentSha256 ?: "無"} · scope=${it.scopeMatched}, " +
+                    "conditions=${it.conditionsMatched}, compatible=${it.categoryCompatible}, " +
+                    "matched=${it.matched}, selected=${it.selected}, score=${it.score ?: "無"}, " +
+                    "classifier=${it.classifierVersion}"
+            }
+        val conditions = ingestionProvenanceDao.getConditionEvaluations(transferId)
+            .map {
+                "${it.evaluatedAt} · eval ${it.ruleEvaluationId} · " +
+                    "group ${it.conditionGroup}#${it.position} · ${it.field} ${it.matchMode} ${it.pattern} · " +
+                    "actual=${it.candidateValuesJson} · matched=${it.matched}"
+            }
+        auditState.value = TransactionAuditUi(
+            fields = fields,
+            documents = documents,
+            timeline = (runs + ingestion + annotations + rules + conditions).sortedDescending(),
+        )
+    }
 
     fun saveDetail(draft: TransactionDetailDraft, onSaved: () -> Unit) {
         if (isDetailSaving.value) return
@@ -293,6 +394,12 @@ private fun TransferDetail.toDetailUi(
 private fun asCategoryOptions(items: List<Category>) = items.map {
     CategoryOption(it.id, it.name, it.color.parseColor(), it.emoji, it.kind)
 }
+
+private data class TransactionAuditUi(
+    val fields: List<SourceFieldAuditUi> = emptyList(),
+    val timeline: List<String> = emptyList(),
+    val documents: List<SourceDocumentAuditUi> = emptyList(),
+)
 private fun asTagOptions(items: List<Tag>) = items.map { TagOption(it.id, it.name, it.color.parseColor()) }
 private fun AutoCategoryRuleWithTags.toDraft() = rule.toDraft(
     tagIds = tags.mapTo(mutableSetOf()) { it.id },

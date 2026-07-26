@@ -20,4 +20,8 @@ data class AccountData(
     val transfers: List<TransferData> = emptyList(),
     /** Null keeps the legacy snapshot contract for extensions that do not download history. */
     val transferSync: TransferSyncData? = null,
+    val sourceRecord: Map<String, Any?>? = null,
+    val sourceFields: Map<String, Any?>? = null,
+    val sourceFacts: Map<String, Any?>? = null,
+    val parserVersion: String? = null,
 )
