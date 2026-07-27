@@ -74,6 +74,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
@@ -94,6 +95,7 @@ import kotlin.math.abs
 fun GlobalLedgerScreen(
     onNavigateToTransaction: (String) -> Unit,
     onNavigateToCategoryTransactions: (String?) -> Unit,
+    onNavigateToExcludedTransactions: () -> Unit,
     analysisContent: @Composable (GlobalLedgerUiState) -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     viewModel: GlobalLedgerViewModel = hiltViewModel(),
@@ -111,6 +113,7 @@ fun GlobalLedgerScreen(
         onSelectTab = viewModel::selectTab,
         onSelectReportDirection = viewModel::selectReportDirection,
         onCategoryClick = onNavigateToCategoryTransactions,
+        onExcludedSummaryClick = onNavigateToExcludedTransactions,
         analysisContent = analysisContent,
         bottomBar = bottomBar,
     )
@@ -193,6 +196,62 @@ fun CategoryTransactionsContent(
     }
 }
 
+/** A pushed ledger subpage that shares the parent filter state without mutating it. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExcludedTransactionsScreen(
+    onNavigateUp: () -> Unit,
+    onNavigateToTransaction: (String) -> Unit,
+    viewModel: GlobalLedgerViewModel,
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val excludedItems = remember(state.allItems, state.filter) {
+        excludedGlobalLedgerItems(state.allItems, state.filter)
+    }
+    ExcludedTransactionsContent(
+        items = excludedItems,
+        onNavigateUp = onNavigateUp,
+        onNavigateToTransaction = onNavigateToTransaction,
+    )
+}
+
+/** Stateless excluded-detail content, kept separate to make navigation behavior testable. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExcludedTransactionsContent(
+    items: List<GlobalLedgerItem>,
+    onNavigateUp: () -> Unit,
+    onNavigateToTransaction: (String) -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("不統計明細") },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateUp) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        if (items.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("這個條件下沒有不統計明細", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
+                items(items, key = GlobalLedgerItem::transferId) { item ->
+                    GlobalLedgerRow(item, onClick = { onNavigateToTransaction(item.transferId) })
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GlobalLedgerContent(
@@ -207,6 +266,7 @@ fun GlobalLedgerContent(
     onSelectTab: (GlobalLedgerTab) -> Unit,
     onSelectReportDirection: (GlobalLedgerDirection) -> Unit,
     onCategoryClick: (String?) -> Unit,
+    onExcludedSummaryClick: () -> Unit = {},
     analysisContent: @Composable (GlobalLedgerUiState) -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -317,6 +377,7 @@ fun GlobalLedgerContent(
                     selectedDirection = state.categoryDirection,
                     onIncome = { onSelectReportDirection(GlobalLedgerDirection.INCOME) },
                     onExpense = { onSelectReportDirection(GlobalLedgerDirection.EXPENSE) },
+                    onExcludedSummaryClick = onExcludedSummaryClick,
                 )
             }
             item("exchange-rate-notice") {
@@ -492,18 +553,36 @@ private fun GlobalSummaryCards(
     selectedDirection: GlobalLedgerDirection?,
     onIncome: () -> Unit,
     onExpense: () -> Unit,
+    onExcludedSummaryClick: () -> Unit,
 ) {
     Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.End) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             SummaryCard("收入", summary.income, currency, MaterialTheme.colorScheme.primary, selectedDirection == GlobalLedgerDirection.INCOME, onIncome, Modifier.weight(1f).testTag("summary-income"))
             SummaryCard("支出", summary.expense, currency, MaterialTheme.colorScheme.error, selectedDirection == GlobalLedgerDirection.EXPENSE, onExpense, Modifier.weight(1f).testTag("summary-expense"))
         }
-        Text(
-            text = "不統計 ${summary.excludedCount} 筆",
-            modifier = Modifier.padding(top = 6.dp).testTag("summary-excluded-count"),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (summary.excludedCount > 0) {
+            TextButton(
+                onClick = onExcludedSummaryClick,
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .heightIn(min = 48.dp)
+                    .testTag("summary-excluded-count")
+                    .semantics { contentDescription = "查看不統計 ${summary.excludedCount} 筆明細" },
+            ) {
+                Text(
+                    text = "不統計 ${summary.excludedCount} 筆 ›",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            Text(
+                text = "不統計 0 筆",
+                modifier = Modifier.padding(top = 6.dp).testTag("summary-excluded-count"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

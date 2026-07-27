@@ -31,6 +31,7 @@ import tw.kevinzhang.moneylook.ui.settings.DataTransferRoute
 import tw.kevinzhang.moneylook.ui.transactions.AutoRuleScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryManagementScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryTransactionsScreen
+import tw.kevinzhang.moneylook.ui.transactions.ExcludedTransactionsScreen
 import tw.kevinzhang.moneylook.ui.transactions.GlobalLedgerScreen
 import tw.kevinzhang.moneylook.ui.transactions.GlobalLedgerViewModel
 import tw.kevinzhang.moneylook.ui.transactions.TagManagementScreen
@@ -127,7 +128,23 @@ fun AppNavHost(navController: NavHostController) {
                 onNavigateToCategoryTransactions = { categoryId ->
                     navController.navigate(Screen.CategoryTransactions.route(categoryId))
                 },
+                onNavigateToExcludedTransactions = {
+                    navController.navigate(Screen.ExcludedTransactions.route)
+                },
                 analysisContent = { state -> GlobalLedgerAnalysisContent(state) },
+            )
+        }
+        composable(Screen.ExcludedTransactions.route) { backStackEntry ->
+            val parentEntry = remember(backStackEntry) {
+                navController.getBackStackEntry(Screen.GlobalLedger.route)
+            }
+            val viewModel: GlobalLedgerViewModel = hiltViewModel(parentEntry)
+            ExcludedTransactionsScreen(
+                viewModel = viewModel,
+                onNavigateUp = { navController.popBackStack() },
+                onNavigateToTransaction = { transferId ->
+                    navController.navigate(Screen.TransactionDetail.route(transferId))
+                },
             )
         }
         composable(

@@ -287,6 +287,18 @@ fun globalCreditCardTransactionStatus(item: GlobalLedgerItem): GlobalCreditCardT
 fun globalReportableTransactions(items: List<GlobalLedgerItem>): List<GlobalLedgerItem> =
     items.filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
 
+/**
+ * Applies every ledger filter selected on the parent screen, but deliberately
+ * replaces its direction with EXCLUDED for the dedicated excluded-details page.
+ * Pending authorizations are not reportable and therefore never appear here.
+ */
+fun excludedGlobalLedgerItems(
+    items: List<GlobalLedgerItem>,
+    filter: GlobalLedgerFilter,
+): List<GlobalLedgerItem> = globalReportableTransactions(
+    filterGlobalLedger(items, filter.copy(direction = GlobalLedgerDirection.EXCLUDED)),
+)
+
 /** Report totals exclude categorized "不統計" rows and zero-value rows. */
 fun globalLedgerSummary(items: List<GlobalLedgerItem>): GlobalLedgerSummary {
     val reportable = globalReportableTransactions(items).mapNotNull { item ->
