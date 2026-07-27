@@ -1,6 +1,7 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertHasNoClickAction
@@ -31,6 +32,7 @@ class GlobalLedgerInteractionTest {
 
     @Test
     fun topBarActionsAndSummaryDirectionKeepTheActiveTab() {
+        var excludedSummaryClickCount = 0
         val today = LocalDate.now()
         val anchor = GlobalDateRange(
             startInclusive = today.minusDays(8),
@@ -73,6 +75,7 @@ class GlobalLedgerInteractionTest {
                         state.value = state.value.copy(categoryDirection = direction)
                     },
                     onCategoryClick = {},
+                    onExcludedSummaryClick = { excludedSummaryClickCount += 1 },
                 )
             }
         }
@@ -81,8 +84,10 @@ class GlobalLedgerInteractionTest {
         composeRule.onNodeWithText("部分幣別未計入", substring = true).assertExists()
         composeRule.onNodeWithTag("summary-expense").assertIsSelected()
         composeRule.onNodeWithTag("summary-excluded-count")
-            .assertHasNoClickAction()
-        composeRule.onNodeWithText("不統計 2 筆").assertExists()
+            .assert(hasClickAction())
+            .performClick()
+        composeRule.onNodeWithContentDescription("查看不統計 2 筆明細").assertExists()
+        composeRule.runOnIdle { assertEquals(1, excludedSummaryClickCount) }
 
         composeRule.onNodeWithTag("summary-income").performClick().assertIsSelected()
         composeRule.onNodeWithText("分類").assertIsSelected()
@@ -387,6 +392,67 @@ class GlobalLedgerInteractionTest {
         composeRule.runOnUiThread { state.value = emptyList() }
         composeRule.onNodeWithText("未分類消費").assertDoesNotExist()
         composeRule.onNodeWithText("這個條件下沒有尚未分類明細").assertExists()
+    }
+
+    @Test
+    fun zeroExcludedSummaryIsNonInteractiveAndHasNoNavigationAffordance() {
+        val range = GlobalDateRange.thisMonth(LocalDate.now())
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                GlobalLedgerContent(
+                    state = GlobalLedgerUiState(
+                        dateRange = range,
+                        summary = GlobalLedgerSummary(excludedCount = 0),
+                    ),
+                    onNavigateToTransaction = {},
+                    onSelectDateRange = {},
+                    onResetToThisMonth = {},
+                    onSetDateRange = { _, _ -> true },
+                    onSetQuery = {},
+                    onUpdateFilter = {},
+                    onClearFilters = {},
+                    onSelectTab = {},
+                    onSelectReportDirection = {},
+                    onCategoryClick = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("summary-excluded-count").assertHasNoClickAction()
+        composeRule.onNodeWithText("不統計 0 筆").assertExists()
+        composeRule.onNodeWithText("不統計 0 筆 ›").assertDoesNotExist()
+    }
+
+    @Test
+    fun excludedTransactionsContentDispatchesBackAndTransactionNavigation() {
+        var backCount = 0
+        var selectedTransferId: String? = null
+        val excludedItem = item("excluded-1", -360.0, "TWD").copy(
+            description = "帳戶移轉",
+        )
+        val state = mutableStateOf(listOf(excludedItem))
+
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                ExcludedTransactionsContent(
+                    items = state.value,
+                    onNavigateUp = { backCount += 1 },
+                    onNavigateToTransaction = { selectedTransferId = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("不統計明細").assertExists()
+        composeRule.onNodeWithText("帳戶移轉").performClick()
+        composeRule.onNodeWithContentDescription("返回").performClick()
+        composeRule.runOnIdle {
+            assertEquals("excluded-1", selectedTransferId)
+            assertEquals(1, backCount)
+        }
+
+        composeRule.runOnUiThread { state.value = emptyList() }
+        composeRule.onNodeWithText("帳戶移轉").assertDoesNotExist()
+        composeRule.onNodeWithText("這個條件下沒有不統計明細").assertExists()
     }
 
     private fun item(id: String, amount: Double, currency: String) = GlobalLedgerItem(

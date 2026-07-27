@@ -362,6 +362,43 @@ class GlobalLedgerPresentationTest {
     }
 
     @Test
+    fun `excluded details override only direction retain advanced filters and exclude pending`() {
+        val matching = item(
+            "matching",
+            -120.0,
+            description = "咖啡轉帳",
+            categoryId = "food",
+            categoryName = "餐飲",
+            categoryReportingGroup = CategoryReportingGroup.EXCLUDED,
+            tags = listOf(GlobalTag("daily", "日常")),
+        ).copy(extensionId = "source-a", accountId = "account-a")
+        val pending = matching.copy(transferId = "pending", accountKind = AssetKind.CREDIT_CARD, status = "pending")
+        val wrongSource = matching.copy(transferId = "wrong-source", extensionId = "source-b")
+        val expense = matching.copy(
+            transferId = "expense",
+            categoryReportingGroup = CategoryReportingGroup.EXPENSE,
+        )
+        val filter = GlobalLedgerFilter(
+            query = "咖啡",
+            extensionId = "source-a",
+            accountId = "account-a",
+            categoryId = "food",
+            tagId = "daily",
+            direction = GlobalLedgerDirection.EXPENSE,
+            assignment = GlobalCategoryAssignment.CATEGORIZED,
+            minimumAmount = "100",
+            maximumAmount = "150",
+        )
+        val items = listOf(matching, pending, wrongSource, expense)
+
+        val excludedItems = excludedGlobalLedgerItems(items, filter)
+        val sharedItems = filterGlobalLedger(items, filter.copy(direction = null))
+
+        assertEquals(listOf("matching"), excludedItems.map(GlobalLedgerItem::transferId))
+        assertEquals(globalLedgerSummary(sharedItems).excludedCount, excludedItems.size)
+    }
+
+    @Test
     fun `amount tone is muted only for non-reporting rows`() {
         assertEquals(
             GlobalLedgerAmountTone.MUTED,
