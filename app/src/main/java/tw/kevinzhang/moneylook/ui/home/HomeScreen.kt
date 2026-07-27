@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -449,7 +451,7 @@ private fun ExtensionCard(
 }
 
 @Composable
-private fun CredentialEditDialog(
+internal fun CredentialEditDialog(
     extension: InstalledExtension,
     summary: CredentialSummary?,
     onDismiss: () -> Unit,
@@ -473,6 +475,7 @@ private fun CredentialEditDialog(
     var timezone by remember(extension.id, summary?.timezoneId) {
         mutableStateOf(summary?.timezoneId ?: extension.suggestedScheduleTimezone)
     }
+    var showDeleteConfirmation by rememberSaveable(extension.id) { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -539,24 +542,68 @@ private fun CredentialEditDialog(
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    onSave(credentialValues, scheduleEnabled, cron, timezone)
-                },
-            ) { Text("儲存") }
-        },
-        dismissButton = {
-            Row {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 if (summary?.isConfigured == true) {
-                    TextButton(onClick = onDelete) {
+                    TextButton(
+                        onClick = { showDeleteConfirmation = true },
+                        modifier = Modifier.testTag("credential-delete-action"),
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error,
+                        ),
+                    ) {
                         Icon(Icons.Default.Delete, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
                         Text("刪除登入資料")
                     }
                 }
-                TextButton(onClick = onDismiss) { Text("取消") }
+                Spacer(Modifier.weight(1f))
+                Row {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("credential-cancel-action"),
+                    ) { Text("取消") }
+                    TextButton(
+                        onClick = {
+                            onSave(credentialValues, scheduleEnabled, cron, timezone)
+                        },
+                        modifier = Modifier.testTag("credential-save-action"),
+                    ) { Text("儲存") }
+                }
             }
         },
     )
+
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = {},
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("刪除登入資料？") },
+            text = {
+                Text("這會刪除「${extension.name}」的登入資料並取消排程；既有帳戶與交易明細會保留。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmation = false
+                        onDelete()
+                    },
+                    modifier = Modifier.testTag("credential-delete-confirm"),
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("刪除登入資料") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDeleteConfirmation = false },
+                    modifier = Modifier.testTag("credential-delete-confirm-cancel"),
+                ) { Text("取消") }
+            },
+        )
+    }
 }
 
 @Composable
