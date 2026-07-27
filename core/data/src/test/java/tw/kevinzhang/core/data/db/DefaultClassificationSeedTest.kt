@@ -39,7 +39,9 @@ class DefaultClassificationSeedTest {
 
     @Test
     fun `fresh database seeds the catalog and user rules run before defaults`() = runBlocking {
-        val categories = database.categoryDao().getByKind(tw.kevinzhang.core.data.model.CategoryKind.EXPENSE)
+        val categories = database.categoryDao().getByReportingGroup(
+            tw.kevinzhang.core.data.model.CategoryReportingGroup.EXPENSE,
+        )
         assertTrue(categories.any { it.id == "expense-food" })
 
         val defaultRule = DefaultClassificationCatalog.publicAutoCategoryRules.first()

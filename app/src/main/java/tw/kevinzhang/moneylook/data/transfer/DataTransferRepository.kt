@@ -621,7 +621,7 @@ class DataTransferRepository @Inject constructor(
             categoriesById[imported.id]?.let { return DefinitionResolution.Success(it) }
             val nameKey = imported.name.lowercase(Locale.ROOT)
             categoriesByName[nameKey]?.let { sameName ->
-                return if (sameName.kind == imported.kind) {
+                return if (sameName.reportingGroup == imported.reportingGroup) {
                     DefinitionResolution.Success(sameName)
                 } else {
                     DefinitionResolution.Conflict(

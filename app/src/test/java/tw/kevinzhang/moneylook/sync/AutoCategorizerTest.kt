@@ -27,10 +27,10 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRule
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
-import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.ClassificationOutcome
 import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
@@ -56,7 +56,7 @@ class AutoCategorizerTest {
                     name = "帳戶移轉",
                     color = "#607D8B",
                     emoji = "🔄",
-                    kind = CategoryKind.TRANSFER,
+                    reportingGroup = CategoryReportingGroup.EXCLUDED,
                 ),
             )
         }
@@ -82,7 +82,7 @@ class AutoCategorizerTest {
             rule = AutoCategoryRule(
                 id = "merchant-rule",
                 name = "商家",
-                direction = AutoCategoryRuleDirection.EXPENSE,
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
                 categoryId = food.id,
             ),
             conditions = listOf(
@@ -102,7 +102,7 @@ class AutoCategorizerTest {
                 id = "nonmatching-rule",
                 name = "不符合",
                 descriptionContains = "absent",
-                direction = AutoCategoryRuleDirection.EXPENSE,
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
                 categoryId = food.id,
             ),
             emptySet(),
@@ -133,7 +133,7 @@ class AutoCategorizerTest {
             AutoCategoryRule(
                 id = "rollback-rule",
                 name = "Rollback rule",
-                direction = AutoCategoryRuleDirection.EXPENSE,
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
                 categoryId = category.id,
             ),
             emptySet(),
@@ -176,7 +176,7 @@ class AutoCategorizerTest {
                 id = "coffee",
                 name = "咖啡",
                 descriptionContains = "COFFEE",
-                direction = AutoCategoryRuleDirection.EXPENSE,
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
                 minAbsoluteAmount = 100.0,
                 maxAbsoluteAmount = 200.0,
                 accountId = "account",
@@ -189,7 +189,7 @@ class AutoCategorizerTest {
             AutoCategoryRule(
                 id = "fallback",
                 name = "所有支出",
-                direction = AutoCategoryRuleDirection.EXPENSE,
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
                 categoryId = other.id,
                 priority = 10,
             ),
@@ -242,7 +242,7 @@ class AutoCategorizerTest {
                 id = "coffee",
                 name = "咖啡",
                 descriptionContains = "coffee",
-                direction = AutoCategoryRuleDirection.EXPENSE,
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
                 categoryId = food.id,
             ),
             emptySet(),
@@ -361,13 +361,13 @@ class AutoCategorizerTest {
     }
 
     @Test
-    fun `matcher normalizes transaction text and keeps direction amount and account conditions`() {
+    fun `matcher normalizes transaction text and keeps amount-sign amount and account conditions`() {
         val matching = ruleWithTags(
             AutoCategoryRule(
                 id = "matching",
                 name = "matching",
                 descriptionContains = "SHOP",
-                direction = AutoCategoryRuleDirection.EXPENSE,
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
                 minAbsoluteAmount = 100.0,
                 maxAbsoluteAmount = 100.0,
                 accountId = "account",
@@ -573,9 +573,9 @@ class AutoCategorizerTest {
     }
 
     @Test
-    fun `v2 matcher enforces action and direction account kind extension and category guards`() {
+    fun `v2 matcher enforces action amount sign account kind extension and category guards`() {
         val expense = Category("expense", "餐飲", "#2E7D32")
-        val income = Category("income", "收入", "#1565C0", kind = CategoryKind.INCOME)
+        val income = Category("income", "收入", "#1565C0", reportingGroup = CategoryReportingGroup.INCOME)
         val candidate = classificationCandidate(
             transfer("scoped", "薪資", 100.0, extensionId = "target-extension"),
             accountKind = AssetKind.CREDIT_CARD,
@@ -584,7 +584,7 @@ class AutoCategorizerTest {
             id = "automatic",
             category = income,
             action = AutoCategoryRuleAction.AUTO_APPLY,
-            direction = AutoCategoryRuleDirection.INCOME,
+            amountSign = AutoCategoryRuleAmountSign.POSITIVE,
             accountKind = AssetKind.CREDIT_CARD,
             extensionId = "target-extension",
             conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "薪資")),
@@ -596,10 +596,259 @@ class AutoCategorizerTest {
         val wrongKind = v2Rule(
             id = "wrong-kind",
             category = expense,
-            direction = AutoCategoryRuleDirection.INCOME,
+            amountSign = AutoCategoryRuleAmountSign.POSITIVE,
             conditions = listOf(condition(0, AutoCategoryRuleConditionGroup.INCLUDE_ANY, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "薪資")),
         )
         assertNull(listOf(wrongKind).classificationDecision(candidate))
+    }
+
+    @Test
+    fun `category reporting group is the sole category compatibility authority`() {
+        val income = Category(
+            "income",
+            "收入",
+            "#1565C0",
+            reportingGroup = CategoryReportingGroup.INCOME,
+        )
+        val expense = Category("expense", "支出", "#D32F2F")
+        val excluded = Category(
+            "excluded",
+            "不統計",
+            "#607D8B",
+            reportingGroup = CategoryReportingGroup.EXCLUDED,
+        )
+
+        fun isCompatible(category: Category, amount: Double): Boolean {
+            val rule = v2Rule(
+                id = "${category.id}-$amount",
+                category = category,
+                conditions = listOf(
+                    condition(
+                        0,
+                        AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                        AutoCategoryRuleConditionField.DESCRIPTION,
+                        AutoCategoryRuleConditionMatchMode.EXACT,
+                        "compatible",
+                    ),
+                ),
+            )
+            return listOf(rule).classificationDecision(
+                classificationCandidate(transfer("${category.id}-$amount", "compatible", amount)),
+            ) is ClassificationDecision.AutoApply
+        }
+
+        assertTrue(isCompatible(income, 1.0))
+        assertFalse(isCompatible(expense, 1.0))
+        assertTrue(isCompatible(excluded, 1.0))
+        assertFalse(isCompatible(income, -1.0))
+        assertTrue(isCompatible(expense, -1.0))
+        assertTrue(isCompatible(excluded, -1.0))
+        assertFalse(isCompatible(income, 0.0))
+        assertFalse(isCompatible(expense, 0.0))
+        assertTrue(isCompatible(excluded, 0.0))
+    }
+
+    @Test
+    fun `default financial patterns retain precise reporting-group and amount-sign boundaries`() {
+        val interest = Category(
+            "income-interest",
+            "利息收入",
+            "#1565C0",
+            reportingGroup = CategoryReportingGroup.INCOME,
+        )
+        val cashback = Category(
+            "income-cashback",
+            "現金回饋",
+            "#1565C0",
+            reportingGroup = CategoryReportingGroup.INCOME,
+        )
+        val cash = Category("expense-cash", "現金消費", "#D32F2F")
+        val accountTransfer = Category(
+            "transfer-account",
+            "帳戶移轉",
+            "#607D8B",
+            reportingGroup = CategoryReportingGroup.EXCLUDED,
+        )
+        val depositInterest = v2Rule(
+            id = "deposit-interest",
+            category = interest,
+            amountSign = AutoCategoryRuleAmountSign.POSITIVE,
+            accountKind = AssetKind.DEPOSIT,
+            conditions = listOf(
+                condition(
+                    0,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "存款利息",
+                ),
+                condition(
+                    1,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "優惠利息",
+                ),
+                condition(
+                    2,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "存款息",
+                ),
+            ),
+        )
+        val cardCashback = v2Rule(
+            id = "card-cashback",
+            category = cashback,
+            amountSign = AutoCategoryRuleAmountSign.POSITIVE,
+            accountKind = AssetKind.CREDIT_CARD,
+            conditions = listOf(
+                condition(
+                    0,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "刷卡現金回饋",
+                ),
+            ),
+        )
+        val cashWithdrawal = v2Rule(
+            id = "cash-withdrawal",
+            category = cash,
+            amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
+            accountKind = AssetKind.DEPOSIT,
+            conditions = listOf(
+                condition(
+                    0,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "提款",
+                ),
+                condition(
+                    1,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "跨提",
+                ),
+                condition(
+                    2,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "現金提",
+                ),
+            ),
+        )
+        val cashDeposit = v2Rule(
+            id = "cash-deposit",
+            category = accountTransfer,
+            amountSign = AutoCategoryRuleAmountSign.POSITIVE,
+            accountKind = AssetKind.DEPOSIT,
+            conditions = listOf(
+                condition(
+                    0,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "atm存",
+                ),
+                condition(
+                    1,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "cdm存款",
+                ),
+            ),
+        )
+        val easyCardTopUp = v2Rule(
+            id = "easycard-topup",
+            category = accountTransfer,
+            conditions = listOf(
+                condition(
+                    0,
+                    AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    AutoCategoryRuleConditionField.DESCRIPTION,
+                    AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    "代扣 悠遊儲值",
+                ),
+            ),
+        )
+
+        fun selectedCategoryId(
+            transfer: Transfer,
+            accountKind: AssetKind,
+        ): String? = ((listOf(depositInterest, cardCashback, cashWithdrawal, cashDeposit, easyCardTopUp)
+            .classificationDecision(classificationCandidate(transfer, accountKind = accountKind))
+            as? ClassificationDecision.AutoApply)
+            ?.evaluation?.ruleWithTags?.rule?.categoryId)
+
+        assertEquals(
+            interest.id,
+            selectedCategoryId(transfer("interest", "存款利息", 10.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            interest.id,
+            selectedCategoryId(transfer("promotional-interest", "優惠利息", 10.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            interest.id,
+            selectedCategoryId(transfer("deposit-interest-short", "存款息", 10.0), AssetKind.DEPOSIT),
+        )
+        assertNull(
+            selectedCategoryId(transfer("revolving", "循環信用利息", -10.0), AssetKind.CREDIT_CARD),
+        )
+        assertEquals(
+            cashback.id,
+            selectedCategoryId(transfer("cashback", "刷卡現金回饋", 25.0), AssetKind.CREDIT_CARD),
+        )
+        assertNull(
+            selectedCategoryId(transfer("cashback-negative", "刷卡現金回饋", -25.0), AssetKind.CREDIT_CARD),
+        )
+        assertEquals(
+            cash.id,
+            selectedCategoryId(transfer("atm", "ATM 提款", -100.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            cash.id,
+            selectedCategoryId(transfer("interbank", "跨提 手續", -100.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            cash.id,
+            selectedCategoryId(transfer("cash", "現金提領", -100.0), AssetKind.DEPOSIT),
+        )
+        assertNull(
+            selectedCategoryId(transfer("positive-withdrawal", "ATM 提款", 100.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            accountTransfer.id,
+            selectedCategoryId(transfer("atm-deposit", "ＡＴＭ存", 100.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            accountTransfer.id,
+            selectedCategoryId(transfer("cdm-deposit", "CDM存款", 100.0), AssetKind.DEPOSIT),
+        )
+        assertNull(
+            selectedCategoryId(transfer("negative-deposit", "ＡＴＭ存", -100.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            accountTransfer.id,
+            selectedCategoryId(transfer("easycard-negative", "代扣：悠遊儲值 全家", -200.0), AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            accountTransfer.id,
+            selectedCategoryId(transfer("easycard-positive", "代扣：悠遊儲值 統一", 200.0), AssetKind.LOAN),
+        )
+        assertEquals(
+            accountTransfer.id,
+            selectedCategoryId(transfer("easycard-credit-card", "代扣：悠遊儲值", -200.0), AssetKind.CREDIT_CARD),
+        )
+        assertNull(
+            selectedCategoryId(transfer("other-topup", "代扣：一卡通儲值", -200.0), AssetKind.DEPOSIT),
+        )
     }
 
     @Test
@@ -623,14 +872,14 @@ class AutoCategorizerTest {
 
     @Test
     fun `automatic rule replaces an existing automatic annotation`() = runBlocking {
-        val income = Category("income", "收入", "#1565C0", kind = CategoryKind.INCOME)
-        val existing = Category("existing", "既有", "#2E7D32", kind = CategoryKind.INCOME)
+        val income = Category("income", "收入", "#1565C0", reportingGroup = CategoryReportingGroup.INCOME)
+        val existing = Category("existing", "既有", "#2E7D32", reportingGroup = CategoryReportingGroup.INCOME)
         database.categoryDao().upsert(income)
         database.categoryDao().upsert(existing)
         val rule = AutoCategoryRule(
             id = "salary-automatic",
             name = "薪資分類",
-            direction = AutoCategoryRuleDirection.INCOME,
+            amountSign = AutoCategoryRuleAmountSign.POSITIVE,
             categoryId = income.id,
             action = AutoCategoryRuleAction.AUTO_APPLY,
         )
@@ -936,7 +1185,7 @@ class AutoCategorizerTest {
         category: Category,
         conditions: List<AutoCategoryRuleCondition>,
         action: AutoCategoryRuleAction = AutoCategoryRuleAction.AUTO_APPLY,
-        direction: AutoCategoryRuleDirection = AutoCategoryRuleDirection.ANY,
+        amountSign: AutoCategoryRuleAmountSign = AutoCategoryRuleAmountSign.ANY,
         accountKind: AssetKind? = null,
         extensionId: String? = null,
     ) = AutoCategoryRuleWithTags(
@@ -946,7 +1195,7 @@ class AutoCategorizerTest {
             categoryId = category.id,
             action = action,
             origin = AutoCategoryRuleOrigin.USER_CONFIRMED,
-            direction = direction,
+            amountSign = amountSign,
             accountKind = accountKind,
             extensionId = extensionId,
         ),

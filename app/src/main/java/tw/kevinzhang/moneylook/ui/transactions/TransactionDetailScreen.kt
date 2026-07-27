@@ -49,10 +49,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 
 data class TransactionDetailUiState(
     val title: String,
@@ -179,7 +180,7 @@ fun TransactionDetailContent(
                 editingRule = draft.matchingRule ?: defaultExactDescriptionRule(
                     description = state.description,
                     categoryId = draft.categoryId,
-                    direction = state.amount.toAutoRuleDirection(),
+                    amountSign = state.amount.toAutoRuleAmountSign(),
                     accountKind = state.accountKind,
                     extensionId = state.extensionId,
                 )
@@ -429,7 +430,7 @@ private fun CategoryPickerSheet(
     onEditRule: () -> Unit,
 ) {
     var kind by remember(selectedCategoryId) {
-        mutableStateOf(categories.firstOrNull { it.id == selectedCategoryId }?.kind ?: allowedKinds(amount).first())
+        mutableStateOf(categories.firstOrNull { it.id == selectedCategoryId }?.reportingGroup ?: allowedKinds(amount).first())
     }
     val appliesToMatches = currentRule != null
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -447,7 +448,7 @@ private fun CategoryPickerSheet(
                         currentRule ?: defaultExactDescriptionRule(
                             description = description,
                             categoryId = selectedCategoryId,
-                            direction = amount.toAutoRuleDirection(),
+                            amountSign = amount.toAutoRuleAmountSign(),
                             accountKind = accountKind,
                             extensionId = extensionId,
                         ),
@@ -457,7 +458,7 @@ private fun CategoryPickerSheet(
             )
             HorizontalDivider()
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CategoryKind.entries.forEach { item ->
+                CategoryReportingGroup.entries.forEach { item ->
                     FilterChip(
                         selected = kind == item,
                         onClick = { kind = item },
@@ -468,7 +469,7 @@ private fun CategoryPickerSheet(
             }
             if (kind in allowedKinds(amount)) {
                 CategoryGrid(
-                    categories = categories.filter { it.kind == kind },
+                    categories = categories.filter { it.reportingGroup == kind },
                     selectedCategoryId = selectedCategoryId,
                     onSelect = onSelectCategory,
                 )
@@ -568,16 +569,10 @@ internal fun ColorDot(color: Long) {
     Box(modifier = Modifier.padding(end = 2.dp).background(Color(color), CircleShape).then(Modifier.padding(4.dp)))
 }
 
-internal fun allowedKinds(amount: Double): Set<CategoryKind> = when {
-    amount > 0.0 -> setOf(CategoryKind.INCOME, CategoryKind.TRANSFER)
-    amount < 0.0 -> setOf(CategoryKind.EXPENSE, CategoryKind.TRANSFER)
-    else -> setOf(CategoryKind.TRANSFER)
-}
-
-internal fun CategoryKind.toDisplayName(): String = when (this) {
-    CategoryKind.EXPENSE -> "支出"
-    CategoryKind.INCOME -> "收入"
-    CategoryKind.TRANSFER -> "移轉"
+internal fun allowedKinds(amount: Double): Set<CategoryReportingGroup> = when {
+    amount > 0.0 -> setOf(CategoryReportingGroup.INCOME, CategoryReportingGroup.EXCLUDED)
+    amount < 0.0 -> setOf(CategoryReportingGroup.EXPENSE, CategoryReportingGroup.EXCLUDED)
+    else -> setOf(CategoryReportingGroup.EXCLUDED)
 }
 
 internal const val UNCATEGORIZED_EMOJI = "🏷️"
@@ -586,14 +581,14 @@ private const val UNCATEGORIZED_COLOR = 0xFF607D8B
 internal fun defaultExactDescriptionRule(
     description: String,
     categoryId: String?,
-    direction: TransactionDirection? = null,
+    amountSign: AutoCategoryRuleAmountSign = AutoCategoryRuleAmountSign.ANY,
     accountKind: AssetKind? = null,
     extensionId: String? = null,
 ): AutoRuleDraft = AutoRuleDraft(
     name = "${description.trim().take(24).ifBlank { "相同明細" }}分類",
     descriptionContains = description.trim(),
     descriptionMatchMode = AutoCategoryRuleDescriptionMatchMode.EXACT,
-    direction = direction,
+    amountSign = amountSign,
     accountKind = accountKind,
     extensionId = extensionId,
     origin = AutoCategoryRuleOrigin.USER_CONFIRMED,
@@ -603,10 +598,10 @@ internal fun defaultExactDescriptionRule(
     applyExisting = true,
 )
 
-private fun Double.toAutoRuleDirection(): TransactionDirection? = when {
-    this > 0.0 -> TransactionDirection.INCOME
-    this < 0.0 -> TransactionDirection.EXPENSE
-    else -> null
+private fun Double.toAutoRuleAmountSign(): AutoCategoryRuleAmountSign = when {
+    this > 0.0 -> AutoCategoryRuleAmountSign.POSITIVE
+    this < 0.0 -> AutoCategoryRuleAmountSign.NEGATIVE
+    else -> AutoCategoryRuleAmountSign.ANY
 }
 
 internal fun draftTagId(name: String): String = "draft:$name"

@@ -3,9 +3,9 @@ package tw.kevinzhang.core.data.db
 import androidx.room.TypeConverter
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
-import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
@@ -26,11 +26,11 @@ class AssetKindConverters {
     fun toAssignmentSource(value: String): AssignmentSource = AssignmentSource.valueOf(value)
 
     @TypeConverter
-    fun fromAutoCategoryRuleDirection(value: AutoCategoryRuleDirection): String = value.name
+    fun fromAutoCategoryRuleAmountSign(value: AutoCategoryRuleAmountSign): String = value.name
 
     @TypeConverter
-    fun toAutoCategoryRuleDirection(value: String): AutoCategoryRuleDirection =
-        AutoCategoryRuleDirection.valueOf(value)
+    fun toAutoCategoryRuleAmountSign(value: String): AutoCategoryRuleAmountSign =
+        AutoCategoryRuleAmountSign.valueOf(value)
 
     @TypeConverter
     fun fromAutoCategoryRuleDescriptionMatchMode(value: AutoCategoryRuleDescriptionMatchMode): String = value.name
@@ -40,10 +40,10 @@ class AssetKindConverters {
         AutoCategoryRuleDescriptionMatchMode.valueOf(value)
 
     @TypeConverter
-    fun fromCategoryKind(value: CategoryKind): String = value.name
+    fun fromCategoryReportingGroup(value: CategoryReportingGroup): String = value.name
 
     @TypeConverter
-    fun toCategoryKind(value: String): CategoryKind = CategoryKind.valueOf(value)
+    fun toCategoryReportingGroup(value: String): CategoryReportingGroup = CategoryReportingGroup.valueOf(value)
 
     @TypeConverter
     fun fromRuleOrigin(value: AutoCategoryRuleOrigin): String = value.name

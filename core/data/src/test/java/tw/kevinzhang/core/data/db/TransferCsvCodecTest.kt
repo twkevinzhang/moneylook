@@ -9,7 +9,7 @@ import org.junit.Test
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -94,6 +94,19 @@ class TransferCsvCodecTest {
         }
     }
 
+    @Test
+    fun `legacy TRANSFER category imports as EXCLUDED while new exports write EXCLUDED`() {
+        val legacy = csv(record()).replaceFirst(",EXPENSE,", ",TRANSFER,")
+        val decoded = mutableListOf<TransferCsvRecord>()
+
+        val result = TransferCsvCodec.decode(StringReader(legacy)) { decoded += it }
+
+        assertEquals(TransferCsvDecodeResult.Success(1), result)
+        assertEquals(CategoryReportingGroup.EXCLUDED, decoded.single().category?.reportingGroup)
+        val current = csv(record(categoryReportingGroup = CategoryReportingGroup.EXCLUDED))
+        assertTrue(current.contains(",EXCLUDED,"))
+    }
+
     private fun csv(record: TransferCsvRecord): String = StringWriter().also { writer ->
         TransferCsvCodec.write(writer, sequenceOf(record))
     }.toString()
@@ -103,6 +116,7 @@ class TransferCsvCodecTest {
     private fun record(
         id: String = "t-1",
         tags: List<TransferCsvTagAssignment> = listOf(tag("coffee", AssignmentSource.AUTO)),
+        categoryReportingGroup: CategoryReportingGroup = CategoryReportingGroup.EXPENSE,
     ): TransferCsvRecord {
         val account = TransferCsvAccountMetadata("account-1", "ext-1", "source-key", AssetKind.CREDIT_CARD, "TWD", "主卡", "Example Bank")
         val transfer = Transfer(
@@ -117,6 +131,6 @@ class TransferCsvCodecTest {
             sourceFieldsJson = "source-fields-secret", sourceFactsJson = "source-facts-secret", parserVersion = "v4",
         )
         val annotation = TransferAnnotation(id, "ext-1", "food", "personal\nnote", AssignmentSource.MANUAL, true, null, null, null, "classifier")
-        return TransferCsvRecord(account, transfer, annotation, Category("food", "餐飲", "#FF0000", "🍽️", CategoryKind.EXPENSE), tags)
+        return TransferCsvRecord(account, transfer, annotation, Category("food", "餐飲", "#FF0000", "🍽️", categoryReportingGroup), tags)
     }
 }

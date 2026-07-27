@@ -641,6 +641,7 @@ private fun GlobalTransactionFilterSheet(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     DirectionChip("收入", GlobalTransactionDirection.INCOME, state.filter.direction, onUpdate)
                     DirectionChip("支出", GlobalTransactionDirection.EXPENSE, state.filter.direction, onUpdate)
+                    DirectionChip("不統計", GlobalTransactionDirection.EXCLUDED, state.filter.direction, onUpdate)
                 }
             }
             item {

@@ -5,7 +5,7 @@ import java.io.Writer
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -286,7 +286,7 @@ object TransferCsvCodec {
             putNullable("autoRuleId", a.autoRuleId); putNullable("autoRuleSetId", a.autoRuleSetId); putNullableInt("autoMatchScore", a.autoMatchScore)
             putNullable("classifierVersion", a.classifierVersion)
         }
-        record.category?.let { c -> put("categoryName", c.name); put("categoryColor", c.color); put("categoryEmoji", c.emoji); put("categoryKind", c.kind.name) }
+        record.category?.let { c -> put("categoryName", c.name); put("categoryColor", c.color); put("categoryEmoji", c.emoji); put("categoryKind", c.reportingGroup.name) }
     }.values
 
     private fun tagRow(transferId: String, assignment: TransferCsvTagAssignment): List<String> = row().apply {
@@ -350,7 +350,13 @@ object TransferCsvCodec {
             return null
         }
         require(fields.none { row.value(it).isEmpty() }) { "partial category definition" }
-        return Category(id, row.value("categoryName"), row.value("categoryColor"), row.value("categoryEmoji"), enum(row.value("categoryKind"), "category kind"))
+        return Category(
+            id,
+            row.value("categoryName"),
+            row.value("categoryColor"),
+            row.value("categoryEmoji"),
+            categoryReportingGroup(row.value("categoryKind")),
+        )
     }
 
     private fun validateRecord(record: TransferCsvRecord) {
@@ -386,6 +392,11 @@ object TransferCsvCodec {
     private fun nullable(value: String?): String = value?.let { STRING + it } ?: NULL
     private fun decodeNullable(value: String): String? = when { value == NULL -> null; value.startsWith(STRING) -> value.removePrefix(STRING); else -> fail("invalid nullable value") }
     private inline fun <reified T : Enum<T>> enum(value: String, name: String): T = enumValues<T>().firstOrNull { it.name == value } ?: fail("invalid $name")
+    /** Reads v1 category values while writing the precise v24 reporting-group contract. */
+    private fun categoryReportingGroup(value: String): CategoryReportingGroup = when (value) {
+        "TRANSFER" -> CategoryReportingGroup.EXCLUDED
+        else -> enum(value, "category reporting group")
+    }
     private fun required(value: String, name: String): String { require(value.isNotBlank()) { "missing $name" }; validateLength(value, name); return value }
     private fun validateLength(value: String, name: String) { require(value.length <= MAX_ID_CHARS) { "$name is too long" } }
     private fun fail(reason: String): Nothing = throw IllegalArgumentException(reason)

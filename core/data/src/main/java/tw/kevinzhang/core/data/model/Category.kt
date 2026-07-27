@@ -5,11 +5,17 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/** A user-managed category shared by every installed extension. */
-enum class CategoryKind {
-    EXPENSE,
+/**
+ * The one and only reporting group for a category.
+ *
+ * A category is always part of income, expense, or excluded reporting.  This is intentionally
+ * not a transaction-direction hint: an uncategorized transaction continues to use its amount
+ * sign for provisional reporting, while a categorized transaction is governed by this group.
+ */
+enum class CategoryReportingGroup {
     INCOME,
-    TRANSFER,
+    EXPENSE,
+    EXCLUDED,
 }
 
 @Entity(
@@ -22,8 +28,13 @@ data class Category(
     val color: String,
     /** Displayed in ledger rows and the transaction-detail header. */
     val emoji: String = DEFAULT_EMOJI,
-    /** Transfer categories are excluded from income-and-expense reporting. */
-    val kind: CategoryKind = CategoryKind.EXPENSE,
+    /**
+     * Reporting group for every transaction assigned to this category.
+     *
+     * Keep the established SQL column name while making the domain name explicit in Kotlin.
+     */
+    @ColumnInfo(name = "kind")
+    val reportingGroup: CategoryReportingGroup = CategoryReportingGroup.EXPENSE,
 ) {
     init {
         require(name == name.trim() && name.isNotEmpty()) { "category name must be non-blank and trimmed" }

@@ -2,7 +2,7 @@ package tw.kevinzhang.moneylook.ui.analysis
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionItem
 import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionsUiState
 import tw.kevinzhang.moneylook.ui.transactions.filterGlobalTransactions
@@ -43,12 +43,12 @@ private fun GlobalTransactionItem.toTwdAnalysisTransaction(): AnalysisTransactio
     currency = "TWD",
     categoryName = categoryName,
     categoryColor = categoryColor,
-    categoryKind = categoryKind?.toAnalysisKind(),
+    categoryReportingGroup = categoryReportingGroup?.toAnalysisReportingGroup(),
     )
 }
 
-private fun CategoryKind.toAnalysisKind(): AnalysisCategoryKind = when (this) {
-    CategoryKind.INCOME -> AnalysisCategoryKind.INCOME
-    CategoryKind.EXPENSE -> AnalysisCategoryKind.EXPENSE
-    CategoryKind.TRANSFER -> AnalysisCategoryKind.TRANSFER
+private fun CategoryReportingGroup.toAnalysisReportingGroup(): AnalysisReportingGroup = when (this) {
+    CategoryReportingGroup.INCOME -> AnalysisReportingGroup.INCOME
+    CategoryReportingGroup.EXPENSE -> AnalysisReportingGroup.EXPENSE
+    CategoryReportingGroup.EXCLUDED -> AnalysisReportingGroup.EXCLUDED
 }

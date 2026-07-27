@@ -51,6 +51,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 
 data class AccountOption(val id: String, val name: String)
 
@@ -211,11 +212,11 @@ fun AutoRuleEditorDialog(
                         )
                     }
                 }
-                Text("收支方向", style = MaterialTheme.typography.labelLarge)
+                Text("金額方向", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(draft.direction == null, { draft = draft.copy(direction = null) }, { Text("不限") })
-                    FilterChip(draft.direction == TransactionDirection.INCOME, { draft = draft.copy(direction = TransactionDirection.INCOME) }, { Text("收入") })
-                    FilterChip(draft.direction == TransactionDirection.EXPENSE, { draft = draft.copy(direction = TransactionDirection.EXPENSE) }, { Text("支出") })
+                    FilterChip(draft.amountSign == AutoCategoryRuleAmountSign.ANY, { draft = draft.copy(amountSign = AutoCategoryRuleAmountSign.ANY) }, { Text("不限") })
+                    FilterChip(draft.amountSign == AutoCategoryRuleAmountSign.POSITIVE, { draft = draft.copy(amountSign = AutoCategoryRuleAmountSign.POSITIVE) }, { Text("正額") })
+                    FilterChip(draft.amountSign == AutoCategoryRuleAmountSign.NEGATIVE, { draft = draft.copy(amountSign = AutoCategoryRuleAmountSign.NEGATIVE) }, { Text("負額") })
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(draft.minAbsoluteAmount, { draft = draft.copy(minAbsoluteAmount = it) }, label = { Text("最低金額") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true, modifier = Modifier.weight(1f))
@@ -262,7 +263,7 @@ internal fun AutoRuleDraft.isValidForSave(): Boolean {
             (maxAbsoluteAmount.isBlank() || max?.isFinite() == true && max >= 0.0) &&
             (min == null || max == null || min <= max)
     val hasCondition = conditions.isNotEmpty() || descriptionContains.isNotBlank() ||
-        direction != null || min != null || max != null || accountId != null ||
+        amountSign != AutoCategoryRuleAmountSign.ANY || min != null || max != null || accountId != null ||
         accountKind != null || extensionId != null
     val hasAction = categoryId != null || tagIds.isNotEmpty()
     return name.isNotBlank() && amountsAreValid && hasCondition && hasAction
@@ -274,7 +275,7 @@ internal fun ruleSummary(rule: AutoRuleDraft, categories: List<CategoryOption>, 
         rule.descriptionContains.takeIf(String::isNotBlank)?.let {
             add(if (rule.descriptionMatchMode == AutoCategoryRuleDescriptionMatchMode.EXACT) "交易文字完全是「$it」" else "交易文字含「$it」")
         }
-        rule.direction?.let { add(if (it == TransactionDirection.INCOME) "收入" else "支出") }
+        rule.amountSign.toRuleAmountSignLabel()?.let(::add)
         rule.minAbsoluteAmount.takeIf(String::isNotBlank)?.let { add("≥ $it") }
         rule.maxAbsoluteAmount.takeIf(String::isNotBlank)?.let { add("≤ $it") }
     }.ifEmpty { listOf("所有交易") }.joinToString("、")
@@ -311,7 +312,7 @@ internal fun AutoRuleDraft.structuredRuleSummary(): String {
         }.takeIf { it > 0 }?.let { add("文字條件 ${it}項") }
     }.ifEmpty { listOf("結構化條件") }
     val scopes = buildList {
-        direction?.let { add(if (it == TransactionDirection.INCOME) "收入" else "支出") }
+        amountSign.toRuleAmountSignLabel()?.let(::add)
         accountKind?.let { add(it.toDisplayName()) }
         extensionId?.let { add("指定擴充功能") }
     }
@@ -323,4 +324,10 @@ private fun AssetKind.toDisplayName(): String = when (this) {
     AssetKind.TIME_DEPOSIT -> "定存"
     AssetKind.CREDIT_CARD -> "信用卡"
     AssetKind.LOAN -> "貸款"
+}
+
+private fun AutoCategoryRuleAmountSign.toRuleAmountSignLabel(): String? = when (this) {
+    AutoCategoryRuleAmountSign.ANY -> null
+    AutoCategoryRuleAmountSign.POSITIVE -> "正額"
+    AutoCategoryRuleAmountSign.NEGATIVE -> "負額"
 }

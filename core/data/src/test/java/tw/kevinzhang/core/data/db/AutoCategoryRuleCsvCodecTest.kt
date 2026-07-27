@@ -12,6 +12,44 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 
 class AutoCategoryRuleCsvCodecTest {
     @Test
+    fun `v4 writes amount sign and accepts legacy direction values`() {
+        val current = AutoCategoryRuleCsvCodec.encode(
+            AutoCategoryRuleCsvImport(
+                rules = listOf(
+                    AutoCategoryRule(
+                        id = "current",
+                        name = "Current",
+                        amountSign = tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign.POSITIVE,
+                    ),
+                ),
+                conditionsByRuleId = mapOf("current" to emptyList()),
+            ),
+        )
+        assertTrue(current.startsWith("moneylook-auto-category-rules,4"))
+        assertTrue(current.contains("amountSign"))
+
+        val legacy = AutoCategoryRuleCsvCodec.encodeV3(
+            AutoCategoryRuleCsvImport(
+                rules = listOf(
+                    AutoCategoryRule(
+                        id = "old",
+                        name = "Old",
+                        amountSign = tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign.NEGATIVE,
+                    ),
+                ),
+                conditionsByRuleId = mapOf("old" to emptyList()),
+            ),
+        )
+        assertTrue(legacy.contains(",EXPENSE,"))
+        assertTrue(!legacy.contains(",NEGATIVE,"))
+        val decoded = AutoCategoryRuleCsvCodec.decode(legacy) as AutoCategoryRuleCsvDecodeResult.Success
+        assertEquals(
+            tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign.NEGATIVE,
+            decoded.value.rules.single().amountSign,
+        )
+    }
+
+    @Test
     fun `v3 supports an empty custom-rule backup`() {
         val csv = AutoCategoryRuleCsvCodec.encode(
             AutoCategoryRuleCsvImport(
@@ -35,7 +73,7 @@ class AutoCategoryRuleCsvCodecTest {
         val noTextRule = AutoCategoryRule(
             id = "amount-only",
             name = "Only amount and account",
-            direction = tw.kevinzhang.core.data.model.AutoCategoryRuleDirection.EXPENSE,
+            amountSign = tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign.NEGATIVE,
             minAbsoluteAmount = 500.0,
             accountId = "account-1",
             categoryId = "expense-shopping",

@@ -15,7 +15,7 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -62,7 +62,7 @@ class GlobalTransferListDaoTest {
                 transfer("end", "account-b", "extension-b", "2026-08-01"),
             ),
         )
-        database.categoryDao().upsert(Category("food", "餐飲", "#FF9800", "🍜", CategoryKind.EXPENSE))
+        database.categoryDao().upsert(Category("food", "餐飲", "#FF9800", "🍜", CategoryReportingGroup.EXPENSE))
         database.tagDao().upsert(Tag("receipt", "收據", "#4CAF50"))
         database.transferAnnotationDao().saveManualAnnotation(
             TransferAnnotation(

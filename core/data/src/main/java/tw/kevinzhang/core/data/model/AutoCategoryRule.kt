@@ -8,10 +8,11 @@ import androidx.room.PrimaryKey
 import java.text.Normalizer
 import java.util.Locale
 
-enum class AutoCategoryRuleDirection {
+/** Amount-sign constraint used only while matching a rule; it is not a reporting category. */
+enum class AutoCategoryRuleAmountSign {
     ANY,
-    INCOME,
-    EXPENSE,
+    POSITIVE,
+    NEGATIVE,
 }
 
 /** Determines whether a rule matches a fragment of, or the whole normalized, transaction text. */
@@ -117,7 +118,8 @@ data class AutoCategoryRule(
     val name: String,
     /** Matches each normalized transaction-text field: description, memo, and type. */
     val descriptionContains: String? = null,
-    val direction: AutoCategoryRuleDirection = AutoCategoryRuleDirection.ANY,
+    @ColumnInfo(name = "direction")
+    val amountSign: AutoCategoryRuleAmountSign = AutoCategoryRuleAmountSign.ANY,
     val minAbsoluteAmount: Double? = null,
     val maxAbsoluteAmount: Double? = null,
     val accountId: String? = null,
