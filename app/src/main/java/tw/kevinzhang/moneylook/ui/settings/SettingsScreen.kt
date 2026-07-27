@@ -53,7 +53,7 @@ fun SettingsScreen(
             HorizontalDivider()
             SettingsRow(
                 title = "資料匯入與匯出",
-                description = "備份或移轉自動化分類規則與帳號密碼 CSV",
+                description = "備份或移轉分類規則、帳號密碼與交易明細 CSV",
                 onClick = onNavigateToDataTransfer,
             )
         }

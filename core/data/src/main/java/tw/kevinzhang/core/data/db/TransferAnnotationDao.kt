@@ -110,6 +110,16 @@ abstract class TransferAnnotationDao {
     @Query(TRANSFER_DETAIL_SELECT + " WHERE t.accountId = :accountId ORDER BY t.txnDateTime DESC")
     abstract fun observeByAccount(accountId: String): Flow<List<TransferListItem>>
 
+    /** Bounded, stable pages used by CSV export without loading the complete ledger. */
+    @Transaction
+    @Query(TRANSFER_DETAIL_SELECT + " ORDER BY t.id LIMIT :limit OFFSET :offset")
+    abstract suspend fun getAllDetailsPage(limit: Int, offset: Int): List<TransferDetail>
+
+    @Query("SELECT * FROM transfer_tag_cross_refs WHERE transferId IN (:transferIds)")
+    abstract suspend fun getTagCrossRefsForTransferIds(
+        transferIds: List<String>,
+    ): List<TransferTagCrossRef>
+
     /**
      * Observes every account's transactions in [startInclusive, endExclusive). ISO dates and
      * datetimes sort lexicographically, so callers can pass date prefixes such as 2026-07-01.
@@ -137,6 +147,33 @@ abstract class TransferAnnotationDao {
 
     @Upsert
     protected abstract suspend fun upsertTagCrossRefs(crossRefs: List<TransferTagCrossRef>)
+
+    /**
+     * Restores the exact portable annotation/tag snapshot without generating a manual-edit event.
+     * The enclosing file import owns its MANUAL_FILE ingestion audit.
+     */
+    @Transaction
+    open suspend fun replaceImportedMetadata(
+        transferId: String,
+        annotation: TransferAnnotation?,
+        tagCrossRefs: List<TransferTagCrossRef>,
+    ) {
+        require(annotation == null || annotation.transferId == transferId) {
+            "annotation transfer id mismatch"
+        }
+        require(tagCrossRefs.all { it.transferId == transferId }) {
+            "tag transfer id mismatch"
+        }
+        deleteAllTags(transferId)
+        if (annotation == null) {
+            deleteAnnotation(transferId)
+        } else {
+            upsert(annotation)
+        }
+        if (tagCrossRefs.isNotEmpty()) {
+            upsertTagCrossRefs(tagCrossRefs)
+        }
+    }
 
     /** Keeps an existing MANUAL assignment when an automatic rule proposes the same tag. */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -380,6 +417,9 @@ abstract class TransferAnnotationDao {
 
     @Query("DELETE FROM transfer_annotations WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteAnnotationsForExtension(extensionId: String)
+
+    @Query("DELETE FROM transfer_annotations WHERE transferId = :transferId")
+    protected abstract suspend fun deleteAnnotation(transferId: String)
 
     private companion object {
         const val TRANSFER_DETAIL_SELECT = """

@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 enum class CsvTransferTarget {
     AUTO_RULES,
     CREDENTIALS,
+    TRANSACTIONS,
 }
 
 enum class CsvTransferOperation {
@@ -78,6 +79,8 @@ data class CsvImportPreviewUiState(
     val skippedCount: Int,
     val errorCount: Int,
     val errorSummary: String? = null,
+    val warningCount: Int = 0,
+    val warningSummary: String? = null,
 ) {
     val canConfirm: Boolean
         get() = errorCount == 0
@@ -97,6 +100,8 @@ fun DataTransferScreen(
     onExportAutoRules: () -> Unit = {},
     onImportCredentials: () -> Unit = {},
     onExportCredentials: () -> Unit = {},
+    onImportTransactions: () -> Unit = {},
+    onExportTransactions: () -> Unit = {},
     onConfirmImport: () -> Unit = {},
     onDismissImportPreview: () -> Unit = {},
     onDismissStatus: () -> Unit = {},
@@ -119,6 +124,8 @@ fun DataTransferScreen(
             onExportAutoRules = onExportAutoRules,
             onImportCredentials = onImportCredentials,
             onExportCredentials = onExportCredentials,
+            onImportTransactions = onImportTransactions,
+            onExportTransactions = onExportTransactions,
             onConfirmImport = onConfirmImport,
             onDismissImportPreview = onDismissImportPreview,
             onDismissStatus = onDismissStatus,
@@ -134,6 +141,8 @@ fun DataTransferContent(
     onExportAutoRules: () -> Unit,
     onImportCredentials: () -> Unit,
     onExportCredentials: () -> Unit,
+    onImportTransactions: () -> Unit,
+    onExportTransactions: () -> Unit,
     onConfirmImport: () -> Unit,
     onDismissImportPreview: () -> Unit,
     onDismissStatus: () -> Unit,
@@ -173,6 +182,18 @@ fun DataTransferContent(
                 onImport = onImportCredentials,
                 onExport = onExportCredentials,
             )
+
+            TransferCard(
+                target = CsvTransferTarget.TRANSACTIONS,
+                title = "交易明細.csv",
+                description = "全部交易、分類、標籤與個人備註",
+                icon = Icons.Default.FileUpload,
+                status = state.status,
+                warning = "交易明細 CSV 未加密，包含財務資料。請只儲存在信任的位置，使用後立即移至安全位置或刪除。",
+                warningContentDescription = "未加密財務資料安全警告",
+                onImport = onImportTransactions,
+                onExport = onExportTransactions,
+            )
         }
 
         state.importPreview?.let { preview ->
@@ -209,6 +230,7 @@ private fun TransferCard(
     icon: ImageVector,
     status: CsvTransferStatus,
     warning: String? = null,
+    warningContentDescription: String = "明碼密碼安全警告",
     onImport: () -> Unit,
     onExport: () -> Unit,
 ) {
@@ -260,7 +282,7 @@ private fun TransferCard(
                     shape = MaterialTheme.shapes.medium,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .semantics { contentDescription = "明碼密碼安全警告" },
+                        .semantics { contentDescription = warningContentDescription },
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
@@ -359,9 +381,26 @@ private fun ImportPreviewDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                if (preview.warningCount > 0) {
+                    PreviewCountRow("警告", preview.warningCount)
+                }
+                preview.warningSummary?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (preview.target == CsvTransferTarget.CREDENTIALS) {
                     Text(
                         text = "確認後只會儲存登入資料與排程，不會立即登入或同步銀行。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (preview.target == CsvTransferTarget.TRANSACTIONS) {
+                    Text(
+                        text = "確認後只會寫入可匹配帳戶的交易、分類、標籤與備註，不會立即同步銀行或重新套用分類規則。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -435,6 +474,7 @@ private fun StatusDialog(
 private fun CsvTransferTarget.displayName(): String = when (this) {
     CsvTransferTarget.AUTO_RULES -> "自動化分類規則"
     CsvTransferTarget.CREDENTIALS -> "帳號密碼"
+    CsvTransferTarget.TRANSACTIONS -> "交易明細"
 }
 
 private fun CsvTransferOperation.displayName(): String = when (this) {
