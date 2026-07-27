@@ -24,7 +24,7 @@ import javax.inject.Inject
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
-class GlobalTransactionsViewModel @Inject constructor(
+class GlobalLedgerViewModel @Inject constructor(
     private val transferAnnotationDao: TransferAnnotationDao,
     private val exchangeRateRepository: TwdExchangeRateRepository,
 ) : ViewModel() {
@@ -36,9 +36,9 @@ class GlobalTransactionsViewModel @Inject constructor(
      * category report direction deliberately lives in [categoryDirection], so
      * touching a report card cannot silently narrow the detail ledger.
      */
-    private val filter = MutableStateFlow(GlobalTransactionsFilter())
-    private val activeTab = MutableStateFlow(GlobalTransactionsTab.CATEGORY)
-    private val categoryDirection = MutableStateFlow(GlobalTransactionDirection.EXPENSE)
+    private val filter = MutableStateFlow(GlobalLedgerFilter())
+    private val activeTab = MutableStateFlow(GlobalLedgerTab.CATEGORY)
+    private val categoryDirection = MutableStateFlow(GlobalLedgerDirection.EXPENSE)
     private val exchangeRateState = MutableStateFlow(ExchangeRateState())
 
     init {
@@ -68,7 +68,7 @@ class GlobalTransactionsViewModel @Inject constructor(
         )
     }
 
-    val state: StateFlow<GlobalTransactionsUiState> = combine(
+    val state: StateFlow<GlobalLedgerUiState> = combine(
         combine(rawItems, rawTrendItems) { current, trend -> current to trend },
         periodSelection,
         filter,
@@ -76,12 +76,13 @@ class GlobalTransactionsViewModel @Inject constructor(
         exchangeRateState,
     ) { itemSets, currentPeriod, currentFilter, tabState, rates ->
         val currentRange = currentPeriod.range
-        val allItems = itemSets.first.map { it.toGlobalTransactionItem(rates.ratesPerTwd) }
-        val trendItems = itemSets.second.map { it.toGlobalTransactionItem(rates.ratesPerTwd) }
+        val allItems = itemSets.first.map { it.toGlobalLedgerItem(rates.ratesPerTwd) }
+        val trendItems = itemSets.second.map { it.toGlobalLedgerItem(rates.ratesPerTwd) }
         val sharedFilter = currentFilter.copy(direction = null)
-        val reportItems = globalReportableTransactions(filterGlobalTransactions(allItems, sharedFilter))
-        val visibleItems = filterGlobalTransactions(allItems, currentFilter)
-        GlobalTransactionsUiState(
+        val sharedItems = filterGlobalLedger(allItems, sharedFilter)
+        val reportItems = globalReportableTransactions(sharedItems)
+        val visibleItems = filterGlobalLedger(allItems, currentFilter)
+        GlobalLedgerUiState(
             dateRange = currentRange,
             datePagerAnchor = currentPeriod.anchor,
             filter = currentFilter,
@@ -91,8 +92,8 @@ class GlobalTransactionsViewModel @Inject constructor(
             items = visibleItems,
             // The analysis chart always needs both income and expense series;
             // it shares every other filter with this screen.
-            trendItems = globalReportableTransactions(filterGlobalTransactions(trendItems, sharedFilter)),
-            summary = globalTransactionsSummary(reportItems),
+            trendItems = globalReportableTransactions(filterGlobalLedger(trendItems, sharedFilter)),
+            summary = globalLedgerSummary(reportItems),
             categories = globalCategorySummaries(reportItems, tabState.second),
             missingExchangeCurrencies = missingExchangeCurrencies(reportItems),
             exchangeRatesLoading = rates.loading,
@@ -100,10 +101,10 @@ class GlobalTransactionsViewModel @Inject constructor(
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
-        GlobalTransactionsUiState(
+        GlobalLedgerUiState(
             dateRange = periodSelection.value.range,
             filter = filter.value,
-            categoryDirection = GlobalTransactionDirection.EXPENSE,
+            categoryDirection = GlobalLedgerDirection.EXPENSE,
         ),
     )
 
@@ -133,13 +134,13 @@ class GlobalTransactionsViewModel @Inject constructor(
     }
     fun setCurrency(value: String) { filter.update { it.copy(currency = value) } }
     fun setQuery(value: String) { filter.update { it.copy(query = value) } }
-    fun updateFilter(transform: (GlobalTransactionsFilter) -> GlobalTransactionsFilter) = filter.update(transform)
+    fun updateFilter(transform: (GlobalLedgerFilter) -> GlobalLedgerFilter) = filter.update(transform)
     fun clearFilters() {
-        filter.value = GlobalTransactionsFilter()
+        filter.value = GlobalLedgerFilter()
     }
-    fun selectTab(value: GlobalTransactionsTab) { activeTab.value = value }
-    fun selectReportDirection(value: GlobalTransactionDirection) {
-        if (value == GlobalTransactionDirection.INCOME || value == GlobalTransactionDirection.EXPENSE) {
+    fun selectTab(value: GlobalLedgerTab) { activeTab.value = value }
+    fun selectReportDirection(value: GlobalLedgerDirection) {
+        if (value == GlobalLedgerDirection.INCOME || value == GlobalLedgerDirection.EXPENSE) {
             categoryDirection.value = value
         }
     }
@@ -155,7 +156,7 @@ private data class PeriodSelection(
     val anchor: GlobalDateRange,
 )
 
-private fun GlobalTransferListItem.toGlobalTransactionItem(ratesPerTwd: Map<String, Double>) = GlobalTransactionItem(
+private fun GlobalTransferListItem.toGlobalLedgerItem(ratesPerTwd: Map<String, Double>) = GlobalLedgerItem(
     transferId = transfer.id,
     transactionDateTime = transfer.txnDateTime,
     description = transfer.description,

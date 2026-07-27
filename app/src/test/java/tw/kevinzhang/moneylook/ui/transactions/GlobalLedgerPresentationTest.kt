@@ -10,7 +10,7 @@ import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import java.time.LocalDate
 import java.time.YearMonth
 
-class GlobalTransactionsPresentationTest {
+class GlobalLedgerPresentationTest {
     private val today = LocalDate.of(2026, 7, 22)
 
     @Test
@@ -62,11 +62,11 @@ class GlobalTransactionsPresentationTest {
             item(id = "salary", amount = 50000.0, currency = "USD", description = "Salary", categoryReportingGroup = CategoryReportingGroup.INCOME),
             item(id = "note", amount = -50.0, userNote = "週末咖啡"),
         )
-        assertEquals(listOf("food"), filterGlobalTransactions(items, GlobalTransactionsFilter(query = "日常")).map { it.transferId })
-        assertEquals(listOf("note"), filterGlobalTransactions(items, GlobalTransactionsFilter(query = "咖啡")).map { it.transferId })
-        assertEquals(listOf("food"), filterGlobalTransactions(items, GlobalTransactionsFilter(extensionId = "extension-food")).map { it.transferId })
-        assertEquals(listOf("food"), filterGlobalTransactions(items, GlobalTransactionsFilter(categoryId = "food", maximumAmount = "200")).map { it.transferId })
-        assertEquals(listOf("salary"), filterGlobalTransactions(items, GlobalTransactionsFilter(currency = "TWD", minimumAmount = "500")).map { it.transferId })
+        assertEquals(listOf("food"), filterGlobalLedger(items, GlobalLedgerFilter(query = "日常")).map { it.transferId })
+        assertEquals(listOf("note"), filterGlobalLedger(items, GlobalLedgerFilter(query = "咖啡")).map { it.transferId })
+        assertEquals(listOf("food"), filterGlobalLedger(items, GlobalLedgerFilter(extensionId = "extension-food")).map { it.transferId })
+        assertEquals(listOf("food"), filterGlobalLedger(items, GlobalLedgerFilter(categoryId = "food", maximumAmount = "200")).map { it.transferId })
+        assertEquals(listOf("salary"), filterGlobalLedger(items, GlobalLedgerFilter(currency = "TWD", minimumAmount = "500")).map { it.transferId })
     }
 
     @Test
@@ -89,7 +89,7 @@ class GlobalTransactionsPresentationTest {
             accountId = "b-first",
             accountName = "B 活存",
         )
-        val state = GlobalTransactionsUiState(
+        val state = GlobalLedgerUiState(
             dateRange = GlobalDateRange.thisMonth(today),
             allItems = listOf(sourceAFirst, sourceASecond, sourceB),
         )
@@ -104,15 +104,15 @@ class GlobalTransactionsPresentationTest {
 
     @Test
     fun `changing or clearing source atomically clears the selected account`() {
-        val selected = GlobalTransactionsFilter(extensionId = "source-a", accountId = "a-first")
+        val selected = GlobalLedgerFilter(extensionId = "source-a", accountId = "a-first")
 
         assertEquals(
-            GlobalTransactionsFilter(extensionId = "source-b"),
-            selectGlobalTransactionExtension(selected, "source-b"),
+            GlobalLedgerFilter(extensionId = "source-b"),
+            selectGlobalLedgerExtension(selected, "source-b"),
         )
         assertEquals(
-            GlobalTransactionsFilter(),
-            selectGlobalTransactionExtension(selected, null),
+            GlobalLedgerFilter(),
+            selectGlobalLedgerExtension(selected, null),
         )
     }
 
@@ -124,10 +124,10 @@ class GlobalTransactionsPresentationTest {
 
         assertEquals(
             listOf("a-second"),
-            filterGlobalTransactions(
+            filterGlobalLedger(
                 listOf(sourceAFirst, sourceASecond, sourceBFirst),
-                GlobalTransactionsFilter(extensionId = "source-a", accountId = "a-second"),
-            ).map(GlobalTransactionItem::transferId),
+                GlobalLedgerFilter(extensionId = "source-a", accountId = "a-second"),
+            ).map(GlobalLedgerItem::transferId),
         )
     }
 
@@ -139,14 +139,14 @@ class GlobalTransactionsPresentationTest {
             item("transfer", -120.0, description = "咖啡儲值", categoryId = "move", categoryName = "帳戶移轉", categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
         )
 
-        assertNull(GlobalTransactionsFilter().direction)
+        assertNull(GlobalLedgerFilter().direction)
         assertEquals(
             setOf("expense", "income", "transfer"),
-            filterGlobalTransactions(items, GlobalTransactionsFilter()).map { it.transferId }.toSet(),
+            filterGlobalLedger(items, GlobalLedgerFilter()).map { it.transferId }.toSet(),
         )
         assertEquals(
             setOf("expense", "income", "transfer"),
-            filterGlobalTransactions(items, GlobalTransactionsFilter(query = "咖啡")).map { it.transferId }.toSet(),
+            filterGlobalLedger(items, GlobalLedgerFilter(query = "咖啡")).map { it.transferId }.toSet(),
         )
     }
 
@@ -158,9 +158,9 @@ class GlobalTransactionsPresentationTest {
             item("travel-expense", -80.0, description = "咖啡", categoryId = "travel", categoryName = "旅遊"),
             item("uncategorized", -60.0, description = "咖啡"),
         )
-        val explicitFilter = GlobalTransactionsFilter(
+        val explicitFilter = GlobalLedgerFilter(
             query = "咖啡",
-            direction = GlobalTransactionDirection.EXPENSE,
+            direction = GlobalLedgerDirection.EXPENSE,
         )
 
         assertEquals(
@@ -192,9 +192,9 @@ class GlobalTransactionsPresentationTest {
             item("zero", 0.0),
         )
 
-        assertEquals(listOf("expense", "uncategorized-positive"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.INCOME)).map { it.transferId })
-        assertEquals(listOf("income", "uncategorized-negative"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE)).map { it.transferId })
-        assertEquals(listOf("excluded"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXCLUDED)).map { it.transferId })
+        assertEquals(listOf("expense", "uncategorized-positive"), filterGlobalLedger(items, GlobalLedgerFilter(direction = GlobalLedgerDirection.INCOME)).map { it.transferId })
+        assertEquals(listOf("income", "uncategorized-negative"), filterGlobalLedger(items, GlobalLedgerFilter(direction = GlobalLedgerDirection.EXPENSE)).map { it.transferId })
+        assertEquals(listOf("excluded"), filterGlobalLedger(items, GlobalLedgerFilter(direction = GlobalLedgerDirection.EXCLUDED)).map { it.transferId })
     }
 
     @Test
@@ -244,9 +244,9 @@ class GlobalTransactionsPresentationTest {
             item("transfer", -999.0, categoryId = "move", categoryName = "帳戶移轉", categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
             item("zero", 0.0),
         )
-        assertEquals(GlobalTransactionDirection.EXCLUDED, globalTransactionDirection(items[2]))
-        assertNull(globalTransactionDirection(items[3]))
-        assertEquals(GlobalTransactionsSummary(400.0, 150.0), globalTransactionsSummary(items))
+        assertEquals(GlobalLedgerDirection.EXCLUDED, globalLedgerDirection(items[2]))
+        assertNull(globalLedgerDirection(items[3]))
+        assertEquals(GlobalLedgerSummary(400.0, 150.0, excludedCount = 1), globalLedgerSummary(items))
     }
 
     @Test
@@ -258,7 +258,7 @@ class GlobalTransactionsPresentationTest {
             item("twd", -30.0),
         )
 
-        assertEquals(GlobalTransactionsSummary(income = 100.0, expense = 140.0), globalTransactionsSummary(items))
+        assertEquals(GlobalLedgerSummary(income = 100.0, expense = 140.0), globalLedgerSummary(items))
         assertEquals(listOf("EUR"), missingExchangeCurrencies(items))
     }
 
@@ -299,28 +299,83 @@ class GlobalTransactionsPresentationTest {
             status = "pending",
         )
 
-        assertEquals(listOf("posted", "pending"), filterGlobalTransactions(listOf(posted, pending), GlobalTransactionsFilter()).map { it.transferId })
+        assertEquals(listOf("posted", "pending"), filterGlobalLedger(listOf(posted, pending), GlobalLedgerFilter()).map { it.transferId })
         assertEquals(listOf("posted"), globalReportableTransactions(listOf(posted, pending)).map { it.transferId })
-        assertEquals(GlobalTransactionsSummary(expense = 100.0), globalTransactionsSummary(listOf(posted, pending)))
-        assertEquals(1, globalCategorySummaries(listOf(posted, pending), GlobalTransactionDirection.EXPENSE).single().transactionCount)
+        assertEquals(GlobalLedgerSummary(expense = 100.0), globalLedgerSummary(listOf(posted, pending)))
+        assertEquals(1, globalCategorySummaries(listOf(posted, pending), GlobalLedgerDirection.EXPENSE).single().transactionCount)
         assertTrue(missingExchangeCurrencies(listOf(posted, pending)).isEmpty())
+    }
+
+    @Test
+    fun `excluded count includes reportable excluded rows without requiring a reporting exchange rate`() {
+        val excludedWithoutRate = item(
+            "excluded-without-rate",
+            -100.0,
+            currency = "USD",
+            categoryReportingGroup = CategoryReportingGroup.EXCLUDED,
+        )
+        val pendingExcluded = item(
+            "pending-excluded",
+            -30.0,
+            categoryReportingGroup = CategoryReportingGroup.EXCLUDED,
+        ).copy(accountKind = AssetKind.CREDIT_CARD, status = "pending")
+
+        val summary = globalLedgerSummary(listOf(excludedWithoutRate, pendingExcluded))
+
+        assertEquals(1, summary.excludedCount)
+        assertEquals(0.0, summary.income, 0.0)
+        assertEquals(0.0, summary.expense, 0.0)
+    }
+
+    @Test
+    fun `excluded count keeps shared filters while ignoring the direction filter`() {
+        val sourceAExcluded = item(
+            "source-a-excluded",
+            -100.0,
+            description = "咖啡轉帳",
+            categoryReportingGroup = CategoryReportingGroup.EXCLUDED,
+        ).copy(extensionId = "source-a")
+        val sourceBExcluded = item(
+            "source-b-excluded",
+            -200.0,
+            description = "咖啡轉帳",
+            categoryReportingGroup = CategoryReportingGroup.EXCLUDED,
+        ).copy(extensionId = "source-b")
+        val sourceAExpense = item(
+            "source-a-expense",
+            -50.0,
+            description = "咖啡消費",
+            categoryReportingGroup = CategoryReportingGroup.EXPENSE,
+        ).copy(extensionId = "source-a")
+        val selectedFilter = GlobalLedgerFilter(
+            query = "咖啡",
+            extensionId = "source-a",
+            direction = GlobalLedgerDirection.EXPENSE,
+        )
+
+        val sharedItems = filterGlobalLedger(
+            listOf(sourceAExcluded, sourceBExcluded, sourceAExpense),
+            selectedFilter.copy(direction = null),
+        )
+
+        assertEquals(1, globalLedgerSummary(sharedItems).excludedCount)
     }
 
     @Test
     fun `amount tone is muted only for non-reporting rows`() {
         assertEquals(
-            GlobalTransactionAmountTone.MUTED,
-            globalTransactionAmountTone(item("transfer", -100.0, categoryReportingGroup = CategoryReportingGroup.EXCLUDED)),
+            GlobalLedgerAmountTone.MUTED,
+            globalLedgerAmountTone(item("transfer", -100.0, categoryReportingGroup = CategoryReportingGroup.EXCLUDED)),
         )
-        assertEquals(GlobalTransactionAmountTone.MUTED, globalTransactionAmountTone(item("zero", 0.0)))
-        assertEquals(GlobalTransactionAmountTone.MUTED, globalTransactionAmountTone(item("missing-rate", 10.0, currency = "USD")))
+        assertEquals(GlobalLedgerAmountTone.MUTED, globalLedgerAmountTone(item("zero", 0.0)))
+        assertEquals(GlobalLedgerAmountTone.MUTED, globalLedgerAmountTone(item("missing-rate", 10.0, currency = "USD")))
         assertEquals(
-            GlobalTransactionAmountTone.POSITIVE,
-            globalTransactionAmountTone(item("converted-income", 3.0, currency = "USD").copy(amountTwd = 100.0)),
+            GlobalLedgerAmountTone.POSITIVE,
+            globalLedgerAmountTone(item("converted-income", 3.0, currency = "USD").copy(amountTwd = 100.0)),
         )
         assertEquals(
-            GlobalTransactionAmountTone.NEGATIVE,
-            globalTransactionAmountTone(item("converted-expense", -500.0, currency = "JPY").copy(amountTwd = -110.0)),
+            GlobalLedgerAmountTone.NEGATIVE,
+            globalLedgerAmountTone(item("converted-expense", -500.0, currency = "JPY").copy(amountTwd = -110.0)),
         )
     }
 
@@ -332,19 +387,19 @@ class GlobalTransactionsPresentationTest {
             item("none", -100.0),
             item("move", -100.0, categoryId = "move", categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
         )
-        val categories = globalCategorySummaries(items, GlobalTransactionDirection.EXPENSE)
+        val categories = globalCategorySummaries(items, GlobalLedgerDirection.EXPENSE)
         assertEquals(2, categories.size)
         assertEquals("餐飲", categories.first().name)
         assertEquals(100.0, categories.first().amount, 0.001)
         assertEquals(0.5f, categories.first().percentage, 0.001f)
-        assertTrue(globalCategorySummaries(items, GlobalTransactionDirection.EXCLUDED).isEmpty())
+        assertTrue(globalCategorySummaries(items, GlobalLedgerDirection.EXCLUDED).isEmpty())
     }
 
     @Test
     fun `empty sources remain empty`() {
-        assertTrue(filterGlobalTransactions(emptyList(), GlobalTransactionsFilter()).isEmpty())
-        assertTrue(globalCategorySummaries(emptyList(), GlobalTransactionDirection.EXPENSE).isEmpty())
-        assertEquals(GlobalTransactionsSummary(), globalTransactionsSummary(emptyList()))
+        assertTrue(filterGlobalLedger(emptyList(), GlobalLedgerFilter()).isEmpty())
+        assertTrue(globalCategorySummaries(emptyList(), GlobalLedgerDirection.EXPENSE).isEmpty())
+        assertEquals(GlobalLedgerSummary(), globalLedgerSummary(emptyList()))
     }
 
     private fun item(
@@ -357,7 +412,7 @@ class GlobalTransactionsPresentationTest {
         categoryName: String? = null,
         categoryReportingGroup: CategoryReportingGroup? = if (categoryId != null) CategoryReportingGroup.EXPENSE else null,
         tags: List<GlobalTag> = emptyList(),
-    ) = GlobalTransactionItem(
+    ) = GlobalLedgerItem(
         transferId = id,
         transactionDateTime = "2026-07-21",
         description = description,

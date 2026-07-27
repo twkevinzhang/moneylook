@@ -3,6 +3,7 @@ package tw.kevinzhang.moneylook.ui.transactions
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
@@ -24,7 +25,7 @@ import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
 import java.time.LocalDate
 
-class GlobalTransactionsInteractionTest {
+class GlobalLedgerInteractionTest {
     @get:Rule
     val composeRule = createComposeRule()
 
@@ -39,15 +40,15 @@ class GlobalTransactionsInteractionTest {
         val income = item("income", 12.0, "USD")
         val expense = item("expense", -30.0, "JPY")
         val state = mutableStateOf(
-            GlobalTransactionsUiState(
+            GlobalLedgerUiState(
                 dateRange = anchor,
                 datePagerAnchor = anchor,
-                filter = GlobalTransactionsFilter(),
-                activeTab = GlobalTransactionsTab.CATEGORY,
-                categoryDirection = GlobalTransactionDirection.EXPENSE,
+                filter = GlobalLedgerFilter(),
+                activeTab = GlobalLedgerTab.CATEGORY,
+                categoryDirection = GlobalLedgerDirection.EXPENSE,
                 allItems = listOf(income, expense),
                 items = listOf(income, expense),
-                summary = GlobalTransactionsSummary(income = 100.0, expense = 200.0),
+                summary = GlobalLedgerSummary(income = 100.0, expense = 200.0, excludedCount = 2),
                 missingExchangeCurrencies = listOf("JPY"),
                 exchangeRatesLoading = false,
             ),
@@ -55,7 +56,7 @@ class GlobalTransactionsInteractionTest {
 
         composeRule.setContent {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
-                GlobalTransactionsContent(
+                GlobalLedgerContent(
                     state = state.value,
                     onNavigateToTransaction = {},
                     onSelectDateRange = { range -> state.value = state.value.copy(dateRange = range) },
@@ -79,6 +80,9 @@ class GlobalTransactionsInteractionTest {
         composeRule.onNodeWithText("本月").assertDoesNotExist()
         composeRule.onNodeWithText("部分幣別未計入", substring = true).assertExists()
         composeRule.onNodeWithTag("summary-expense").assertIsSelected()
+        composeRule.onNodeWithTag("summary-excluded-count")
+            .assertHasNoClickAction()
+        composeRule.onNodeWithText("不統計 2 筆").assertExists()
 
         composeRule.onNodeWithTag("summary-income").performClick().assertIsSelected()
         composeRule.onNodeWithText("分類").assertIsSelected()
@@ -138,17 +142,17 @@ class GlobalTransactionsInteractionTest {
     @Test
     fun detailsKeepEachOriginalCurrency() {
         val range = GlobalDateRange.thisMonth(LocalDate.now())
-        val state = GlobalTransactionsUiState(
+        val state = GlobalLedgerUiState(
             dateRange = range,
-            filter = GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE),
-            activeTab = GlobalTransactionsTab.DETAILS,
+            filter = GlobalLedgerFilter(direction = GlobalLedgerDirection.EXPENSE),
+            activeTab = GlobalLedgerTab.DETAILS,
             items = listOf(item("usd", -10.0, "USD"), item("jpy", -500.0, "JPY")),
             exchangeRatesLoading = false,
         )
 
         composeRule.setContent {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
-                GlobalTransactionsContent(
+                GlobalLedgerContent(
                     state = state,
                     onNavigateToTransaction = {},
                     onSelectDateRange = {},
@@ -166,15 +170,16 @@ class GlobalTransactionsInteractionTest {
 
         composeRule.onNodeWithText("USD -10.00").assertExists()
         composeRule.onNodeWithText("JPY -500.00").assertExists()
+        composeRule.onNodeWithText("不統計 0 筆").assertExists()
     }
 
     @Test
     fun creditCardDetailsShowPostedAndPendingChipsBesideTheirDescriptions() {
         val range = GlobalDateRange.thisMonth(LocalDate.now())
-        val state = GlobalTransactionsUiState(
+        val state = GlobalLedgerUiState(
             dateRange = range,
-            filter = GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE),
-            activeTab = GlobalTransactionsTab.DETAILS,
+            filter = GlobalLedgerFilter(direction = GlobalLedgerDirection.EXPENSE),
+            activeTab = GlobalLedgerTab.DETAILS,
             items = listOf(
                 item("posted", -100.0, "TWD").copy(
                     accountKind = AssetKind.CREDIT_CARD,
@@ -190,7 +195,7 @@ class GlobalTransactionsInteractionTest {
 
         composeRule.setContent {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
-                GlobalTransactionsContent(
+                GlobalLedgerContent(
                     state = state,
                     onNavigateToTransaction = {},
                     onSelectDateRange = {},
@@ -225,10 +230,10 @@ class GlobalTransactionsInteractionTest {
             transactionCount = 1,
         )
         val state = mutableStateOf(
-            GlobalTransactionsUiState(
+            GlobalLedgerUiState(
                 dateRange = range,
-                filter = GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE),
-                activeTab = GlobalTransactionsTab.CATEGORY,
+                filter = GlobalLedgerFilter(direction = GlobalLedgerDirection.EXPENSE),
+                activeTab = GlobalLedgerTab.CATEGORY,
                 categories = listOf(selectedCategory),
             ),
         )
@@ -236,7 +241,7 @@ class GlobalTransactionsInteractionTest {
 
         composeRule.setContent {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
-                GlobalTransactionsContent(
+                GlobalLedgerContent(
                     state = state.value,
                     onNavigateToTransaction = {},
                     onSelectDateRange = {},
@@ -255,7 +260,7 @@ class GlobalTransactionsInteractionTest {
         composeRule.onNodeWithText("餐飲").performClick()
         composeRule.runOnIdle {
             assertEquals("food", requestedCategoryId)
-            assertEquals(GlobalTransactionsTab.CATEGORY, state.value.activeTab)
+            assertEquals(GlobalLedgerTab.CATEGORY, state.value.activeTab)
             assertEquals(null, state.value.filter.categoryId)
         }
     }
@@ -278,10 +283,10 @@ class GlobalTransactionsInteractionTest {
         )
         val allCurrentResults = listOf(income, food, uncategorized)
         val state = mutableStateOf(
-            GlobalTransactionsUiState(
+            GlobalLedgerUiState(
                 dateRange = range,
-                filter = GlobalTransactionsFilter(),
-                activeTab = GlobalTransactionsTab.CATEGORY,
+                filter = GlobalLedgerFilter(),
+                activeTab = GlobalLedgerTab.CATEGORY,
                 allItems = allCurrentResults,
                 items = allCurrentResults,
                 categories = listOf(
@@ -300,7 +305,7 @@ class GlobalTransactionsInteractionTest {
 
         composeRule.setContent {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
-                GlobalTransactionsContent(
+                GlobalLedgerContent(
                     state = state.value,
                     onNavigateToTransaction = {},
                     onSelectDateRange = {},
@@ -384,7 +389,7 @@ class GlobalTransactionsInteractionTest {
         composeRule.onNodeWithText("這個條件下沒有尚未分類明細").assertExists()
     }
 
-    private fun item(id: String, amount: Double, currency: String) = GlobalTransactionItem(
+    private fun item(id: String, amount: Double, currency: String) = GlobalLedgerItem(
         transferId = id,
         transactionDateTime = "2026-07-21",
         description = "虛構交易 $id",

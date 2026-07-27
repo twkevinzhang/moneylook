@@ -16,7 +16,7 @@ private val GLOBAL_DATE_PAGER_START = LocalDate.of(1970, 1, 1)
  * UI-owned, redaction-safe row for the person-wide ledger.  It deliberately
  * contains display names only; account numbers never cross this boundary.
  */
-data class GlobalTransactionItem(
+data class GlobalLedgerItem(
     val transferId: String,
     val transactionDateTime: String,
     val description: String,
@@ -48,7 +48,7 @@ data class GlobalTransactionItem(
 
 data class GlobalTag(val id: String, val name: String)
 
-enum class GlobalTransactionDirection { INCOME, EXPENSE, EXCLUDED }
+enum class GlobalLedgerDirection { INCOME, EXPENSE, EXCLUDED }
 /**
  * Visual treatment for a transaction amount in the detail ledger.
  *
@@ -56,14 +56,14 @@ enum class GlobalTransactionDirection { INCOME, EXPENSE, EXCLUDED }
  * because they represent an internal transfer/zero-value record or because a
  * reporting exchange rate is currently unavailable.
  */
-enum class GlobalTransactionAmountTone { POSITIVE, NEGATIVE, MUTED }
+enum class GlobalLedgerAmountTone { POSITIVE, NEGATIVE, MUTED }
 enum class GlobalCreditCardTransactionStatus(val label: String) {
     POSTED("已出帳"),
     PENDING("未出帳"),
 }
 enum class GlobalCategoryAssignment { ALL, CATEGORIZED, UNCATEGORIZED }
 /** Tabs live inside the single global-ledger destination, not in bottom navigation. */
-enum class GlobalTransactionsTab { CATEGORY, DETAILS, ANALYSIS }
+enum class GlobalLedgerTab { CATEGORY, DETAILS, ANALYSIS }
 
 data class GlobalDateRange(
     val startInclusive: LocalDate,
@@ -176,14 +176,14 @@ private fun Long.toPagerInt(): Int {
     return toInt()
 }
 
-data class GlobalTransactionsFilter(
+data class GlobalLedgerFilter(
     val currency: String = "TWD",
     val query: String = "",
     val extensionId: String? = null,
     val accountId: String? = null,
     val categoryId: String? = null,
     val tagId: String? = null,
-    val direction: GlobalTransactionDirection? = null,
+    val direction: GlobalLedgerDirection? = null,
     val assignment: GlobalCategoryAssignment = GlobalCategoryAssignment.ALL,
     val minimumAmount: String = "",
     val maximumAmount: String = "",
@@ -198,27 +198,32 @@ data class GlobalCategorySummary(
     val transactionCount: Int,
 )
 
-data class GlobalTransactionsSummary(val income: Double = 0.0, val expense: Double = 0.0) {
+data class GlobalLedgerSummary(
+    val income: Double = 0.0,
+    val expense: Double = 0.0,
+    /** Excluded rows remain visible in the ledger but do not affect income or expense totals. */
+    val excludedCount: Int = 0,
+) {
     val net: Double get() = income - expense
 }
 
-data class GlobalTransactionsUiState(
+data class GlobalLedgerUiState(
     val dateRange: GlobalDateRange,
     /** Stable anchor used to derive custom-range pager pages while [dateRange] moves. */
     val datePagerAnchor: GlobalDateRange = dateRange,
-    val filter: GlobalTransactionsFilter = GlobalTransactionsFilter(),
-    val activeTab: GlobalTransactionsTab = GlobalTransactionsTab.CATEGORY,
-    val categoryDirection: GlobalTransactionDirection = GlobalTransactionDirection.EXPENSE,
-    val allItems: List<GlobalTransactionItem> = emptyList(),
-    val items: List<GlobalTransactionItem> = emptyList(),
+    val filter: GlobalLedgerFilter = GlobalLedgerFilter(),
+    val activeTab: GlobalLedgerTab = GlobalLedgerTab.CATEGORY,
+    val categoryDirection: GlobalLedgerDirection = GlobalLedgerDirection.EXPENSE,
+    val allItems: List<GlobalLedgerItem> = emptyList(),
+    val items: List<GlobalLedgerItem> = emptyList(),
     /** Six calendar months ending in the current period's end month, for the Analysis tab. */
-    val trendItems: List<GlobalTransactionItem> = emptyList(),
-    val summary: GlobalTransactionsSummary = GlobalTransactionsSummary(),
+    val trendItems: List<GlobalLedgerItem> = emptyList(),
+    val summary: GlobalLedgerSummary = GlobalLedgerSummary(),
     val categories: List<GlobalCategorySummary> = emptyList(),
     val missingExchangeCurrencies: List<String> = emptyList(),
     val exchangeRatesLoading: Boolean = true,
 ) {
-    val currencies: List<String> get() = (allItems.map(GlobalTransactionItem::currency) + filter.currency)
+    val currencies: List<String> get() = (allItems.map(GlobalLedgerItem::currency) + filter.currency)
         .filter(String::isNotBlank).distinct().sorted()
     /** Account choices are intentionally unavailable until their data source is selected. */
     fun accountsForExtension(extensionId: String?): List<GlobalChoice> = extensionId?.let { selectedExtensionId ->
@@ -235,7 +240,7 @@ data class GlobalTransactionsUiState(
     val categoryOptions: List<GlobalChoice> get() = allItems.mapNotNull { item ->
         item.categoryId?.let { GlobalChoice(it, item.categoryName ?: "未命名分類") }
     }.distinctBy(GlobalChoice::id).sortedBy(GlobalChoice::name)
-    val tagOptions: List<GlobalChoice> get() = allItems.flatMap(GlobalTransactionItem::tags)
+    val tagOptions: List<GlobalChoice> get() = allItems.flatMap(GlobalLedgerItem::tags)
         .distinctBy(GlobalTag::id).map { GlobalChoice(it.id, it.name) }.sortedBy(GlobalChoice::name)
 }
 
@@ -245,18 +250,18 @@ data class GlobalChoice(val id: String, val name: String)
  * Source selection owns the account selection: changing or clearing a source
  * must never retain an account that belongs to the previous source.
  */
-fun selectGlobalTransactionExtension(
-    filter: GlobalTransactionsFilter,
+fun selectGlobalLedgerExtension(
+    filter: GlobalLedgerFilter,
     extensionId: String?,
-): GlobalTransactionsFilter = filter.copy(extensionId = extensionId, accountId = null)
+): GlobalLedgerFilter = filter.copy(extensionId = extensionId, accountId = null)
 
-fun globalTransactionDirection(item: GlobalTransactionItem): GlobalTransactionDirection? = when {
-    item.categoryReportingGroup == CategoryReportingGroup.INCOME -> GlobalTransactionDirection.INCOME
-    item.categoryReportingGroup == CategoryReportingGroup.EXPENSE -> GlobalTransactionDirection.EXPENSE
-    item.categoryReportingGroup == CategoryReportingGroup.EXCLUDED -> GlobalTransactionDirection.EXCLUDED
+fun globalLedgerDirection(item: GlobalLedgerItem): GlobalLedgerDirection? = when {
+    item.categoryReportingGroup == CategoryReportingGroup.INCOME -> GlobalLedgerDirection.INCOME
+    item.categoryReportingGroup == CategoryReportingGroup.EXPENSE -> GlobalLedgerDirection.EXPENSE
+    item.categoryReportingGroup == CategoryReportingGroup.EXCLUDED -> GlobalLedgerDirection.EXCLUDED
     else -> when {
-        item.amount > 0.0 -> GlobalTransactionDirection.INCOME
-        item.amount < 0.0 -> GlobalTransactionDirection.EXPENSE
+        item.amount > 0.0 -> GlobalLedgerDirection.INCOME
+        item.amount < 0.0 -> GlobalLedgerDirection.EXPENSE
         else -> null
     }
 }
@@ -275,34 +280,36 @@ fun globalCreditCardTransactionStatus(
     else -> null
 }
 
-fun globalCreditCardTransactionStatus(item: GlobalTransactionItem): GlobalCreditCardTransactionStatus? =
+fun globalCreditCardTransactionStatus(item: GlobalLedgerItem): GlobalCreditCardTransactionStatus? =
     globalCreditCardTransactionStatus(item.accountKind, item.status)
 
 /** Pending card authorizations stay visible and editable, but are not financial reports yet. */
-fun globalReportableTransactions(items: List<GlobalTransactionItem>): List<GlobalTransactionItem> =
+fun globalReportableTransactions(items: List<GlobalLedgerItem>): List<GlobalLedgerItem> =
     items.filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
 
 /** Report totals exclude categorized "不統計" rows and zero-value rows. */
-fun globalTransactionsSummary(items: List<GlobalTransactionItem>): GlobalTransactionsSummary {
+fun globalLedgerSummary(items: List<GlobalLedgerItem>): GlobalLedgerSummary {
     val reportable = globalReportableTransactions(items).mapNotNull { item ->
-        val direction = globalTransactionDirection(item)
+        val direction = globalLedgerDirection(item)
         val amountTwd = item.reportingAmountTwd()
-        if (direction == null || direction == GlobalTransactionDirection.EXCLUDED || amountTwd == null) null
+        if (direction == null || direction == GlobalLedgerDirection.EXCLUDED || amountTwd == null) null
         else direction to amountTwd
     }
-    return GlobalTransactionsSummary(
-        income = reportable.filter { it.first == GlobalTransactionDirection.INCOME }.sumOf { abs(it.second) },
-        expense = reportable.filter { it.first == GlobalTransactionDirection.EXPENSE }.sumOf { abs(it.second) },
+    return GlobalLedgerSummary(
+        income = reportable.filter { it.first == GlobalLedgerDirection.INCOME }.sumOf { abs(it.second) },
+        expense = reportable.filter { it.first == GlobalLedgerDirection.EXPENSE }.sumOf { abs(it.second) },
+        excludedCount = globalReportableTransactions(items)
+            .count { globalLedgerDirection(it) == GlobalLedgerDirection.EXCLUDED },
     )
 }
 
 fun globalCategorySummaries(
-    items: List<GlobalTransactionItem>,
-    direction: GlobalTransactionDirection,
+    items: List<GlobalLedgerItem>,
+    direction: GlobalLedgerDirection,
 ): List<GlobalCategorySummary> {
-    if (direction == GlobalTransactionDirection.EXCLUDED) return emptyList()
+    if (direction == GlobalLedgerDirection.EXCLUDED) return emptyList()
     val grouped = globalReportableTransactions(items)
-        .filter { globalTransactionDirection(it) == direction && it.reportingAmountTwd() != null }
+        .filter { globalLedgerDirection(it) == direction && it.reportingAmountTwd() != null }
         .groupBy { it.categoryId }
     val total = grouped.values.flatten().sumOf { abs(requireNotNull(it.reportingAmountTwd())) }
     if (total <= 0.0) return emptyList()
@@ -320,7 +327,7 @@ fun globalCategorySummaries(
     }.sortedByDescending(GlobalCategorySummary::amount)
 }
 
-fun GlobalTransactionItem.reportingAmountTwd(): Double? = amountTwd
+fun GlobalLedgerItem.reportingAmountTwd(): Double? = amountTwd
     ?: amount.takeIf { currency.trim().equals("TWD", ignoreCase = true) && it.isFinite() }
 
 /**
@@ -328,17 +335,17 @@ fun GlobalTransactionItem.reportingAmountTwd(): Double? = amountTwd
  * to reports. Successfully converted foreign-currency rows retain their
  * signed colour; only unavailable reporting amounts are muted.
  */
-fun globalTransactionAmountTone(item: GlobalTransactionItem): GlobalTransactionAmountTone = when {
-    globalTransactionDirection(item) == GlobalTransactionDirection.EXCLUDED -> GlobalTransactionAmountTone.MUTED
-    item.amount == 0.0 -> GlobalTransactionAmountTone.MUTED
-    item.reportingAmountTwd() == null -> GlobalTransactionAmountTone.MUTED
-    item.amount > 0.0 -> GlobalTransactionAmountTone.POSITIVE
-    else -> GlobalTransactionAmountTone.NEGATIVE
+fun globalLedgerAmountTone(item: GlobalLedgerItem): GlobalLedgerAmountTone = when {
+    globalLedgerDirection(item) == GlobalLedgerDirection.EXCLUDED -> GlobalLedgerAmountTone.MUTED
+    item.amount == 0.0 -> GlobalLedgerAmountTone.MUTED
+    item.reportingAmountTwd() == null -> GlobalLedgerAmountTone.MUTED
+    item.amount > 0.0 -> GlobalLedgerAmountTone.POSITIVE
+    else -> GlobalLedgerAmountTone.NEGATIVE
 }
 
-fun missingExchangeCurrencies(items: List<GlobalTransactionItem>): List<String> = items.asSequence()
+fun missingExchangeCurrencies(items: List<GlobalLedgerItem>): List<String> = items.asSequence()
     .filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
-    .filter { globalTransactionDirection(it) !in setOf(null, GlobalTransactionDirection.EXCLUDED) }
+    .filter { globalLedgerDirection(it) !in setOf(null, GlobalLedgerDirection.EXCLUDED) }
     .filter { it.reportingAmountTwd() == null }
     .map { it.currency.trim().uppercase(Locale.ROOT) }
     .filter(String::isNotBlank)
@@ -346,10 +353,10 @@ fun missingExchangeCurrencies(items: List<GlobalTransactionItem>): List<String> 
     .sorted()
     .toList()
 
-fun filterGlobalTransactions(
-    items: List<GlobalTransactionItem>,
-    filter: GlobalTransactionsFilter,
-): List<GlobalTransactionItem> {
+fun filterGlobalLedger(
+    items: List<GlobalLedgerItem>,
+    filter: GlobalLedgerFilter,
+): List<GlobalLedgerItem> {
     val query = filter.query.trim()
     val min = filter.minimumAmount.toDoubleOrNull()?.takeIf { it >= 0.0 }
     val max = filter.maximumAmount.toDoubleOrNull()?.takeIf { it >= 0.0 }
@@ -371,7 +378,7 @@ fun filterGlobalTransactions(
         } }
         .filter { min == null || abs(it.amount) >= min }
         .filter { max == null || abs(it.amount) <= max }
-        .sortedByDescending(GlobalTransactionItem::transactionDateTime)
+        .sortedByDescending(GlobalLedgerItem::transactionDateTime)
         .toList()
 }
 
@@ -381,19 +388,19 @@ fun filterGlobalTransactions(
  * the uncategorized bucket, rather than an omitted category constraint.
  */
 fun filterCategoryTransactions(
-    items: List<GlobalTransactionItem>,
-    filter: GlobalTransactionsFilter,
+    items: List<GlobalLedgerItem>,
+    filter: GlobalLedgerFilter,
     categoryId: String?,
-): List<GlobalTransactionItem> = filterGlobalTransactions(items, filter)
+): List<GlobalLedgerItem> = filterGlobalLedger(items, filter)
     .filter { item -> item.categoryId == categoryId }
 
 /** A category's reporting group is authoritative; uncategorized rows temporarily follow amount sign. */
 private fun matchesGlobalDirectionFilter(
-    item: GlobalTransactionItem,
-    direction: GlobalTransactionDirection?,
+    item: GlobalLedgerItem,
+    direction: GlobalLedgerDirection?,
 ): Boolean = when (direction) {
     null -> true
-    else -> globalTransactionDirection(item) == direction
+    else -> globalLedgerDirection(item) == direction
 }
 
 fun moveGlobalMonth(range: GlobalDateRange, delta: Long, today: LocalDate): GlobalDateRange {
@@ -408,7 +415,7 @@ fun customGlobalDateRange(startInclusive: LocalDate?, endInclusive: LocalDate?, 
     return GlobalDateRange(startInclusive, endInclusive, isCustom = true)
 }
 
-fun globalTransactionDate(value: String): LocalDate? = try {
+fun globalLedgerDate(value: String): LocalDate? = try {
     LocalDate.parse(value.take(10))
 } catch (_: DateTimeParseException) {
     null
