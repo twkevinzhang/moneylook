@@ -50,7 +50,7 @@ import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
         ClassificationRuleEvaluation::class,
         ClassificationConditionEvaluation::class,
     ],
-    version = 24,
+    version = 25,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)

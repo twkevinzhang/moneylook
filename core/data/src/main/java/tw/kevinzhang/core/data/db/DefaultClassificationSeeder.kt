@@ -184,6 +184,44 @@ object DefaultClassificationSeeder {
         }
     }
 
+    /**
+     * V25 adds an aggressive public layer without replacing any existing rule.  The
+     * migration only appends v4 rows while the public generic collection marker still exists, so
+     * a user who removed that collection does not receive it again.
+     */
+    fun upgradePublicCatalogToV6(db: SupportSQLiteDatabase) {
+        val hasPublicCatalog = listOf(
+            DefaultClassificationCatalog.publicMccRuleSet.id,
+            DefaultClassificationCatalog.publicStructuralRuleSet.id,
+            DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID,
+        ).any { ruleSetExists(db, it, AutoCategoryRuleOrigin.PUBLIC_DEFAULT) }
+        if (!hasPublicCatalog) return
+
+        seedCategories(
+            db,
+            DefaultClassificationCatalog.categories.filter {
+                it.id == "expense-digital-wallet" || it.id == "income-subsidy"
+            },
+        )
+
+        if (ruleSetExists(
+                db,
+                DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID,
+                AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+            )
+        ) {
+            seedPublicRuleCollection(
+                db,
+                DefaultClassificationCatalog.publicGenericRuleSet,
+                DefaultClassificationCatalog.publicGenericRules.filter {
+                    it.rule.id.startsWith("public-v4-")
+                },
+                insertRuleSet = false,
+            )
+            updatePublicRuleSetMetadata(db, DefaultClassificationCatalog.publicGenericRuleSet)
+        }
+    }
+
     private data class LegacyPublicRule(
         val id: String,
         val name: String,
@@ -205,7 +243,7 @@ object DefaultClassificationSeeder {
               AND `ruleSetId` IS NULL AND `extensionId` IS NULL AND `accountKind` IS NULL
               AND `origin` = 'PUBLIC_DEFAULT' AND `action` = 'AUTO_APPLY'
             """.trimIndent(),
-            arrayOf(
+            arrayOf<Any?>(
                 expected.id,
                 expected.name,
                 expected.descriptionContains,
@@ -414,7 +452,7 @@ object DefaultClassificationSeeder {
             SET `name` = ?, `version` = ?, `canonicalizerVersion` = ?, `contentSha256` = ?, `isActive` = ?
             WHERE `id` = ? AND `origin` = 'PUBLIC_DEFAULT'
             """.trimIndent(),
-            arrayOf(
+            arrayOf<Any?>(
                 ruleSet.name,
                 ruleSet.version,
                 ruleSet.canonicalizerVersion,

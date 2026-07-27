@@ -59,10 +59,13 @@ class DefaultClassificationSeedTest {
         )
 
         val ordered = database.autoCategoryRuleDao().getEnabledInPriorityOrder()
-        assertEquals(listOf("user-rule", defaultRule.id), ordered.take(2).map { it.rule.id })
+        assertEquals("user-rule", ordered.first().rule.id)
         assertFalse(ordered.first().rule.isDefault)
         assertTrue(ordered.last().rule.isDefault)
-        assertEquals(defaultRule.name, ordered[1].rule.name)
+        assertEquals(
+            defaultRule.name,
+            ordered.single { it.rule.id == defaultRule.id }.rule.name,
+        )
         assertEquals(
             1 + DefaultClassificationCatalog.publicAutoCategoryRules.size +
                 DefaultClassificationCatalog.publicMccRules.size +

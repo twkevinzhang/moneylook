@@ -103,9 +103,9 @@ object DefaultClassificationCatalog {
     val publicGenericRuleSet: AutoCategoryRuleSet by lazy {
         AutoCategoryRuleSet(
             id = PUBLIC_GENERIC_RULE_SET_ID,
-            name = "Moneylook public generic rules v4",
+            name = "Moneylook public generic rules v5",
             origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
-            version = "2026.07.27",
+            version = "2026.07.27.2",
             canonicalizerVersion = "v2-space-fold",
             contentSha256 = publicRuleCollectionContentSha256(publicGenericRules),
         )
@@ -171,6 +171,23 @@ object DefaultClassificationCatalog {
         genericRule("public-v3-insurance-corporate", "保險｜保險公司", "expense-insurance", AutoCategoryRuleAmountSign.NEGATIVE, null, 40, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "保險股份有限公司"),
         genericRule("public-v3-fee-foreign-transaction", "費用｜國外交易手續費", "expense-fees", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.DEPOSIT, 24, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "國外交易手續費"),
         genericRule("public-v3-income-interest-exact", "收入｜利息", "income-interest", AutoCategoryRuleAmountSign.POSITIVE, AssetKind.DEPOSIT, 20, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.EXACT, "利息"),
+        genericRule("public-v4-transfer-linked-account", "帳戶移轉｜連結帳戶交易", "transfer-account", AutoCategoryRuleAmountSign.ANY, AssetKind.DEPOSIT, 5, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.CONTAINS, "連結帳戶交易"),
+        genericRule("public-v4-transfer-bank-aliases", "帳戶移轉｜銀行轉帳別名", "transfer-account", AutoCategoryRuleAmountSign.ANY, AssetKind.DEPOSIT, 6, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.CONTAINS, "網路本行轉帳", "網銀跨行轉帳", "網銀轉帳", "跨行轉", "跨轉", "轉帳提", "轉帳存", "ATMF 轉入", "FXML入帳", "網際跨行轉帳更正", "扣押解", "開戶"),
+        genericRule("public-v4-transfer-credit-card-payment-text", "帳戶移轉｜信用卡繳款文字", "transfer-account", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.DEPOSIT, 7, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "信用卡"),
+        genericRule("public-v4-transfer-deposit-reversal", "帳戶移轉｜存款沖正", "transfer-account", AutoCategoryRuleAmountSign.POSITIVE, AssetKind.DEPOSIT, 8, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.CONTAINS, "沖正", "更正"),
+        genericRule("public-v4-transfer-easycard-redemption", "帳戶移轉｜悠遊卡停卡贖回", "transfer-account", AutoCategoryRuleAmountSign.ANY, null, 9, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "悠遊卡停卡贖回"),
+        genericRule("public-v4-transfer-bank-payment-network", "帳戶移轉｜銀行繳費網", "transfer-account", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 10, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.CONTAINS, "全國繳費網－凱基銀行"),
+        digitalWalletRule(),
+        scopeRule("public-v4-income-credit-card-refund-fallback", "退款｜正額信用卡交易", "income-refund", AutoCategoryRuleAmountSign.POSITIVE, AssetKind.CREDIT_CARD, 80),
+        genericRule("public-v4-income-deposit-fee-refund", "退款｜存款手續費退回", "income-refund", AutoCategoryRuleAmountSign.POSITIVE, AssetKind.DEPOSIT, 81, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.CONTAINS, "手續費"),
+        genericRule("public-v4-income-employment-training-subsidy", "收入｜就保職訓補助", "income-subsidy", AutoCategoryRuleAmountSign.POSITIVE, AssetKind.DEPOSIT, 82, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "就保職訓"),
+        genericRule("public-v4-fees-card-penalties", "費用｜信用卡利息與違約金", "expense-fees", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 83, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "循環信用利息", "遲延繳款違約金"),
+        genericRule("public-v4-phone-chunghwa-telecom", "電信費｜中華電信", "expense-phone", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 84, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "中華電信"),
+        genericRule("public-v4-internet-google-services", "網路活動｜Google 服務", "expense-internet", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 85, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "GOOGLE DIGIBITES", "GOOGLE LINE CALLS"),
+        genericRule("public-v4-entertainment-animation", "休閒娛樂｜動畫服務", "expense-entertainment", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 86, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "動畫瘋"),
+        genericRule("public-v4-transport-go-share", "交通｜GoShare", "expense-transport", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 87, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "GOPOCKET", "GO SHARE"),
+        genericRule("public-v4-insurance-national-health", "保險｜健保費", "expense-insurance", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 88, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "中央健康保險署"),
+        genericRule("public-v4-food-mcdonalds-display-name", "餐飲｜麥當勞顯示名稱", "expense-food", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 90, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "台灣麥當勞"),
     )
     val categories: List<Category> = listOf(
         category("expense-food", "餐飲", "🍽️", "#FB8C00", CategoryReportingGroup.EXPENSE),
@@ -193,11 +210,13 @@ object DefaultClassificationCatalog {
         category("expense-ipass", "iPASS 儲值", "🎫", "#72C95B", CategoryReportingGroup.EXPENSE),
         category("expense-jkopay", "街口儲值", "🎟️", "#EF5350", CategoryReportingGroup.EXPENSE),
         category("expense-dispute", "爭議", "🐾", "#EF5350", CategoryReportingGroup.EXPENSE),
+        category("expense-digital-wallet", "電子支付", "📱", "#26A69A", CategoryReportingGroup.EXPENSE),
         category("income-salary", "薪資", "💰", "#43B96D", CategoryReportingGroup.INCOME),
         category("income-bonus", "獎金", "✨", "#F9C928", CategoryReportingGroup.INCOME),
         category("income-refund", "退款", "↩️", "#3E8EEA", CategoryReportingGroup.INCOME),
         category("income-interest", "利息收入", "💹", "#4CAF50", CategoryReportingGroup.INCOME),
         category("income-cashback", "現金回饋", "🎉", "#FF9800", CategoryReportingGroup.INCOME),
+        category("income-subsidy", "補助收入", "🤝", "#7CB342", CategoryReportingGroup.INCOME),
         category("transfer-account", "帳戶移轉", "🔄", "#607D8B", CategoryReportingGroup.EXCLUDED),
     )
 
@@ -348,6 +367,75 @@ object DefaultClassificationCatalog {
         },
     )
 
+    private fun digitalWalletRule(): PublicMccRule {
+        val id = "public-v4-expense-digital-wallet"
+        val includePatterns = listOf("街口電支", "街口TWQR", "連加", "連支", "TAPPAY")
+        val excludedKnownMerchants = listOf("便利商店", "停車大聲公", "茶之魔手")
+        return PublicMccRule(
+            rule = AutoCategoryRule(
+                id = id,
+                name = "電子支付｜支付通路前綴",
+                amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
+                categoryId = "expense-digital-wallet",
+                priority = 25,
+                isDefault = true,
+                ruleSetId = PUBLIC_GENERIC_RULE_SET_ID,
+                accountKind = AssetKind.CREDIT_CARD,
+                origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+                action = AutoCategoryRuleAction.AUTO_APPLY,
+            ),
+            conditions = buildList {
+                includePatterns.forEachIndexed { position, pattern ->
+                    add(
+                        AutoCategoryRuleCondition(
+                            ruleId = id,
+                            position = position,
+                            conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                            field = AutoCategoryRuleConditionField.DESCRIPTION,
+                            matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+                            pattern = pattern,
+                        ),
+                    )
+                }
+                excludedKnownMerchants.forEachIndexed { index, pattern ->
+                    add(
+                        AutoCategoryRuleCondition(
+                            ruleId = id,
+                            position = includePatterns.size + index,
+                            conditionGroup = AutoCategoryRuleConditionGroup.EXCLUDE_ANY,
+                            field = AutoCategoryRuleConditionField.SEARCHABLE_TEXT,
+                            matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+                            pattern = pattern,
+                        ),
+                    )
+                }
+            },
+        )
+    }
+
+    private fun scopeRule(
+        id: String,
+        name: String,
+        categoryId: String,
+        amountSign: AutoCategoryRuleAmountSign,
+        accountKind: AssetKind,
+        priority: Int,
+    ): PublicMccRule = PublicMccRule(
+        rule = AutoCategoryRule(
+            id = id,
+            name = name,
+            amountSign = amountSign,
+            categoryId = categoryId,
+            priority = priority,
+            isDefault = true,
+            ruleSetId = PUBLIC_GENERIC_RULE_SET_ID,
+            accountKind = accountKind,
+            origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+            action = AutoCategoryRuleAction.AUTO_APPLY,
+        ),
+        conditions = emptyList(),
+    )
+
     private const val PUBLIC_MCC_RULE_SET_ID = "public-mcc-rules-v2"
     private const val PUBLIC_STRUCTURAL_RULE_SET_ID = "public-structural-rules-v2"
     const val PUBLIC_GENERIC_RULE_SET_ID = "public-generic-rules-v3"
@@ -360,12 +448,16 @@ data class PublicMccRule(
 )
 
 internal fun publicRuleCollectionContentSha256(rules: List<PublicMccRule>): String {
-    val csv = AutoCategoryRuleCsvCodec.encodeV2(
-        AutoCategoryRuleCsvImport(
-            rules = rules.map(PublicMccRule::rule),
-            conditionsByRuleId = rules.associate { it.rule.id to it.conditions },
-        ),
+    val source = AutoCategoryRuleCsvImport(
+        rules = rules.map(PublicMccRule::rule),
+        conditionsByRuleId = rules.associate { it.rule.id to it.conditions },
     )
+    val csv = if (rules.all { it.conditions.isNotEmpty() }) {
+        AutoCategoryRuleCsvCodec.encodeV2(source)
+    } else {
+        AutoCategoryRuleCsvCodec.encodeV4(source)
+    }
+
     return MessageDigest.getInstance("SHA-256")
         .digest(csv.toByteArray(StandardCharsets.UTF_8))
         .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
