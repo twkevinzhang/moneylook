@@ -31,6 +31,10 @@ interface TransferDao : TransferCursorStore {
     @Query("SELECT * FROM transfers")
     suspend fun getAll(): List<Transfer>
 
+    /** Bounded scalar snapshot used to calculate transaction CSV overwrite counts. */
+    @Query("SELECT id FROM transfers")
+    suspend fun getAllIds(): List<String>
+
     /**
      * Internal-transfer detection needs the account currency but deliberately excludes account
      * numbers, source keys, balances, and every other account field.

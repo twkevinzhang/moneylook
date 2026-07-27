@@ -86,6 +86,11 @@ fun DataTransferRoute(
         onExportCredentials = {
             showCredentialExportWarning = true
         },
+        onImportTransactions = { launchImport(CsvTransferTarget.TRANSACTIONS) },
+        onExportTransactions = {
+            pendingExportTarget = CsvTransferTarget.TRANSACTIONS
+            exportLauncher.launch("交易明細.csv")
+        },
         onConfirmImport = viewModel::confirmImport,
         onDismissImportPreview = viewModel::dismissImportPreview,
         onDismissStatus = viewModel::dismissStatus,
