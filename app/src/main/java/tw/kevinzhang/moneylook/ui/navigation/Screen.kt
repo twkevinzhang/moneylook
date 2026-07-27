@@ -21,6 +21,7 @@ sealed class Screen(val route: String) {
     object Categories : Screen("categories")
     object Tags : Screen("tags")
     object AutoRules : Screen("auto_rules")
+    object DataTransfer : Screen("data_transfer")
     object SyncLog : Screen("sync_log/{extensionId}") {
         fun route(extensionId: String) = "sync_log/${java.net.URLEncoder.encode(extensionId, "UTF-8")}" // Encoded route argument.
     }
