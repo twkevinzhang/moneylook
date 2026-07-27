@@ -12,16 +12,17 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
 import tw.kevinzhang.core.data.model.AssetKind
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 
 class AutoRulePresentationTest {
-    private val candidate = TransactionRuleCandidate("全聯福利中心", TransactionDirection.EXPENSE, 240.0, "a")
+    private val candidate = TransactionRuleCandidate("全聯福利中心", AutoCategoryRuleAmountSign.NEGATIVE, 240.0, "a")
 
     @Test fun `all configured conditions must match`() {
-        val rule = AutoRuleDraft(descriptionContains = "全聯", direction = TransactionDirection.EXPENSE, minAbsoluteAmount = "200", maxAbsoluteAmount = "300", accountId = "a")
+        val rule = AutoRuleDraft(descriptionContains = "全聯", amountSign = AutoCategoryRuleAmountSign.NEGATIVE, minAbsoluteAmount = "200", maxAbsoluteAmount = "300", accountId = "a")
         assertTrue(rule.matches(candidate))
         assertFalse(rule.copy(maxAbsoluteAmount = "200").matches(candidate))
-        assertFalse(rule.copy(direction = TransactionDirection.INCOME).matches(candidate))
+        assertFalse(rule.copy(amountSign = AutoCategoryRuleAmountSign.POSITIVE).matches(candidate))
     }
 
     @Test fun `enabled user rules run before defaults then by ascending priority`() {
@@ -43,10 +44,10 @@ class AutoRulePresentationTest {
     }
 
     @Test fun `saved rule requires a name condition action and valid amount range`() {
-        val valid = AutoRuleDraft(name = "日常消費", direction = TransactionDirection.EXPENSE, categoryId = "food")
+        val valid = AutoRuleDraft(name = "日常消費", amountSign = AutoCategoryRuleAmountSign.NEGATIVE, categoryId = "food")
         assertTrue(valid.isValidForSave())
         assertFalse(valid.copy(name = "").isValidForSave())
-        assertFalse(valid.copy(direction = null).isValidForSave())
+        assertFalse(valid.copy(amountSign = AutoCategoryRuleAmountSign.ANY).isValidForSave())
         assertFalse(valid.copy(categoryId = null).isValidForSave())
         assertFalse(valid.copy(minAbsoluteAmount = "200", maxAbsoluteAmount = "100").isValidForSave())
         assertFalse(valid.copy(minAbsoluteAmount = "NaN").isValidForSave())
@@ -65,13 +66,13 @@ class AutoRulePresentationTest {
         val rule = defaultExactDescriptionRule(
             description = "  全聯福利中心  ",
             categoryId = "food",
-            direction = TransactionDirection.EXPENSE,
+            amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
             accountKind = AssetKind.CREDIT_CARD,
             extensionId = "extension",
         )
         assertEquals(AutoCategoryRuleDescriptionMatchMode.EXACT, rule.descriptionMatchMode)
         assertEquals("全聯福利中心", rule.descriptionContains)
-        assertEquals(TransactionDirection.EXPENSE, rule.direction)
+        assertEquals(AutoCategoryRuleAmountSign.NEGATIVE, rule.amountSign)
         assertEquals(AssetKind.CREDIT_CARD, rule.accountKind)
         assertEquals("extension", rule.extensionId)
         assertEquals(AutoCategoryRuleOrigin.USER_CONFIRMED, rule.origin)
@@ -123,7 +124,7 @@ class AutoRulePresentationTest {
             id = "legacy",
             name = "舊規則",
             descriptionContains = "全聯",
-            direction = TransactionDirection.EXPENSE,
+            amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
             categoryId = "food",
             updateLegacyAnyTextCondition = true,
             conditions = listOf(
@@ -150,10 +151,10 @@ class AutoRulePresentationTest {
         assertEquals("市場", edited.conditions.single().pattern)
     }
 
-    @Test fun `only matching income or expense kind is enabled while transfer always remains available`() {
-        assertEquals(setOf(CategoryKind.EXPENSE, CategoryKind.TRANSFER), allowedKinds(-20.0))
-        assertEquals(setOf(CategoryKind.INCOME, CategoryKind.TRANSFER), allowedKinds(20.0))
-        assertEquals(setOf(CategoryKind.TRANSFER), allowedKinds(0.0))
+    @Test fun `category picker allows its matching reporting group plus excluded`() {
+        assertEquals(setOf(CategoryReportingGroup.EXPENSE, CategoryReportingGroup.EXCLUDED), allowedKinds(-20.0))
+        assertEquals(setOf(CategoryReportingGroup.INCOME, CategoryReportingGroup.EXCLUDED), allowedKinds(20.0))
+        assertEquals(setOf(CategoryReportingGroup.EXCLUDED), allowedKinds(0.0))
     }
 
     @Test fun `uncategorized picker tile uses the agreed tag emoji`() {
@@ -173,13 +174,13 @@ class AutoRulePresentationTest {
                     pattern = "5411",
                 ),
             ),
-            direction = TransactionDirection.EXPENSE,
+            amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
             accountKind = AssetKind.CREDIT_CARD,
         )
 
         assertFalse(rule.isEditableInLegacyEditor())
         assertFalse(rule.matches(candidate))
-        assertEquals("結構化規則：MCC 1項／支出／信用卡", rule.structuredRuleSummary())
+        assertEquals("結構化規則：MCC 1項／負額／信用卡", rule.structuredRuleSummary())
     }
 
     private fun detailState() = TransactionDetailUiState(

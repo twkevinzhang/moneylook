@@ -2,10 +2,11 @@ package tw.kevinzhang.moneylook.ui.transactions
 
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.AssetKind
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleText
 import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleTextV2
 
@@ -15,7 +16,8 @@ data class CategoryOption(
     val name: String,
     val color: Long,
     val emoji: String = "🏷️",
-    val kind: CategoryKind = CategoryKind.EXPENSE,
+    /** The one and only accounting group that owns this category. */
+    val reportingGroup: CategoryReportingGroup = CategoryReportingGroup.EXPENSE,
 )
 
 data class TagOption(
@@ -24,12 +26,10 @@ data class TagOption(
     val color: Long,
 )
 
-enum class TransactionDirection { INCOME, EXPENSE }
-
 /** The three mutually exclusive accounting meanings a transaction may have. */
 data class TransactionRuleCandidate(
     val description: String,
-    val direction: TransactionDirection,
+    val amountSign: AutoCategoryRuleAmountSign,
     val absoluteAmount: Double,
     val accountId: String,
     val memo: String = "",
@@ -42,7 +42,7 @@ data class AutoRuleDraft(
     val descriptionContains: String = "",
     val descriptionMatchMode: AutoCategoryRuleDescriptionMatchMode =
         AutoCategoryRuleDescriptionMatchMode.CONTAINS,
-    val direction: TransactionDirection? = null,
+    val amountSign: AutoCategoryRuleAmountSign = AutoCategoryRuleAmountSign.ANY,
     val minAbsoluteAmount: String = "",
     val maxAbsoluteAmount: String = "",
     val accountId: String? = null,
@@ -113,7 +113,7 @@ internal fun AutoRuleDraft.matches(candidate: TransactionRuleCandidate): Boolean
         }
     }
     return textMatches &&
-        (direction == null || direction == candidate.direction) &&
+        (amountSign == AutoCategoryRuleAmountSign.ANY || amountSign == candidate.amountSign) &&
         (min == null || candidate.absoluteAmount >= min) &&
         (max == null || candidate.absoluteAmount <= max) &&
         (accountId == null || accountId == candidate.accountId)

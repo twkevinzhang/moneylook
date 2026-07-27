@@ -14,7 +14,7 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.core.data.model.IngestionStatus
@@ -41,7 +41,7 @@ class IngestionProvenanceDaoTest {
     fun `monthly aggregate excludes an intentional manual clear and reports structured field presence`() = runBlocking {
         database.accountDao().upsertAll(listOf(Account("a", "ext", "Ext", "Account", 0.0, "TWD", 0L, kind = AssetKind.DEPOSIT)))
         database.categoryDao().upsert(
-            Category("food", "Food", "#000000", "🍽️", CategoryKind.EXPENSE),
+            Category("food", "Food", "#000000", "🍽️", CategoryReportingGroup.EXPENSE),
         )
         database.transferDao().upsertAll(listOf(
             transfer("auto", merchantName = "merchant"),
@@ -185,7 +185,7 @@ class IngestionProvenanceDaoTest {
             listOf(Account("a", "ext", "Ext", "Account", 0.0, "TWD", 0L, kind = AssetKind.DEPOSIT)),
         )
         database.categoryDao().upsert(
-            Category("food", "Food", "#000000", "🍽️", CategoryKind.EXPENSE),
+            Category("food", "Food", "#000000", "🍽️", CategoryReportingGroup.EXPENSE),
         )
         database.transferDao().upsertAll(listOf(transfer("resume")))
         database.transferAnnotationDao().upsert(

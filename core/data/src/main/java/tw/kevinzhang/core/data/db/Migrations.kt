@@ -812,3 +812,27 @@ val MIGRATION_22_23 = object : Migration(22, 23) {
         db.execSQL("ALTER TABLE `ingestion_runs` ADD COLUMN `failureScriptFrame` TEXT")
     }
 }
+
+/**
+ * Makes category reporting explicit and makes a rule's amount constraint unambiguous.
+ *
+ * Column names remain stable for a lossless Room upgrade; their Kotlin model names are now
+ * `reportingGroup` and `amountSign`.  Public catalog reconciliation is intentionally
+ * content-preserving: edited and deleted user rows are never replaced.
+ */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("UPDATE `categories` SET `kind` = 'EXCLUDED' WHERE `kind` = 'TRANSFER'")
+        db.execSQL(
+            """
+            UPDATE `auto_category_rules`
+            SET `direction` = CASE `direction`
+                WHEN 'INCOME' THEN 'POSITIVE'
+                WHEN 'EXPENSE' THEN 'NEGATIVE'
+                ELSE `direction`
+            END
+            """.trimIndent(),
+        )
+        DefaultClassificationSeeder.upgradePublicCatalogToV5(db)
+    }
+}

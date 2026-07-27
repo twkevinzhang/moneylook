@@ -22,7 +22,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.moneylook.ui.analysis.GlobalLedgerAnalysisContent
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
 import java.io.File
@@ -37,24 +37,24 @@ class DesignQaCaptureTest {
     @Test
     fun captureAnalysisReferenceStates() {
         val currentItems = listOf(
-            item("salary", "2026-07-05", 68_000.0, "薪資", CategoryKind.INCOME, "#43B96D"),
-            item("food", "2026-07-08", -18_420.0, "飲食", CategoryKind.EXPENSE, "#FB8C00"),
-            item("shopping", "2026-07-12", -7_860.0, "購物", CategoryKind.EXPENSE, "#42A5F5"),
-            item("cash", "2026-07-18", -3_240.0, "現金消費", CategoryKind.EXPENSE, "#66BB6A"),
+            item("salary", "2026-07-05", 68_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
+            item("food", "2026-07-08", -18_420.0, "飲食", CategoryReportingGroup.EXPENSE, "#FB8C00"),
+            item("shopping", "2026-07-12", -7_860.0, "購物", CategoryReportingGroup.EXPENSE, "#42A5F5"),
+            item("cash", "2026-07-18", -3_240.0, "現金消費", CategoryReportingGroup.EXPENSE, "#66BB6A"),
             item("uncategorized", "2026-07-20", -1_180.0, null, null, null),
-            item("transfer", "2026-07-21", -10_000.0, "帳戶移轉", CategoryKind.TRANSFER, "#9E9E9E"),
+            item("transfer", "2026-07-21", -10_000.0, "帳戶移轉", CategoryReportingGroup.EXCLUDED, "#9E9E9E"),
         )
         val trendItems = listOf(
-            item("feb", "2026-02-03", 52_000.0, "薪資", CategoryKind.INCOME, "#43B96D"),
-            item("feb-expense", "2026-02-18", -48_000.0, "生活", CategoryKind.EXPENSE, "#FB8C00"),
-            item("mar", "2026-03-03", 59_000.0, "薪資", CategoryKind.INCOME, "#43B96D"),
-            item("mar-expense", "2026-03-18", -31_000.0, "生活", CategoryKind.EXPENSE, "#FB8C00"),
-            item("apr", "2026-04-03", 61_000.0, "薪資", CategoryKind.INCOME, "#43B96D"),
-            item("apr-expense", "2026-04-18", -35_000.0, "生活", CategoryKind.EXPENSE, "#FB8C00"),
-            item("may", "2026-05-03", 63_000.0, "薪資", CategoryKind.INCOME, "#43B96D"),
-            item("may-expense", "2026-05-18", -29_000.0, "生活", CategoryKind.EXPENSE, "#FB8C00"),
-            item("jun", "2026-06-03", 66_000.0, "薪資", CategoryKind.INCOME, "#43B96D"),
-            item("jun-expense", "2026-06-18", -33_000.0, "生活", CategoryKind.EXPENSE, "#FB8C00"),
+            item("feb", "2026-02-03", 52_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
+            item("feb-expense", "2026-02-18", -48_000.0, "生活", CategoryReportingGroup.EXPENSE, "#FB8C00"),
+            item("mar", "2026-03-03", 59_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
+            item("mar-expense", "2026-03-18", -31_000.0, "生活", CategoryReportingGroup.EXPENSE, "#FB8C00"),
+            item("apr", "2026-04-03", 61_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
+            item("apr-expense", "2026-04-18", -35_000.0, "生活", CategoryReportingGroup.EXPENSE, "#FB8C00"),
+            item("may", "2026-05-03", 63_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
+            item("may-expense", "2026-05-18", -29_000.0, "生活", CategoryReportingGroup.EXPENSE, "#FB8C00"),
+            item("jun", "2026-06-03", 66_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
+            item("jun-expense", "2026-06-18", -33_000.0, "生活", CategoryReportingGroup.EXPENSE, "#FB8C00"),
         ) + currentItems
         val state = GlobalTransactionsUiState(
             dateRange = GlobalDateRange(LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 22)),
@@ -95,10 +95,10 @@ class DesignQaCaptureTest {
     @Test
     fun captureCategoryAndDetailReferenceStates() {
         val items = listOf(
-            item("salary", "2026-07-05", 68_000.0, "薪資", CategoryKind.INCOME, "#43B96D"),
-            item("food", "2026-07-08", -18_420.0, "飲食", CategoryKind.EXPENSE, "#FB8C00"),
-            item("shopping", "2026-07-12", -7_860.0, "購物", CategoryKind.EXPENSE, "#42A5F5"),
-            item("cash", "2026-07-18", -3_240.0, "現金消費", CategoryKind.EXPENSE, "#66BB6A"),
+            item("salary", "2026-07-05", 68_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
+            item("food", "2026-07-08", -18_420.0, "飲食", CategoryReportingGroup.EXPENSE, "#FB8C00"),
+            item("shopping", "2026-07-12", -7_860.0, "購物", CategoryReportingGroup.EXPENSE, "#42A5F5"),
+            item("cash", "2026-07-18", -3_240.0, "現金消費", CategoryReportingGroup.EXPENSE, "#66BB6A"),
             item("uncategorized", "2026-07-20", -1_180.0, null, null, null),
         )
         val base = GlobalTransactionsUiState(
@@ -151,7 +151,7 @@ class DesignQaCaptureTest {
         date: String,
         amount: Double,
         categoryName: String?,
-        categoryKind: CategoryKind?,
+        categoryReportingGroup: CategoryReportingGroup?,
         categoryColor: String?,
     ) = GlobalTransactionItem(
         transferId = id,
@@ -162,7 +162,7 @@ class DesignQaCaptureTest {
         userNote = "",
         categoryId = categoryName,
         categoryName = categoryName,
-        categoryKind = categoryKind,
+        categoryReportingGroup = categoryReportingGroup,
         categoryEmoji = null,
         categoryColor = categoryColor,
         tags = emptyList(),

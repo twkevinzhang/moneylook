@@ -129,12 +129,170 @@ object DefaultClassificationSeeder {
         seedRulesV3ForExistingCategories(db)
     }
 
+    /**
+     * v24 is a catalog revision, not a catalog reset.  It adds new public rows only when the
+     * corresponding public collection still exists, and retires an old rule only when every
+     * mutable rule field is still its shipped value.  A user edit or deletion is therefore never
+     * overwritten or resurrected.
+     */
+    fun upgradePublicCatalogToV5(db: SupportSQLiteDatabase) {
+        val hasPublicCatalog = listOf(
+            DefaultClassificationCatalog.publicMccRuleSet.id,
+            DefaultClassificationCatalog.publicStructuralRuleSet.id,
+            DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID,
+        ).any { ruleSetExists(db, it, AutoCategoryRuleOrigin.PUBLIC_DEFAULT) }
+        if (!hasPublicCatalog) return
+
+        seedCategories(
+            db,
+            DefaultClassificationCatalog.categories.filter {
+                it.id == "income-interest" || it.id == "income-cashback"
+            },
+        )
+
+        listOf(
+            LegacyPublicRule("public-rule-003", "保險｜保險公司", "保險股份有限公司", "expense-insurance", 30),
+            LegacyPublicRule("public-rule-006", "休閒娛樂｜Steam", "steam", "expense-entertainment", 60),
+            LegacyPublicRule("public-rule-010", "儲值｜自動加值", "自動加值", "expense-topup", 100),
+            LegacyPublicRule("public-rule-011", "現金消費｜跨行提款", "跨行提款", "expense-cash", 110),
+            LegacyPublicRule("public-rule-015", "費用／手續費｜國外交易", "國外交易手續費", "expense-fees", 150),
+            LegacyPublicRule("public-rule-017", "現金消費｜自行提款", "現金自行提款", "expense-cash", 170),
+            LegacyPublicRule("public-rule-019", "交通｜停車服務", "停車大聲公", "expense-transport", 190),
+        ).forEach { deleteLegacyRuleIfPristine(db, it) }
+        deleteStructuralCashWithdrawalIfPristine(db)
+
+        if (ruleSetExists(db, DefaultClassificationCatalog.publicStructuralRuleSet.id, AutoCategoryRuleOrigin.PUBLIC_DEFAULT)) {
+            seedPublicRuleCollection(
+                db,
+                DefaultClassificationCatalog.publicStructuralRuleSet,
+                DefaultClassificationCatalog.publicStructuralRules.filter { it.rule.id.endsWith("-v3") },
+                insertRuleSet = false,
+            )
+            updatePublicRuleSetMetadata(db, DefaultClassificationCatalog.publicStructuralRuleSet)
+        }
+        if (ruleSetExists(db, DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID, AutoCategoryRuleOrigin.PUBLIC_DEFAULT)) {
+            seedPublicRuleCollection(
+                db,
+                DefaultClassificationCatalog.publicGenericRuleSet,
+                DefaultClassificationCatalog.publicGenericRules.filter { it.rule.id.startsWith("public-v3-") },
+                insertRuleSet = false,
+            )
+            updatePublicRuleSetMetadata(db, DefaultClassificationCatalog.publicGenericRuleSet)
+        }
+        if (ruleSetExists(db, DefaultClassificationCatalog.publicMccRuleSet.id, AutoCategoryRuleOrigin.PUBLIC_DEFAULT)) {
+            updatePublicRuleSetMetadata(db, DefaultClassificationCatalog.publicMccRuleSet)
+        }
+    }
+
+    private data class LegacyPublicRule(
+        val id: String,
+        val name: String,
+        val descriptionContains: String,
+        val categoryId: String,
+        val priority: Int,
+    )
+
+    private fun deleteLegacyRuleIfPristine(db: SupportSQLiteDatabase, expected: LegacyPublicRule) {
+        if (!hasPristineLegacyCondition(db, expected.id, expected.descriptionContains)) return
+        db.execSQL(
+            """
+            DELETE FROM `auto_category_rules`
+            WHERE `id` = ? AND `name` = ? AND `descriptionContains` = ?
+              AND `direction` = 'NEGATIVE' AND `minAbsoluteAmount` IS NULL
+              AND `maxAbsoluteAmount` IS NULL AND `accountId` IS NULL
+              AND `categoryId` = ? AND `enabled` = 1 AND `priority` = ?
+              AND `descriptionMatchMode` = 'CONTAINS' AND `isDefault` = 1
+              AND `ruleSetId` IS NULL AND `extensionId` IS NULL AND `accountKind` IS NULL
+              AND `origin` = 'PUBLIC_DEFAULT' AND `action` = 'AUTO_APPLY'
+            """.trimIndent(),
+            arrayOf(
+                expected.id,
+                expected.name,
+                expected.descriptionContains,
+                expected.categoryId,
+                expected.priority,
+            ),
+        )
+    }
+
+    private fun hasPristineLegacyCondition(
+        db: SupportSQLiteDatabase,
+        ruleId: String,
+        descriptionContains: String,
+    ): Boolean = db.query(
+        """
+        SELECT `position`, `conditionGroup`, `field`, `matchMode`, `pattern`
+        FROM `auto_category_rule_conditions` WHERE `ruleId` = ? ORDER BY `position`
+        """.trimIndent(),
+        arrayOf(ruleId),
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use true
+        cursor.count == 1 &&
+            cursor.getInt(0) == 0 &&
+            cursor.getString(1) == "INCLUDE_ANY" &&
+            cursor.getString(2) == "LEGACY_ANY_TEXT" &&
+            cursor.getString(3) == "CONTAINS" &&
+            cursor.getString(4) == descriptionContains
+    }
+
+    private fun deleteStructuralCashWithdrawalIfPristine(db: SupportSQLiteDatabase) {
+        val id = "public-structural-auto-deposit-cash-withdrawal-v2"
+        val rowMatches = db.query(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM `auto_category_rules`
+                WHERE `id` = ? AND `name` = '結構化｜expense-cash'
+                  AND `descriptionContains` IS NULL AND `direction` = 'NEGATIVE'
+                  AND `minAbsoluteAmount` IS NULL AND `maxAbsoluteAmount` IS NULL
+                  AND `accountId` IS NULL AND `categoryId` = 'expense-cash'
+                  AND `enabled` = 1 AND `priority` = 100
+                  AND `descriptionMatchMode` = 'CONTAINS' AND `isDefault` = 1
+                  AND `ruleSetId` = ? AND `extensionId` IS NULL AND `accountKind` = 'DEPOSIT'
+                  AND `origin` = 'PUBLIC_DEFAULT' AND `action` = 'AUTO_APPLY'
+            )
+            """.trimIndent(),
+            arrayOf(id, DefaultClassificationCatalog.publicStructuralRuleSet.id),
+        ).use { it.moveToFirst() && it.getInt(0) == 1 }
+        if (!rowMatches || !hasExactlyConditions(
+                db,
+                id,
+                listOf("跨行提款", "自行提款", "cash withdrawal", "atm withdrawal"),
+            )
+        ) return
+        db.execSQL("DELETE FROM `auto_category_rules` WHERE `id` = ?", arrayOf(id))
+    }
+
+    private fun hasExactlyConditions(
+        db: SupportSQLiteDatabase,
+        ruleId: String,
+        phrases: List<String>,
+    ): Boolean = db.query(
+        """
+        SELECT `position`, `conditionGroup`, `field`, `matchMode`, `pattern`
+        FROM `auto_category_rule_conditions` WHERE `ruleId` = ? ORDER BY `position`
+        """.trimIndent(),
+        arrayOf(ruleId),
+    ).use { cursor ->
+        val expected = phrases.flatMap { phrase ->
+            listOf("DESCRIPTION", "MEMO", "TYPE").map { field ->
+                listOf("INCLUDE_ANY", field, "CONTAINS", phrase)
+            }
+        }
+        val actual = buildList {
+            while (cursor.moveToNext()) {
+                add(listOf(cursor.getString(1), cursor.getString(2), cursor.getString(3), cursor.getString(4)))
+            }
+        }
+        actual == expected
+    }
+
     private fun seedPublicRuleCollection(
         db: SupportSQLiteDatabase,
         ruleSet: AutoCategoryRuleSet,
         rules: List<PublicMccRule>,
+        insertRuleSet: Boolean = true,
     ) {
-        insertRuleSetIfAbsent(db, ruleSet)
+        if (insertRuleSet) insertRuleSetIfAbsent(db, ruleSet)
         db.compileStatement(INSERT_RULE_SQL).use { insertRule ->
             db.compileStatement(INSERT_CONDITION_SQL).use { insertCondition ->
                 rules.forEach { publicRule ->
@@ -161,7 +319,7 @@ object DefaultClassificationSeeder {
                 insert.bindString(2, category.name)
                 insert.bindString(3, category.color)
                 insert.bindString(4, category.emoji)
-                insert.bindString(5, category.kind.name)
+                insert.bindString(5, category.reportingGroup.name)
                 insert.executeInsert()
             }
         }
@@ -196,7 +354,7 @@ object DefaultClassificationSeeder {
         bindString(1, rule.id)
         bindString(2, rule.name)
         bindNullableString(3, rule.descriptionContains)
-        bindString(4, rule.direction.name)
+        bindString(4, rule.amountSign.name)
         bindNullableDouble(5, rule.minAbsoluteAmount)
         bindNullableDouble(6, rule.maxAbsoluteAmount)
         bindNullableString(7, rule.accountId)
@@ -216,7 +374,7 @@ object DefaultClassificationSeeder {
         bindString(1, rule.id)
         bindString(2, rule.name)
         bindNullableString(3, rule.descriptionContains)
-        bindString(4, rule.direction.name)
+        bindString(4, rule.amountSign.name)
         bindNullableDouble(5, rule.minAbsoluteAmount)
         bindNullableDouble(6, rule.maxAbsoluteAmount)
         bindNullableString(7, rule.accountId)
@@ -247,6 +405,24 @@ object DefaultClassificationSeeder {
             insert.bindLong(7, if (ruleSet.isActive) 1 else 0)
             insert.executeInsert()
         }
+    }
+
+    private fun updatePublicRuleSetMetadata(db: SupportSQLiteDatabase, ruleSet: AutoCategoryRuleSet) {
+        db.execSQL(
+            """
+            UPDATE `auto_category_rule_sets`
+            SET `name` = ?, `version` = ?, `canonicalizerVersion` = ?, `contentSha256` = ?, `isActive` = ?
+            WHERE `id` = ? AND `origin` = 'PUBLIC_DEFAULT'
+            """.trimIndent(),
+            arrayOf(
+                ruleSet.name,
+                ruleSet.version,
+                ruleSet.canonicalizerVersion,
+                ruleSet.contentSha256,
+                if (ruleSet.isActive) 1 else 0,
+                ruleSet.id,
+            ),
+        )
     }
 
     private fun SupportSQLiteStatement.bindNullableString(index: Int, value: String?) {

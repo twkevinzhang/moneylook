@@ -164,7 +164,7 @@ private fun GlobalTransferListItem.toGlobalTransactionItem(ratesPerTwd: Map<Stri
     userNote = annotation?.note.orEmpty(),
     categoryId = category?.id,
     categoryName = category?.name,
-    categoryKind = category?.kind,
+    categoryReportingGroup = category?.reportingGroup,
     categoryEmoji = category?.emoji,
     categoryColor = category?.color,
     tags = tags.map { GlobalTag(it.id, it.name) },

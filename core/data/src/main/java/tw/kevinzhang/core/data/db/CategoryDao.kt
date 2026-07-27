@@ -5,21 +5,21 @@ import androidx.room.Query
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 
 @Dao
 interface CategoryDao {
     @Query("SELECT * FROM categories ORDER BY name COLLATE NOCASE, id")
     fun observeAll(): Flow<List<Category>>
 
-    @Query("SELECT * FROM categories WHERE kind = :kind ORDER BY name COLLATE NOCASE, id")
-    fun observeByKind(kind: CategoryKind): Flow<List<Category>>
+    @Query("SELECT * FROM categories WHERE kind = :reportingGroup ORDER BY name COLLATE NOCASE, id")
+    fun observeByReportingGroup(reportingGroup: CategoryReportingGroup): Flow<List<Category>>
 
     @Query("SELECT * FROM categories WHERE id = :id")
     suspend fun getById(id: String): Category?
 
-    @Query("SELECT * FROM categories WHERE kind = :kind ORDER BY name COLLATE NOCASE, id")
-    suspend fun getByKind(kind: CategoryKind): List<Category>
+    @Query("SELECT * FROM categories WHERE kind = :reportingGroup ORDER BY name COLLATE NOCASE, id")
+    suspend fun getByReportingGroup(reportingGroup: CategoryReportingGroup): List<Category>
 
     @Upsert
     suspend fun upsert(category: Category)

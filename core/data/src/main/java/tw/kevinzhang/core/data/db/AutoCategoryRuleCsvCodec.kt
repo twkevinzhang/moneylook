@@ -8,7 +8,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
-import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 
 /** A fully validated, database-independent import that callers can persist in one transaction. */
@@ -29,6 +29,7 @@ sealed interface AutoCategoryRuleCsvDecodeResult {
  */
 object AutoCategoryRuleCsvCodec {
     private const val MARKER = "moneylook-auto-category-rules"
+    private const val V4 = "4"
     private const val V3 = "3"
     private const val V2 = "2"
     private const val V1 = "1"
@@ -42,21 +43,32 @@ object AutoCategoryRuleCsvCodec {
     private const val MAX_CELL_CHARS = 16_384
 
     /** Current lossless format. Rule, condition, and tag records are separate to avoid a Cartesian product. */
-    fun encode(import: AutoCategoryRuleCsvImport): String = encodeV3(import)
+    fun encode(import: AutoCategoryRuleCsvImport): String = encodeV4(import)
 
+    fun encodeV4(import: AutoCategoryRuleCsvImport): String = encodeWithHeader(import, V4, V4_HEADER)
+
+    /** Legacy writer retained for callers that explicitly need the v3 interchange format. */
     fun encodeV3(import: AutoCategoryRuleCsvImport): String {
+        return encodeWithHeader(import, V3, V3_HEADER)
+    }
+
+    private fun encodeWithHeader(
+        import: AutoCategoryRuleCsvImport,
+        version: String,
+        header: List<String>,
+    ): String {
         validateRuleCollections(import)
         val rows = mutableListOf<List<String>>()
-        rows += listOf(MARKER, V3)
-        rows += V3_HEADER
+        rows += listOf(MARKER, version)
+        rows += header
         import.rules.sortedBy { it.id }.forEach { rule ->
-            rows += listOf(RECORD_RULE) + ruleColumns(rule) + List(6) { "" }
+            rows += listOf(RECORD_RULE) + ruleColumns(rule, legacyDirection = version == V3) + List(6) { "" }
             import.conditionsByRuleId[rule.id].orEmpty()
                 .sortedBy { it.position }
                 .forEach { condition ->
                     require(condition.ruleId == rule.id) { "condition belongs to a different rule" }
                     validateCondition(condition.field, condition.matchMode, condition.pattern)
-                    rows += listOf(RECORD_CONDITION, rule.id) + List(16) { "" } + listOf(
+            rows += listOf(RECORD_CONDITION, rule.id) + List(16) { "" } + listOf(
                         condition.conditionGroup.name,
                         condition.position.toString(),
                         condition.field.name,
@@ -108,6 +120,7 @@ object AutoCategoryRuleCsvCodec {
             rows.firstOrNull() == LEGACY_RULES_CSV_V1_HEADER -> decodeLegacyRulesCsvV1(rows)
             rows.size < 2 || rows[0].size != 2 || rows[0][0] != MARKER ->
                 fail("missing marker")
+            rows[0][1] == V4 -> decodeV4(rows.drop(1))
             rows[0][1] == V3 -> decodeV3(rows.drop(1))
             rows[0].getOrNull(1) == V2 -> decodeV2(rows.drop(1))
             rows[0].getOrNull(1) in setOf(V1, V1_1) ->
@@ -118,8 +131,18 @@ object AutoCategoryRuleCsvCodec {
         AutoCategoryRuleCsvDecodeResult.Failure(error.message ?: "invalid CSV")
     }
 
-    private fun decodeV3(rows: List<List<String>>): AutoCategoryRuleCsvDecodeResult {
-        require(rows.firstOrNull() == V3_HEADER) { "unexpected v3 header" }
+    private fun decodeV4(rows: List<List<String>>): AutoCategoryRuleCsvDecodeResult =
+        decodeStructured(rows, V4_HEADER, "v4")
+
+    private fun decodeV3(rows: List<List<String>>): AutoCategoryRuleCsvDecodeResult =
+        decodeStructured(rows, V3_HEADER, "v3")
+
+    private fun decodeStructured(
+        rows: List<List<String>>,
+        expectedHeader: List<String>,
+        version: String,
+    ): AutoCategoryRuleCsvDecodeResult {
+        require(rows.firstOrNull() == expectedHeader) { "unexpected $version header" }
         val rules = linkedMapOf<String, AutoCategoryRule>()
         val conditions = linkedMapOf<String, MutableList<AutoCategoryRuleCondition>>()
         val tags = linkedMapOf<String, MutableList<String>>()
@@ -273,7 +296,7 @@ object AutoCategoryRuleCsvCodec {
                 name = required(row[2], "rule_name"),
                 descriptionContains = nullable(row[3]),
                 descriptionMatchMode = enumValueOf(row[4]),
-                direction = enumValueOf(row[5]),
+                amountSign = amountSignFromCsv(row[5]),
                 minAbsoluteAmount = nullableDouble(row[6], "min_absolute_amount"),
                 maxAbsoluteAmount = nullableDouble(row[7], "max_absolute_amount"),
                 categoryId = nullable(row[8]),
@@ -313,7 +336,7 @@ object AutoCategoryRuleCsvCodec {
         id = required(columns[0], "id"),
         name = required(columns[1], "name"),
         descriptionContains = nullable(columns[2]),
-        direction = enumValueOf(columns[3]),
+        amountSign = amountSignFromCsv(columns[3]),
         minAbsoluteAmount = nullableDouble(columns[4], "minAbsoluteAmount"),
         maxAbsoluteAmount = nullableDouble(columns[5], "maxAbsoluteAmount"),
         accountId = nullable(columns[6]),
@@ -334,8 +357,14 @@ object AutoCategoryRuleCsvCodec {
             ?: AutoCategoryRuleAction.AUTO_APPLY,
     )
 
-    private fun ruleColumns(rule: AutoCategoryRule) = listOf(
-        rule.id, rule.name, rule.descriptionContains.orEmpty(), rule.direction.name,
+    private fun ruleColumns(
+        rule: AutoCategoryRule,
+        legacyDirection: Boolean = false,
+    ) = listOf(
+        rule.id,
+        rule.name,
+        rule.descriptionContains.orEmpty(),
+        if (legacyDirection) rule.amountSign.toLegacyDirection() else rule.amountSign.name,
         rule.minAbsoluteAmount?.toString().orEmpty(), rule.maxAbsoluteAmount?.toString().orEmpty(),
         rule.accountId.orEmpty(), rule.categoryId.orEmpty(), rule.enabled.toString(), rule.priority.toString(),
         rule.descriptionMatchMode.name, rule.isDefault.toString(), rule.ruleSetId.orEmpty(),
@@ -389,10 +418,36 @@ object AutoCategoryRuleCsvCodec {
         ?: throw IllegalArgumentException("missing $name")
     private fun bool(value: String): Boolean = when (value) { "true" -> true; "false" -> false; else -> throw IllegalArgumentException("invalid boolean") }
     private fun fail(reason: String): Nothing = throw IllegalArgumentException(reason)
+    /** V1–V3 wrote INCOME/EXPENSE for the amount sign. */
+    private fun amountSignFromCsv(value: String): AutoCategoryRuleAmountSign = when (value) {
+        "INCOME" -> AutoCategoryRuleAmountSign.POSITIVE
+        "EXPENSE" -> AutoCategoryRuleAmountSign.NEGATIVE
+        else -> enumValueOf(value)
+    }
+    private fun AutoCategoryRuleAmountSign.toLegacyDirection(): String = when (this) {
+        AutoCategoryRuleAmountSign.ANY -> "ANY"
+        AutoCategoryRuleAmountSign.POSITIVE -> "INCOME"
+        AutoCategoryRuleAmountSign.NEGATIVE -> "EXPENSE"
+    }
     private val V1_HEADER = listOf("id", "name", "descriptionContains", "direction", "minAbsoluteAmount", "maxAbsoluteAmount", "accountId", "categoryId", "enabled", "priority")
     private val V1_1_HEADER = V1_HEADER + listOf("descriptionMatchMode", "isDefault")
     private val V2_HEADER = V1_1_HEADER + listOf("ruleSetId", "extensionId", "accountKind", "origin", "action", "conditionGroup", "conditionPosition", "conditionField", "conditionMatchMode", "conditionPattern")
     private val V3_HEADER = listOf("recordType") + V1_1_HEADER + listOf(
+        "ruleSetId",
+        "extensionId",
+        "accountKind",
+        "origin",
+        "action",
+        "conditionGroup",
+        "conditionPosition",
+        "conditionField",
+        "conditionMatchMode",
+        "conditionPattern",
+        "tagId",
+    )
+    private val V4_HEADER = listOf("recordType") + V1_1_HEADER.map {
+        if (it == "direction") "amountSign" else it
+    } + listOf(
         "ruleSetId",
         "extensionId",
         "accountKind",

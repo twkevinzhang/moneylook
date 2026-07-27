@@ -39,14 +39,14 @@ import tw.kevinzhang.core.data.db.IngestionProvenanceDao
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AssignmentSource
-import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.TransferAnnotation
@@ -258,7 +258,12 @@ class ClassificationViewModel @Inject constructor(
         }
     }
 
-    fun saveCategory(id: String?, name: String, color: Long) = saveNamedItem(
+    fun saveCategory(
+        id: String?,
+        name: String,
+        color: Long,
+        reportingGroup: CategoryReportingGroup,
+    ) = saveNamedItem(
         name = name,
         duplicate = { candidate -> categories.value.any { it.id != id && it.name.equals(candidate, ignoreCase = true) } },
     ) { trimmed ->
@@ -269,7 +274,7 @@ class ClassificationViewModel @Inject constructor(
                 name = trimmed,
                 color = colorString(color),
                 emoji = existing?.emoji ?: Category.DEFAULT_EMOJI,
-                kind = existing?.kind ?: CategoryKind.EXPENSE,
+                reportingGroup = reportingGroup,
             ),
         )
     }
@@ -392,7 +397,7 @@ private fun TransferDetail.toDetailUi(
 }
 
 private fun asCategoryOptions(items: List<Category>) = items.map {
-    CategoryOption(it.id, it.name, it.color.parseColor(), it.emoji, it.kind)
+    CategoryOption(it.id, it.name, it.color.parseColor(), it.emoji, it.reportingGroup)
 }
 
 private data class TransactionAuditUi(
@@ -413,11 +418,7 @@ private fun tw.kevinzhang.core.data.model.AutoCategoryRule.toDraft(
     name = name,
     descriptionContains = descriptionContains.orEmpty(),
     descriptionMatchMode = descriptionMatchMode,
-    direction = when (direction) {
-        AutoCategoryRuleDirection.ANY -> null
-        AutoCategoryRuleDirection.INCOME -> TransactionDirection.INCOME
-        AutoCategoryRuleDirection.EXPENSE -> TransactionDirection.EXPENSE
-    },
+    amountSign = amountSign,
     minAbsoluteAmount = minAbsoluteAmount?.toString().orEmpty(),
     maxAbsoluteAmount = maxAbsoluteAmount?.toString().orEmpty(),
     accountId = accountId,
@@ -455,7 +456,7 @@ internal fun AutoRuleDraft.normalizedOrNull(): NormalizedAutoRule? {
     if (min != null && max != null && min > max) return null
     val normalizedRule = tw.kevinzhang.core.data.model.AutoCategoryRule(
         id = id.ifBlank { UUID.randomUUID().toString() }, name = name.trim(), descriptionContains = descriptionContains.trim().takeIf(String::isNotEmpty),
-        direction = when (direction) { null -> AutoCategoryRuleDirection.ANY; TransactionDirection.INCOME -> AutoCategoryRuleDirection.INCOME; TransactionDirection.EXPENSE -> AutoCategoryRuleDirection.EXPENSE },
+        amountSign = amountSign,
         minAbsoluteAmount = min, maxAbsoluteAmount = max, accountId = accountId, categoryId = categoryId, enabled = enabled, priority = priority,
         descriptionMatchMode = descriptionMatchMode,
         isDefault = isDefault,

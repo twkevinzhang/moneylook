@@ -1,7 +1,7 @@
 package tw.kevinzhang.moneylook.ui.analysis
 
 import tw.kevinzhang.core.data.db.GlobalTransferListItem
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 
 /** Keeps the Room projection at the screen boundary; charts never receive account identifiers. */
 fun GlobalTransferListItem.toAnalysisTransaction(): AnalysisTransaction = AnalysisTransaction(
@@ -10,11 +10,11 @@ fun GlobalTransferListItem.toAnalysisTransaction(): AnalysisTransaction = Analys
     currency = currency,
     categoryName = category?.name,
     categoryColor = category?.color,
-    categoryKind = category?.kind?.toAnalysisKind(),
+    categoryReportingGroup = category?.reportingGroup?.toAnalysisReportingGroup(),
 )
 
-private fun CategoryKind.toAnalysisKind(): AnalysisCategoryKind = when (this) {
-    CategoryKind.INCOME -> AnalysisCategoryKind.INCOME
-    CategoryKind.EXPENSE -> AnalysisCategoryKind.EXPENSE
-    CategoryKind.TRANSFER -> AnalysisCategoryKind.TRANSFER
+private fun CategoryReportingGroup.toAnalysisReportingGroup(): AnalysisReportingGroup = when (this) {
+    CategoryReportingGroup.INCOME -> AnalysisReportingGroup.INCOME
+    CategoryReportingGroup.EXPENSE -> AnalysisReportingGroup.EXPENSE
+    CategoryReportingGroup.EXCLUDED -> AnalysisReportingGroup.EXCLUDED
 }

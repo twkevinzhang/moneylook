@@ -10,10 +10,10 @@ data class AnalysisTransaction(
     val currency: String,
     val categoryName: String?,
     val categoryColor: String?,
-    val categoryKind: AnalysisCategoryKind?,
+    val categoryReportingGroup: AnalysisReportingGroup?,
 )
 
-enum class AnalysisCategoryKind { INCOME, EXPENSE, TRANSFER }
+enum class AnalysisReportingGroup { INCOME, EXPENSE, EXCLUDED }
 
 enum class AnalysisDirection { INCOME, EXPENSE }
 
@@ -84,8 +84,8 @@ data class AnalysisPresentation(
 }
 
 /**
- * Produces a per-currency analysis without foreign-exchange conversion. Transfer-category rows
- * are excluded from all income/expense aggregates to avoid double-counting account moves.
+ * Produces a per-currency analysis without foreign-exchange conversion. Categories in the
+ * excluded reporting group do not contribute to income/expense aggregates.
  */
 fun analysisPresentation(
     transactions: List<AnalysisTransaction>,
@@ -147,10 +147,12 @@ fun analysisPresentation(
     )
 }
 
-/** Transfers are excluded; every other row follows its original amount sign. */
-fun AnalysisTransaction.reportingDirection(): AnalysisDirection? = when (categoryKind) {
-    AnalysisCategoryKind.TRANSFER -> null
-    else -> when {
+/** A selected category owns the reporting direction; uncategorized rows follow their amount sign. */
+fun AnalysisTransaction.reportingDirection(): AnalysisDirection? = when (categoryReportingGroup) {
+    AnalysisReportingGroup.INCOME -> AnalysisDirection.INCOME
+    AnalysisReportingGroup.EXPENSE -> AnalysisDirection.EXPENSE
+    AnalysisReportingGroup.EXCLUDED -> null
+    null -> when {
         amount > 0.0 -> AnalysisDirection.INCOME
         amount < 0.0 -> AnalysisDirection.EXPENSE
         else -> null

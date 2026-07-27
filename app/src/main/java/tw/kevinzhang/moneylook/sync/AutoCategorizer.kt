@@ -24,9 +24,9 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
-import tw.kevinzhang.core.data.model.AutoCategoryRuleDirection
+import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
@@ -159,7 +159,7 @@ class AutoCategorizer @Inject constructor(
         val annotations = annotationDao.getByTransferIds(candidates.map { it.transfer.id })
             .associateBy(TransferAnnotation::transferId)
         val internalTransferCategory = categoryDao.getById(INTERNAL_TRANSFER_CATEGORY_ID)
-        val categoryAvailable = internalTransferCategory?.kind == CategoryKind.TRANSFER
+        val categoryAvailable = internalTransferCategory?.reportingGroup == CategoryReportingGroup.EXCLUDED
         val counterparts = if (categoryAvailable) {
             internalTransferCounterparts(candidates)
         } else {
@@ -512,13 +512,13 @@ private fun AutoCategoryRuleWithTags.evaluate(
 private fun AutoCategoryRuleWithTags.scopeMatches(candidate: TransferClassificationCandidate): Boolean {
     val rule = rule
     val transfer = candidate.transfer
-    val directionMatches = when (rule.direction) {
-        AutoCategoryRuleDirection.ANY -> true
-        AutoCategoryRuleDirection.INCOME -> transfer.amount > 0.0
-        AutoCategoryRuleDirection.EXPENSE -> transfer.amount < 0.0
+    val amountSignMatches = when (rule.amountSign) {
+        AutoCategoryRuleAmountSign.ANY -> true
+        AutoCategoryRuleAmountSign.POSITIVE -> transfer.amount > 0.0
+        AutoCategoryRuleAmountSign.NEGATIVE -> transfer.amount < 0.0
     }
     val absoluteAmount = abs(transfer.amount)
-    return directionMatches &&
+    return amountSignMatches &&
         (rule.minAbsoluteAmount?.let { absoluteAmount >= it } ?: true) &&
         (rule.maxAbsoluteAmount?.let { absoluteAmount <= it } ?: true) &&
         (rule.accountId == null || transfer.accountId == rule.accountId) &&
@@ -530,9 +530,11 @@ private fun AutoCategoryRuleWithTags.categoryIsCompatibleWith(transfer: Transfer
     val categoryId = rule.categoryId ?: return true
     val category = category ?: return false
     return when {
-        transfer.amount > 0.0 -> category.kind == CategoryKind.INCOME || category.kind == CategoryKind.TRANSFER
-        transfer.amount < 0.0 -> category.kind == CategoryKind.EXPENSE || category.kind == CategoryKind.TRANSFER
-        else -> category.kind == CategoryKind.TRANSFER
+        transfer.amount > 0.0 -> category.reportingGroup == CategoryReportingGroup.INCOME ||
+            category.reportingGroup == CategoryReportingGroup.EXCLUDED
+        transfer.amount < 0.0 -> category.reportingGroup == CategoryReportingGroup.EXPENSE ||
+            category.reportingGroup == CategoryReportingGroup.EXCLUDED
+        else -> category.reportingGroup == CategoryReportingGroup.EXCLUDED
     }
 }
 
@@ -684,13 +686,13 @@ private fun AutoCategoryRuleWithTags.matchesLegacy(transfer: Transfer): Boolean 
             }
         }
         ?: true
-    val directionMatches = when (rule.direction) {
-        AutoCategoryRuleDirection.ANY -> true
-        AutoCategoryRuleDirection.INCOME -> transfer.amount > 0.0
-        AutoCategoryRuleDirection.EXPENSE -> transfer.amount < 0.0
+    val amountSignMatches = when (rule.amountSign) {
+        AutoCategoryRuleAmountSign.ANY -> true
+        AutoCategoryRuleAmountSign.POSITIVE -> transfer.amount > 0.0
+        AutoCategoryRuleAmountSign.NEGATIVE -> transfer.amount < 0.0
     }
     return descriptionMatches &&
-        directionMatches &&
+        amountSignMatches &&
         (rule.minAbsoluteAmount?.let { candidateAmount >= it } ?: true) &&
         (rule.maxAbsoluteAmount?.let { candidateAmount <= it } ?: true) &&
         (rule.accountId == null || transfer.accountId == rule.accountId)
@@ -708,7 +710,7 @@ internal fun normalizeLegacyAutoCategoryRuleText(value: String): String =
 internal fun isUsableRule(ruleWithTags: AutoCategoryRuleWithTags): Boolean {
     val rule = ruleWithTags.rule
     val hasCondition = ruleWithTags.conditions.isNotEmpty() || !rule.descriptionContains.isNullOrBlank() ||
-        rule.direction != AutoCategoryRuleDirection.ANY ||
+        rule.amountSign != AutoCategoryRuleAmountSign.ANY ||
         rule.minAbsoluteAmount != null ||
         rule.maxAbsoluteAmount != null ||
         rule.accountId != null ||
@@ -720,7 +722,7 @@ internal fun isUsableRule(ruleWithTags: AutoCategoryRuleWithTags): Boolean {
 }
 
 private fun tw.kevinzhang.core.data.model.AutoCategoryRule.scopeScore(): Int =
-    listOf(direction != AutoCategoryRuleDirection.ANY, accountKind != null, extensionId != null).count { it } * 5
+    listOf(amountSign != AutoCategoryRuleAmountSign.ANY, accountKind != null, extensionId != null).count { it } * 5
 
 private fun tw.kevinzhang.core.data.model.AutoCategoryRule.originScore(): Int = when (origin) {
     AutoCategoryRuleOrigin.USER_CONFIRMED -> 30
@@ -735,7 +737,7 @@ private fun AutoCategoryRuleWithTags.contentSha256(): String {
         add(value.id)
         add(value.name)
         add(value.descriptionContains.orEmpty())
-        add(value.direction.name)
+        add(value.amountSign.name)
         add(value.minAbsoluteAmount?.toString().orEmpty())
         add(value.maxAbsoluteAmount?.toString().orEmpty())
         add(value.accountId.orEmpty())

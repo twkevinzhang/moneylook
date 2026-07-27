@@ -37,7 +37,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.Category
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.IngestionStatus
 import tw.kevinzhang.core.data.model.IngestionTrigger
@@ -284,7 +284,7 @@ class DataTransferRepositoryTest {
                 id = "local-food",
                 name = "CSV 測試餐飲",
                 color = "#111111",
-                kind = CategoryKind.EXPENSE,
+                reportingGroup = CategoryReportingGroup.EXPENSE,
             )
             val localTag = Tag("local-daily", "CSV 測試日常", "#222222")
             database.categoryDao().upsert(localCategory)
@@ -302,7 +302,7 @@ class DataTransferRepositoryTest {
                 id = "portable-new-category",
                 name = "CSV 測試新分類",
                 color = "#333333",
-                kind = CategoryKind.EXPENSE,
+                reportingGroup = CategoryReportingGroup.EXPENSE,
             )
             val importedNewTag = Tag("portable-new-tag", "CSV 測試新標籤", "#444444")
             val records = listOf(
@@ -341,7 +341,7 @@ class DataTransferRepositoryTest {
                     ),
                     category = localCategory.copy(
                         id = "portable-conflict",
-                        kind = CategoryKind.INCOME,
+                        reportingGroup = CategoryReportingGroup.INCOME,
                     ),
                 ),
                 transactionRecord(

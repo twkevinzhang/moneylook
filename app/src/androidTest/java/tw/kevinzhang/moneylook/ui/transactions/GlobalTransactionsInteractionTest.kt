@@ -393,7 +393,7 @@ class GlobalTransactionsInteractionTest {
         userNote = "",
         categoryId = null,
         categoryName = null,
-        categoryKind = null,
+        categoryReportingGroup = null,
         categoryEmoji = null,
         categoryColor = null,
         tags = emptyList(),

@@ -1,7 +1,7 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
 import tw.kevinzhang.core.data.model.AssetKind
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.temporal.ChronoUnit
@@ -25,7 +25,7 @@ data class GlobalTransactionItem(
     val userNote: String,
     val categoryId: String?,
     val categoryName: String?,
-    val categoryKind: CategoryKind?,
+    val categoryReportingGroup: CategoryReportingGroup?,
     val categoryEmoji: String?,
     val categoryColor: String?,
     val tags: List<GlobalTag>,
@@ -48,7 +48,7 @@ data class GlobalTransactionItem(
 
 data class GlobalTag(val id: String, val name: String)
 
-enum class GlobalTransactionDirection { INCOME, EXPENSE, TRANSFER }
+enum class GlobalTransactionDirection { INCOME, EXPENSE, EXCLUDED }
 /**
  * Visual treatment for a transaction amount in the detail ledger.
  *
@@ -251,7 +251,9 @@ fun selectGlobalTransactionExtension(
 ): GlobalTransactionsFilter = filter.copy(extensionId = extensionId, accountId = null)
 
 fun globalTransactionDirection(item: GlobalTransactionItem): GlobalTransactionDirection? = when {
-    item.categoryKind == CategoryKind.TRANSFER -> GlobalTransactionDirection.TRANSFER
+    item.categoryReportingGroup == CategoryReportingGroup.INCOME -> GlobalTransactionDirection.INCOME
+    item.categoryReportingGroup == CategoryReportingGroup.EXPENSE -> GlobalTransactionDirection.EXPENSE
+    item.categoryReportingGroup == CategoryReportingGroup.EXCLUDED -> GlobalTransactionDirection.EXCLUDED
     else -> when {
         item.amount > 0.0 -> GlobalTransactionDirection.INCOME
         item.amount < 0.0 -> GlobalTransactionDirection.EXPENSE
@@ -280,12 +282,12 @@ fun globalCreditCardTransactionStatus(item: GlobalTransactionItem): GlobalCredit
 fun globalReportableTransactions(items: List<GlobalTransactionItem>): List<GlobalTransactionItem> =
     items.filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
 
-/** Report totals exclude intentional transfers and zero-value rows. */
+/** Report totals exclude categorized "不統計" rows and zero-value rows. */
 fun globalTransactionsSummary(items: List<GlobalTransactionItem>): GlobalTransactionsSummary {
     val reportable = globalReportableTransactions(items).mapNotNull { item ->
         val direction = globalTransactionDirection(item)
         val amountTwd = item.reportingAmountTwd()
-        if (direction == null || direction == GlobalTransactionDirection.TRANSFER || amountTwd == null) null
+        if (direction == null || direction == GlobalTransactionDirection.EXCLUDED || amountTwd == null) null
         else direction to amountTwd
     }
     return GlobalTransactionsSummary(
@@ -298,7 +300,7 @@ fun globalCategorySummaries(
     items: List<GlobalTransactionItem>,
     direction: GlobalTransactionDirection,
 ): List<GlobalCategorySummary> {
-    if (direction == GlobalTransactionDirection.TRANSFER) return emptyList()
+    if (direction == GlobalTransactionDirection.EXCLUDED) return emptyList()
     val grouped = globalReportableTransactions(items)
         .filter { globalTransactionDirection(it) == direction && it.reportingAmountTwd() != null }
         .groupBy { it.categoryId }
@@ -327,7 +329,7 @@ fun GlobalTransactionItem.reportingAmountTwd(): Double? = amountTwd
  * signed colour; only unavailable reporting amounts are muted.
  */
 fun globalTransactionAmountTone(item: GlobalTransactionItem): GlobalTransactionAmountTone = when {
-    item.categoryKind == CategoryKind.TRANSFER -> GlobalTransactionAmountTone.MUTED
+    globalTransactionDirection(item) == GlobalTransactionDirection.EXCLUDED -> GlobalTransactionAmountTone.MUTED
     item.amount == 0.0 -> GlobalTransactionAmountTone.MUTED
     item.reportingAmountTwd() == null -> GlobalTransactionAmountTone.MUTED
     item.amount > 0.0 -> GlobalTransactionAmountTone.POSITIVE
@@ -336,7 +338,7 @@ fun globalTransactionAmountTone(item: GlobalTransactionItem): GlobalTransactionA
 
 fun missingExchangeCurrencies(items: List<GlobalTransactionItem>): List<String> = items.asSequence()
     .filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
-    .filter { globalTransactionDirection(it) !in setOf(null, GlobalTransactionDirection.TRANSFER) }
+    .filter { globalTransactionDirection(it) !in setOf(null, GlobalTransactionDirection.EXCLUDED) }
     .filter { it.reportingAmountTwd() == null }
     .map { it.currency.trim().uppercase(Locale.ROOT) }
     .filter(String::isNotBlank)
@@ -385,15 +387,13 @@ fun filterCategoryTransactions(
 ): List<GlobalTransactionItem> = filterGlobalTransactions(items, filter)
     .filter { item -> item.categoryId == categoryId }
 
-/** Income and expense selections intentionally follow the transaction sign, not category metadata. */
+/** A category's reporting group is authoritative; uncategorized rows temporarily follow amount sign. */
 private fun matchesGlobalDirectionFilter(
     item: GlobalTransactionItem,
     direction: GlobalTransactionDirection?,
 ): Boolean = when (direction) {
     null -> true
-    GlobalTransactionDirection.INCOME -> item.amount > 0.0
-    GlobalTransactionDirection.EXPENSE -> item.amount < 0.0
-    GlobalTransactionDirection.TRANSFER -> globalTransactionDirection(item) == GlobalTransactionDirection.TRANSFER
+    else -> globalTransactionDirection(item) == direction
 }
 
 fun moveGlobalMonth(range: GlobalDateRange, delta: Long, today: LocalDate): GlobalDateRange {

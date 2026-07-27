@@ -20,7 +20,7 @@ class DefaultClassificationCatalogTest {
         val digits = Regex("\\d")
         val categoryIds = DefaultClassificationCatalog.categories.mapTo(mutableSetOf()) { it.id }
 
-        assertEquals(16, DefaultClassificationCatalog.publicAutoCategoryRules.size)
+        assertEquals(9, DefaultClassificationCatalog.publicAutoCategoryRules.size)
         assertEquals(
             DefaultClassificationCatalog.publicAutoCategoryRules.size,
             DefaultClassificationCatalog.publicAutoCategoryRules.map { it.id }.toSet().size,
@@ -86,7 +86,7 @@ class DefaultClassificationCatalogTest {
         )
         val categoryIds = DefaultClassificationCatalog.categories.mapTo(mutableSetOf()) { it.id }
 
-        assertEquals(50, DefaultClassificationCatalog.publicGenericRules.size)
+        assertEquals(55, DefaultClassificationCatalog.publicGenericRules.size)
         assertEquals(
             DefaultClassificationCatalog.publicGenericRules.size,
             DefaultClassificationCatalog.publicGenericRules.map { it.rule.id }.toSet().size,
@@ -111,7 +111,7 @@ class DefaultClassificationCatalogTest {
             assertEquals(null, rule.minAbsoluteAmount)
             assertEquals(null, rule.maxAbsoluteAmount)
             assertEquals(null, rule.descriptionContains)
-            assertEquals(1, publicRule.conditions.size)
+            assertTrue(publicRule.conditions.isNotEmpty())
             publicRule.conditions.forEach { condition ->
                 assertTrue(
                     "rule ${rule.id} must only inspect public transaction text",
@@ -131,7 +131,40 @@ class DefaultClassificationCatalogTest {
         assertTrue(
             DefaultClassificationCatalog.publicGenericRules
                 .filter { it.rule.priority >= 29 }
-                .all { it.conditions.single().field == AutoCategoryRuleConditionField.SEARCHABLE_TEXT },
+                .all { publicRule ->
+                    publicRule.conditions.all {
+                        it.field == AutoCategoryRuleConditionField.SEARCHABLE_TEXT
+                    }
+                },
         )
+    }
+
+    @Test
+    fun `v24 catalog uses precise reporting groups and removes superseded defaults`() {
+        assertEquals(
+            setOf("income-interest", "income-cashback"),
+            DefaultClassificationCatalog.categories
+                .filter { it.id in setOf("income-interest", "income-cashback") }
+                .mapTo(mutableSetOf()) { it.id },
+        )
+        assertEquals(
+            tw.kevinzhang.core.data.model.CategoryReportingGroup.EXCLUDED,
+            DefaultClassificationCatalog.categories.single { it.id == "transfer-account" }.reportingGroup,
+        )
+        val allIds = DefaultClassificationCatalog.publicAutoCategoryRules.map { it.id }.toSet() +
+            DefaultClassificationCatalog.publicStructuralRules.map { it.rule.id } +
+            DefaultClassificationCatalog.publicGenericRules.map { it.rule.id }
+        assertTrue(
+            setOf(
+                "public-rule-003", "public-rule-006", "public-rule-010", "public-rule-011",
+                "public-rule-015", "public-rule-017", "public-rule-019",
+                "public-structural-auto-deposit-cash-withdrawal-v2",
+            ).intersect(allIds).isEmpty(),
+        )
+        val easycard = DefaultClassificationCatalog.publicStructuralRules.single {
+            it.rule.id == "public-structural-auto-easycard-topup-v3"
+        }.rule
+        assertEquals(tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign.ANY, easycard.amountSign)
+        assertEquals(null, easycard.accountKind)
     }
 }

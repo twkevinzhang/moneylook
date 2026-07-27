@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tw.kevinzhang.core.data.model.AssetKind
-import tw.kevinzhang.core.data.model.CategoryKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import java.time.LocalDate
 import java.time.YearMonth
 
@@ -59,7 +59,7 @@ class GlobalTransactionsPresentationTest {
     fun `all currency details and advanced filters work together`() {
         val items = listOf(
             item(id = "food", amount = -120.0, categoryId = "food", categoryName = "餐飲", tags = listOf(GlobalTag("daily", "日常"))),
-            item(id = "salary", amount = 50000.0, currency = "USD", description = "Salary", categoryKind = CategoryKind.INCOME),
+            item(id = "salary", amount = 50000.0, currency = "USD", description = "Salary", categoryReportingGroup = CategoryReportingGroup.INCOME),
             item(id = "note", amount = -50.0, userNote = "週末咖啡"),
         )
         assertEquals(listOf("food"), filterGlobalTransactions(items, GlobalTransactionsFilter(query = "日常")).map { it.transferId })
@@ -135,8 +135,8 @@ class GlobalTransactionsPresentationTest {
     fun `details default and search include every transaction direction across categories`() {
         val items = listOf(
             item("expense", -120.0, description = "咖啡", categoryId = "food", categoryName = "餐飲"),
-            item("income", 120.0, description = "咖啡退款", categoryId = "refund", categoryName = "退款", categoryKind = CategoryKind.INCOME),
-            item("transfer", -120.0, description = "咖啡儲值", categoryId = "move", categoryName = "帳戶移轉", categoryKind = CategoryKind.TRANSFER),
+            item("income", 120.0, description = "咖啡退款", categoryId = "refund", categoryName = "退款", categoryReportingGroup = CategoryReportingGroup.INCOME),
+            item("transfer", -120.0, description = "咖啡儲值", categoryId = "move", categoryName = "帳戶移轉", categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
         )
 
         assertNull(GlobalTransactionsFilter().direction)
@@ -154,7 +154,7 @@ class GlobalTransactionsPresentationTest {
     fun `category details add the selected category while retaining explicit filters including uncategorized`() {
         val items = listOf(
             item("food-expense", -120.0, description = "咖啡", categoryId = "food", categoryName = "餐飲"),
-            item("food-income", 120.0, description = "咖啡退款", categoryId = "food", categoryName = "餐飲", categoryKind = CategoryKind.INCOME),
+            item("food-income", 120.0, description = "咖啡退款", categoryId = "food", categoryName = "餐飲", categoryReportingGroup = CategoryReportingGroup.INCOME),
             item("travel-expense", -80.0, description = "咖啡", categoryId = "travel", categoryName = "旅遊"),
             item("uncategorized", -60.0, description = "咖啡"),
         )
@@ -182,17 +182,19 @@ class GlobalTransactionsPresentationTest {
     }
 
     @Test
-    fun `direction filters use strict transaction signs rather than category kinds`() {
+    fun `direction filters use assigned category reporting group before amount sign`() {
         val items = listOf(
-            item("income", 100.0, categoryKind = CategoryKind.EXPENSE),
-            item("expense", -100.0, categoryKind = CategoryKind.INCOME),
-            item("transfer", -10.0, categoryKind = CategoryKind.TRANSFER),
+            item("income", 100.0, categoryReportingGroup = CategoryReportingGroup.EXPENSE),
+            item("expense", -100.0, categoryReportingGroup = CategoryReportingGroup.INCOME),
+            item("excluded", -10.0, categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
+            item("uncategorized-positive", 9.0),
+            item("uncategorized-negative", -9.0),
             item("zero", 0.0),
         )
 
-        assertEquals(listOf("income"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.INCOME)).map { it.transferId })
-        assertEquals(listOf("expense", "transfer"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE)).map { it.transferId })
-        assertEquals(listOf("transfer"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.TRANSFER)).map { it.transferId })
+        assertEquals(listOf("expense", "uncategorized-positive"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.INCOME)).map { it.transferId })
+        assertEquals(listOf("income", "uncategorized-negative"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXPENSE)).map { it.transferId })
+        assertEquals(listOf("excluded"), filterGlobalTransactions(items, GlobalTransactionsFilter(direction = GlobalTransactionDirection.EXCLUDED)).map { it.transferId })
     }
 
     @Test
@@ -235,14 +237,14 @@ class GlobalTransactionsPresentationTest {
     }
 
     @Test
-    fun `transfer category and zero values are excluded from reports`() {
+    fun `excluded category and zero values are excluded from reports`() {
         val items = listOf(
             item("expense", -150.0, categoryId = "food", categoryName = "餐飲"),
-            item("income", 400.0, categoryId = "salary", categoryName = "薪資", categoryKind = CategoryKind.INCOME),
-            item("transfer", -999.0, categoryId = "move", categoryName = "帳戶移轉", categoryKind = CategoryKind.TRANSFER),
+            item("income", 400.0, categoryId = "salary", categoryName = "薪資", categoryReportingGroup = CategoryReportingGroup.INCOME),
+            item("transfer", -999.0, categoryId = "move", categoryName = "帳戶移轉", categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
             item("zero", 0.0),
         )
-        assertEquals(GlobalTransactionDirection.TRANSFER, globalTransactionDirection(items[2]))
+        assertEquals(GlobalTransactionDirection.EXCLUDED, globalTransactionDirection(items[2]))
         assertNull(globalTransactionDirection(items[3]))
         assertEquals(GlobalTransactionsSummary(400.0, 150.0), globalTransactionsSummary(items))
     }
@@ -308,7 +310,7 @@ class GlobalTransactionsPresentationTest {
     fun `amount tone is muted only for non-reporting rows`() {
         assertEquals(
             GlobalTransactionAmountTone.MUTED,
-            globalTransactionAmountTone(item("transfer", -100.0, categoryKind = CategoryKind.TRANSFER)),
+            globalTransactionAmountTone(item("transfer", -100.0, categoryReportingGroup = CategoryReportingGroup.EXCLUDED)),
         )
         assertEquals(GlobalTransactionAmountTone.MUTED, globalTransactionAmountTone(item("zero", 0.0)))
         assertEquals(GlobalTransactionAmountTone.MUTED, globalTransactionAmountTone(item("missing-rate", 10.0, currency = "USD")))
@@ -328,14 +330,14 @@ class GlobalTransactionsPresentationTest {
             item("food-a", -70.0, categoryId = "food", categoryName = "餐飲"),
             item("food-b", -30.0, categoryId = "food", categoryName = "餐飲"),
             item("none", -100.0),
-            item("move", -100.0, categoryId = "move", categoryKind = CategoryKind.TRANSFER),
+            item("move", -100.0, categoryId = "move", categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
         )
         val categories = globalCategorySummaries(items, GlobalTransactionDirection.EXPENSE)
         assertEquals(2, categories.size)
         assertEquals("餐飲", categories.first().name)
         assertEquals(100.0, categories.first().amount, 0.001)
         assertEquals(0.5f, categories.first().percentage, 0.001f)
-        assertTrue(globalCategorySummaries(items, GlobalTransactionDirection.TRANSFER).isEmpty())
+        assertTrue(globalCategorySummaries(items, GlobalTransactionDirection.EXCLUDED).isEmpty())
     }
 
     @Test
@@ -353,7 +355,7 @@ class GlobalTransactionsPresentationTest {
         userNote: String = "",
         categoryId: String? = null,
         categoryName: String? = null,
-        categoryKind: CategoryKind? = if (categoryId != null) CategoryKind.EXPENSE else null,
+        categoryReportingGroup: CategoryReportingGroup? = if (categoryId != null) CategoryReportingGroup.EXPENSE else null,
         tags: List<GlobalTag> = emptyList(),
     ) = GlobalTransactionItem(
         transferId = id,
@@ -364,7 +366,7 @@ class GlobalTransactionsPresentationTest {
         userNote = userNote,
         categoryId = categoryId,
         categoryName = categoryName,
-        categoryKind = categoryKind,
+        categoryReportingGroup = categoryReportingGroup,
         categoryEmoji = null,
         categoryColor = null,
         tags = tags,
