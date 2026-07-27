@@ -220,9 +220,15 @@ data class GlobalTransactionsUiState(
 ) {
     val currencies: List<String> get() = (allItems.map(GlobalTransactionItem::currency) + filter.currency)
         .filter(String::isNotBlank).distinct().sorted()
-    val accounts: List<GlobalChoice> get() = allItems
-        .groupBy { it.accountId to it.accountName }
-        .map { (key, _) -> GlobalChoice(key.first, key.second) }.sortedBy(GlobalChoice::name)
+    /** Account choices are intentionally unavailable until their data source is selected. */
+    fun accountsForExtension(extensionId: String?): List<GlobalChoice> = extensionId?.let { selectedExtensionId ->
+        allItems.asSequence()
+            .filter { it.extensionId == selectedExtensionId }
+            .map { GlobalChoice(it.accountId, it.accountName) }
+            .distinctBy(GlobalChoice::id)
+            .sortedBy(GlobalChoice::name)
+            .toList()
+    }.orEmpty()
     val extensions: List<GlobalChoice> get() = allItems
         .groupBy { it.extensionId to it.extensionName }
         .map { (key, _) -> GlobalChoice(key.first, key.second) }.sortedBy(GlobalChoice::name)
@@ -234,6 +240,15 @@ data class GlobalTransactionsUiState(
 }
 
 data class GlobalChoice(val id: String, val name: String)
+
+/**
+ * Source selection owns the account selection: changing or clearing a source
+ * must never retain an account that belongs to the previous source.
+ */
+fun selectGlobalTransactionExtension(
+    filter: GlobalTransactionsFilter,
+    extensionId: String?,
+): GlobalTransactionsFilter = filter.copy(extensionId = extensionId, accountId = null)
 
 fun globalTransactionDirection(item: GlobalTransactionItem): GlobalTransactionDirection? = when {
     item.categoryKind == CategoryKind.TRANSFER -> GlobalTransactionDirection.TRANSFER
