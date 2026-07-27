@@ -70,6 +70,68 @@ class GlobalTransactionsPresentationTest {
     }
 
     @Test
+    fun `account choices require a source and are limited to its accounts in the current period`() {
+        val sourceAFirst = item("a-first", -100.0).copy(
+            extensionId = "source-a",
+            extensionName = "銀行 A",
+            accountId = "a-first",
+            accountName = "A 活存",
+        )
+        val sourceASecond = item("a-second", -200.0).copy(
+            extensionId = "source-a",
+            extensionName = "銀行 A",
+            accountId = "a-second",
+            accountName = "A 信用卡",
+        )
+        val sourceB = item("b-first", -300.0).copy(
+            extensionId = "source-b",
+            extensionName = "銀行 B",
+            accountId = "b-first",
+            accountName = "B 活存",
+        )
+        val state = GlobalTransactionsUiState(
+            dateRange = GlobalDateRange.thisMonth(today),
+            allItems = listOf(sourceAFirst, sourceASecond, sourceB),
+        )
+
+        assertTrue(state.accountsForExtension(null).isEmpty())
+        assertEquals(
+            setOf("a-first", "a-second"),
+            state.accountsForExtension("source-a").map(GlobalChoice::id).toSet(),
+        )
+        assertEquals(listOf("b-first"), state.accountsForExtension("source-b").map(GlobalChoice::id))
+    }
+
+    @Test
+    fun `changing or clearing source atomically clears the selected account`() {
+        val selected = GlobalTransactionsFilter(extensionId = "source-a", accountId = "a-first")
+
+        assertEquals(
+            GlobalTransactionsFilter(extensionId = "source-b"),
+            selectGlobalTransactionExtension(selected, "source-b"),
+        )
+        assertEquals(
+            GlobalTransactionsFilter(),
+            selectGlobalTransactionExtension(selected, null),
+        )
+    }
+
+    @Test
+    fun `source and account filters apply together after account selection`() {
+        val sourceAFirst = item("a-first", -100.0).copy(extensionId = "source-a", accountId = "a-first")
+        val sourceASecond = item("a-second", -200.0).copy(extensionId = "source-a", accountId = "a-second")
+        val sourceBFirst = item("b-first", -300.0).copy(extensionId = "source-b", accountId = "b-first")
+
+        assertEquals(
+            listOf("a-second"),
+            filterGlobalTransactions(
+                listOf(sourceAFirst, sourceASecond, sourceBFirst),
+                GlobalTransactionsFilter(extensionId = "source-a", accountId = "a-second"),
+            ).map(GlobalTransactionItem::transferId),
+        )
+    }
+
+    @Test
     fun `details default and search include every transaction direction across categories`() {
         val items = listOf(
             item("expense", -120.0, description = "咖啡", categoryId = "food", categoryName = "餐飲"),

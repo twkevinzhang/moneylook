@@ -616,8 +616,24 @@ private fun GlobalTransactionFilterSheet(
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { Text("進階篩選", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-            item { FilterOptions("銀行／資料來源", state.extensions, state.filter.extensionId, { id -> onUpdate { it.copy(extensionId = id) } }) }
-            item { FilterOptions("帳戶", state.accounts, state.filter.accountId, { id -> onUpdate { it.copy(accountId = id) } }) }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("銀行／資料來源與帳戶", fontWeight = FontWeight.SemiBold)
+                    FilterOptions(
+                        title = "資料來源",
+                        options = state.extensions,
+                        selected = state.filter.extensionId,
+                        onSelect = { id -> onUpdate { selectGlobalTransactionExtension(it, id) } },
+                    )
+                    FilterOptions(
+                        title = "帳戶",
+                        options = state.accountsForExtension(state.filter.extensionId),
+                        selected = state.filter.accountId,
+                        onSelect = { id -> onUpdate { it.copy(accountId = id) } },
+                        emptyMessage = "請先選擇資料來源",
+                    )
+                }
+            }
             item { FilterOptions("分類", state.categoryOptions, state.filter.categoryId, { id -> onUpdate { it.copy(categoryId = id) } }) }
             item { FilterOptions("標籤", state.tagOptions, state.filter.tagId, { id -> onUpdate { it.copy(tagId = id) } }) }
             item {
@@ -653,9 +669,19 @@ private fun GlobalTransactionFilterSheet(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FilterOptions(title: String, options: List<GlobalChoice>, selected: String?, onSelect: (String?) -> Unit) {
-    if (options.isEmpty()) return
+private fun FilterOptions(
+    title: String,
+    options: List<GlobalChoice>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+    emptyMessage: String? = null,
+) {
+    if (options.isEmpty() && emptyMessage == null) return
     Text(title, fontWeight = FontWeight.SemiBold)
+    if (options.isEmpty()) {
+        emptyMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        return
+    }
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
