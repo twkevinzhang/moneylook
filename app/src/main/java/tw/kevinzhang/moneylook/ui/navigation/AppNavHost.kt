@@ -27,6 +27,7 @@ import tw.kevinzhang.moneylook.ui.home.SyncLogScreen
 import tw.kevinzhang.moneylook.ui.marketplace.ManageReposScreen
 import tw.kevinzhang.moneylook.ui.marketplace.MarketplaceScreen
 import tw.kevinzhang.moneylook.ui.settings.SettingsScreen
+import tw.kevinzhang.moneylook.ui.settings.DataTransferRoute
 import tw.kevinzhang.moneylook.ui.transactions.AutoRuleScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryManagementScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryTransactionsScreen
@@ -160,7 +161,11 @@ fun AppNavHost(navController: NavHostController) {
                 onNavigateToCategories = { navController.navigate(Screen.Categories.route) },
                 onNavigateToTags = { navController.navigate(Screen.Tags.route) },
                 onNavigateToRules = { navController.navigate(Screen.AutoRules.route) },
+                onNavigateToDataTransfer = { navController.navigate(Screen.DataTransfer.route) },
             )
+        }
+        composable(Screen.DataTransfer.route) {
+            DataTransferRoute(onNavigateUp = { navController.popBackStack() })
         }
         composable(Screen.ManageRepos.route) {
             ManageReposScreen(onNavigateUp = { navController.popBackStack() })

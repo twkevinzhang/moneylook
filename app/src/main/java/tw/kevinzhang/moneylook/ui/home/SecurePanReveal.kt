@@ -5,8 +5,6 @@ import android.view.Window
 import android.view.WindowManager
 import android.widget.TextView
 import android.widget.Toast
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -16,7 +14,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -25,11 +22,10 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicReference
+import tw.kevinzhang.moneylook.security.authenticateDevice
+import tw.kevinzhang.moneylook.security.findFragmentActivity
 
 private const val PAN_REVEAL_DURATION_MS = 30_000L
-private const val PAN_AUTHENTICATORS =
-    BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-
 /**
  * The complete PAN never enters Compose state. After authentication it lives only in this native
  * TextView, is inaccessible to accessibility semantics, and is cleared on timeout/background/
@@ -65,7 +61,9 @@ internal fun SecurePanReveal(
         modifier = modifier,
         enabled = enabled && activity != null,
         onClick = {
-            activity?.authenticatePan(
+            activity?.authenticateDevice(
+                title = "顯示完整卡號",
+                subtitle = "請驗證身分後查看 30 秒",
                 onAuthenticated = {
                     scope.launch {
                         // The storage boundary is reached only after the BiometricPrompt callback.
@@ -128,42 +126,6 @@ internal class PanTextView(
         clearPan()
         super.onDetachedFromWindow()
     }
-}
-
-private fun FragmentActivity.authenticatePan(
-    onAuthenticated: () -> Unit,
-    onError: (String) -> Unit,
-) {
-    if (BiometricManager.from(this).canAuthenticate(PAN_AUTHENTICATORS) != BiometricManager.BIOMETRIC_SUCCESS) {
-        onError("此裝置無法使用生物辨識或螢幕鎖定驗證")
-        return
-    }
-    val prompt = BiometricPrompt(
-        this,
-        ContextCompat.getMainExecutor(this),
-        object : BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                onAuthenticated()
-            }
-
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                onError("驗證未完成")
-            }
-        },
-    )
-    prompt.authenticate(
-        BiometricPrompt.PromptInfo.Builder()
-            .setTitle("顯示完整卡號")
-            .setSubtitle("請驗證身分後查看 30 秒")
-            .setAllowedAuthenticators(PAN_AUTHENTICATORS)
-            .build(),
-    )
-}
-
-private tailrec fun android.content.Context.findFragmentActivity(): FragmentActivity? = when (this) {
-    is FragmentActivity -> this
-    is android.content.ContextWrapper -> baseContext.findFragmentActivity()
-    else -> null
 }
 
 /** Multiple card rows can overlap briefly; only clear FLAG_SECURE after the final reveal hides. */

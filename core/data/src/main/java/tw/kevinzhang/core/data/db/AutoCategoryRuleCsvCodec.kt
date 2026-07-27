@@ -15,6 +15,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 data class AutoCategoryRuleCsvImport(
     val rules: List<AutoCategoryRule>,
     val conditionsByRuleId: Map<String, List<AutoCategoryRuleCondition>>,
+    val tagsByRuleId: Map<String, List<String>> = emptyMap(),
 )
 
 sealed interface AutoCategoryRuleCsvDecodeResult {
@@ -28,12 +29,50 @@ sealed interface AutoCategoryRuleCsvDecodeResult {
  */
 object AutoCategoryRuleCsvCodec {
     private const val MARKER = "moneylook-auto-category-rules"
+    private const val V3 = "3"
     private const val V2 = "2"
     private const val V1 = "1"
     private const val V1_1 = "1.1"
     private const val MAX_RULES = 2_000
     private const val MAX_CONDITIONS_PER_RULE = 100
+    private const val MAX_TAGS_PER_RULE = 100
     private const val MAX_PATTERN_LENGTH = 256
+    private const val MAX_CSV_CHARS = 1_000_000
+    private const val MAX_ROWS = 10_000
+    private const val MAX_CELL_CHARS = 16_384
+
+    /** Current lossless format. Rule, condition, and tag records are separate to avoid a Cartesian product. */
+    fun encode(import: AutoCategoryRuleCsvImport): String = encodeV3(import)
+
+    fun encodeV3(import: AutoCategoryRuleCsvImport): String {
+        validateRuleCollections(import)
+        val rows = mutableListOf<List<String>>()
+        rows += listOf(MARKER, V3)
+        rows += V3_HEADER
+        import.rules.sortedBy { it.id }.forEach { rule ->
+            rows += listOf(RECORD_RULE) + ruleColumns(rule) + List(6) { "" }
+            import.conditionsByRuleId[rule.id].orEmpty()
+                .sortedBy { it.position }
+                .forEach { condition ->
+                    require(condition.ruleId == rule.id) { "condition belongs to a different rule" }
+                    validateCondition(condition.field, condition.matchMode, condition.pattern)
+                    rows += listOf(RECORD_CONDITION, rule.id) + List(16) { "" } + listOf(
+                        condition.conditionGroup.name,
+                        condition.position.toString(),
+                        condition.field.name,
+                        condition.matchMode.name,
+                        condition.pattern,
+                        "",
+                    )
+                }
+            import.tagsByRuleId[rule.id].orEmpty().sorted().forEach { tagId ->
+                require(tagId.isNotBlank()) { "tag id must not be blank" }
+                rows += listOf(RECORD_TAG, rule.id) + List(21) { "" } + tagId
+            }
+        }
+        require(rows.size <= MAX_ROWS) { "too many rows" }
+        return StrictCsv.encode(rows)
+    }
 
     fun encodeV2(import: AutoCategoryRuleCsvImport): String {
         require(import.rules.size <= MAX_RULES) { "too many rules" }
@@ -59,15 +98,17 @@ object AutoCategoryRuleCsvCodec {
                 )
             }
         }
-        return rows.joinToString("\n") { row -> row.joinToString(",") { escape(it) } }
+        require(rows.size <= MAX_ROWS) { "too many rows" }
+        return StrictCsv.encode(rows)
     }
 
     fun decode(csv: String): AutoCategoryRuleCsvDecodeResult = try {
-        val rows = parse(csv)
+        val rows = StrictCsv.parse(csv, MAX_CSV_CHARS, MAX_ROWS, MAX_CELL_CHARS)
         when {
             rows.firstOrNull() == LEGACY_RULES_CSV_V1_HEADER -> decodeLegacyRulesCsvV1(rows)
-            rows.size < 2 || rows[0] != listOf(MARKER, rows[0].getOrNull(1)) ->
+            rows.size < 2 || rows[0].size != 2 || rows[0][0] != MARKER ->
                 fail("missing marker")
+            rows[0][1] == V3 -> decodeV3(rows.drop(1))
             rows[0].getOrNull(1) == V2 -> decodeV2(rows.drop(1))
             rows[0].getOrNull(1) in setOf(V1, V1_1) ->
                 decodeV1(rows[0][1], rows.drop(1))
@@ -75,6 +116,75 @@ object AutoCategoryRuleCsvCodec {
         }
     } catch (error: IllegalArgumentException) {
         AutoCategoryRuleCsvDecodeResult.Failure(error.message ?: "invalid CSV")
+    }
+
+    private fun decodeV3(rows: List<List<String>>): AutoCategoryRuleCsvDecodeResult {
+        require(rows.firstOrNull() == V3_HEADER) { "unexpected v3 header" }
+        val rules = linkedMapOf<String, AutoCategoryRule>()
+        val conditions = linkedMapOf<String, MutableList<AutoCategoryRuleCondition>>()
+        val tags = linkedMapOf<String, MutableList<String>>()
+
+        rows.drop(1).forEachIndexed { index, row ->
+            require(row.size == V3_HEADER.size) {
+                "row ${index + 2} has an unexpected column count"
+            }
+            when (row[0]) {
+                RECORD_RULE -> {
+                    require(row.drop(18).all(String::isEmpty)) { "rule row has condition or tag data" }
+                    val rule = ruleFromColumns(row.subList(1, 18))
+                    require(rules.putIfAbsent(rule.id, rule) == null) { "duplicate rule id" }
+                }
+                RECORD_CONDITION -> {
+                    require(row[1].isNotBlank()) { "missing rule id" }
+                    require(row.subList(2, 18).all(String::isEmpty)) {
+                        "condition row has rule data"
+                    }
+                    require(row[23].isEmpty()) { "condition row has tag data" }
+                    require(row.subList(18, 23).none(String::isEmpty)) { "partial condition" }
+                    val field = enumValueOf<AutoCategoryRuleConditionField>(row[20])
+                    val matchMode = enumValueOf<AutoCategoryRuleConditionMatchMode>(row[21])
+                    validateCondition(field, matchMode, row[22])
+                    val condition = AutoCategoryRuleCondition(
+                        ruleId = row[1],
+                        position = row[19].toIntOrNull()?.takeIf { it >= 0 }
+                            ?: throw IllegalArgumentException("invalid condition position"),
+                        conditionGroup = enumValueOf(row[18]),
+                        field = field,
+                        matchMode = matchMode,
+                        pattern = row[22],
+                    )
+                    val existing = conditions.getOrPut(condition.ruleId) { mutableListOf() }
+                    require(existing.none { it.position == condition.position }) {
+                        "duplicate condition position"
+                    }
+                    existing += condition
+                }
+                RECORD_TAG -> {
+                    require(row[1].isNotBlank()) { "missing rule id" }
+                    require(row.subList(2, 23).all(String::isEmpty)) { "tag row has rule data" }
+                    val tagId = required(row[23], "tag id")
+                    val existing = tags.getOrPut(row[1]) { mutableListOf() }
+                    require(tagId !in existing) { "duplicate tag id" }
+                    existing += tagId
+                }
+                else -> fail("unknown record type")
+            }
+        }
+
+        require(rules.size <= MAX_RULES) { "too many rules" }
+        require(conditions.keys.all(rules::containsKey)) { "condition references unknown rule" }
+        require(tags.keys.all(rules::containsKey)) { "tag references unknown rule" }
+        require(conditions.values.all { it.size <= MAX_CONDITIONS_PER_RULE }) {
+            "too many conditions for one rule"
+        }
+        require(tags.values.all { it.size <= MAX_TAGS_PER_RULE }) { "too many tags for one rule" }
+        return AutoCategoryRuleCsvDecodeResult.Success(
+            AutoCategoryRuleCsvImport(
+                rules = rules.values.toList(),
+                conditionsByRuleId = rules.keys.associateWith { conditions[it].orEmpty() },
+                tagsByRuleId = rules.keys.associateWith { tags[it].orEmpty() },
+            ),
+        )
     }
 
     private fun decodeV2(rows: List<List<String>>): AutoCategoryRuleCsvDecodeResult {
@@ -90,20 +200,15 @@ object AutoCategoryRuleCsvCodec {
             require(row.drop(17).none(String::isEmpty)) { "partial condition for ${rule.id}" }
             val field = enumValueOf<AutoCategoryRuleConditionField>(row[19])
             val pattern = row[21]
-            require(pattern.length <= MAX_PATTERN_LENGTH) { "condition pattern is too long" }
-            if (field == AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE) {
-                require(pattern.matches(Regex("\\d{4}"))) { "invalid MCC" }
-                require(row[20] == AutoCategoryRuleConditionMatchMode.EXACT.name) {
-                    "MCC conditions must use exact matching"
-                }
-            }
+            val matchMode = enumValueOf<AutoCategoryRuleConditionMatchMode>(row[20])
+            validateCondition(field, matchMode, pattern)
             val condition = AutoCategoryRuleCondition(
                 ruleId = rule.id,
                 position = row[18].toIntOrNull()?.takeIf { it >= 0 }
                     ?: throw IllegalArgumentException("invalid condition position"),
                 conditionGroup = enumValueOf(row[17]),
                 field = field,
-                matchMode = enumValueOf<AutoCategoryRuleConditionMatchMode>(row[20]),
+                matchMode = matchMode,
                 pattern = pattern,
             )
             require(conditions.getOrPut(rule.id) { mutableListOf() }.none { it.position == condition.position }) {
@@ -237,28 +342,42 @@ object AutoCategoryRuleCsvCodec {
         rule.extensionId.orEmpty(), rule.accountKind?.name.orEmpty(), rule.origin.name, rule.action.name,
     )
 
-    private fun parse(csv: String): List<List<String>> {
-        require(csv.length <= 1_000_000) { "CSV is too large" }
-        val rows = mutableListOf<MutableList<String>>()
-        var row = mutableListOf<String>()
-        val cell = StringBuilder()
-        var quoted = false
-        var index = 0
-        while (index < csv.length) {
-            when (val char = csv[index]) {
-                '"' -> if (quoted && csv.getOrNull(index + 1) == '"') { cell.append(char); index++ } else quoted = !quoted
-                ',' -> if (quoted) cell.append(char) else { row += cell.toString(); cell.clear() }
-                '\n' -> if (quoted) cell.append(char) else { row += cell.toString(); cell.clear(); rows += row; row = mutableListOf() }
-                '\r' -> Unit
-                else -> cell.append(char)
-            }
-            index++
+    private fun validateRuleCollections(import: AutoCategoryRuleCsvImport) {
+        require(import.rules.size <= MAX_RULES) { "too many rules" }
+        val ruleIds = import.rules.map { it.id }
+        require(ruleIds.distinct().size == ruleIds.size) { "duplicate rule id" }
+        require(import.conditionsByRuleId.keys.all(ruleIds::contains)) {
+            "condition collection references unknown rule"
         }
-        require(!quoted) { "unterminated quoted cell" }
-        row += cell.toString()
-        if (row.any(String::isNotEmpty) || rows.isEmpty()) rows += row
-        require(rows.size <= 10_000) { "too many rows" }
-        return rows.map { it.toList() }
+        require(import.tagsByRuleId.keys.all(ruleIds::contains)) {
+            "tag collection references unknown rule"
+        }
+        import.rules.forEach { rule ->
+            val conditions = import.conditionsByRuleId[rule.id].orEmpty()
+            require(conditions.size <= MAX_CONDITIONS_PER_RULE) {
+                "too many conditions for ${rule.id}"
+            }
+            require(conditions.map { it.position }.distinct().size == conditions.size) {
+                "duplicate condition position"
+            }
+            val tags = import.tagsByRuleId[rule.id].orEmpty()
+            require(tags.size <= MAX_TAGS_PER_RULE) { "too many tags for ${rule.id}" }
+            require(tags.distinct().size == tags.size) { "duplicate tag id" }
+        }
+    }
+
+    private fun validateCondition(
+        field: AutoCategoryRuleConditionField,
+        matchMode: AutoCategoryRuleConditionMatchMode,
+        pattern: String,
+    ) {
+        require(pattern.length <= MAX_PATTERN_LENGTH) { "condition pattern is too long" }
+        if (field == AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE) {
+            require(pattern.matches(Regex("\\d{4}"))) { "invalid MCC" }
+            require(matchMode == AutoCategoryRuleConditionMatchMode.EXACT) {
+                "MCC conditions must use exact matching"
+            }
+        }
     }
 
     private fun nullable(value: String): String? = value.ifBlank { null }
@@ -270,11 +389,25 @@ object AutoCategoryRuleCsvCodec {
         ?: throw IllegalArgumentException("missing $name")
     private fun bool(value: String): Boolean = when (value) { "true" -> true; "false" -> false; else -> throw IllegalArgumentException("invalid boolean") }
     private fun fail(reason: String): Nothing = throw IllegalArgumentException(reason)
-    private fun escape(value: String): String = if (value.any { it == ',' || it == '"' || it == '\n' }) "\"${value.replace("\"", "\"\"")}\"" else value
-
     private val V1_HEADER = listOf("id", "name", "descriptionContains", "direction", "minAbsoluteAmount", "maxAbsoluteAmount", "accountId", "categoryId", "enabled", "priority")
     private val V1_1_HEADER = V1_HEADER + listOf("descriptionMatchMode", "isDefault")
     private val V2_HEADER = V1_1_HEADER + listOf("ruleSetId", "extensionId", "accountKind", "origin", "action", "conditionGroup", "conditionPosition", "conditionField", "conditionMatchMode", "conditionPattern")
+    private val V3_HEADER = listOf("recordType") + V1_1_HEADER + listOf(
+        "ruleSetId",
+        "extensionId",
+        "accountKind",
+        "origin",
+        "action",
+        "conditionGroup",
+        "conditionPosition",
+        "conditionField",
+        "conditionMatchMode",
+        "conditionPattern",
+        "tagId",
+    )
+    private const val RECORD_RULE = "RULE"
+    private const val RECORD_CONDITION = "CONDITION"
+    private const val RECORD_TAG = "TAG"
     private val LEGACY_RULES_CSV_V1_HEADER = listOf(
         "schema_version",
         "rule_id",

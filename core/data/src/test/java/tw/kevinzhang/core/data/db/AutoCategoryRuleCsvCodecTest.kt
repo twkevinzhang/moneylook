@@ -12,6 +12,73 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 
 class AutoCategoryRuleCsvCodecTest {
     @Test
+    fun `v3 supports an empty custom-rule backup`() {
+        val csv = AutoCategoryRuleCsvCodec.encode(
+            AutoCategoryRuleCsvImport(
+                rules = emptyList(),
+                conditionsByRuleId = emptyMap(),
+                tagsByRuleId = emptyMap(),
+            ),
+        )
+
+        val decoded = AutoCategoryRuleCsvCodec.decode(csv)
+
+        assertTrue(decoded is AutoCategoryRuleCsvDecodeResult.Success)
+        decoded as AutoCategoryRuleCsvDecodeResult.Success
+        assertTrue(decoded.value.rules.isEmpty())
+        assertTrue(decoded.value.conditionsByRuleId.isEmpty())
+        assertTrue(decoded.value.tagsByRuleId.isEmpty())
+    }
+
+    @Test
+    fun `v3 round trip retains tags and rules with no structured conditions`() {
+        val noTextRule = AutoCategoryRule(
+            id = "amount-only",
+            name = "Only amount and account",
+            direction = tw.kevinzhang.core.data.model.AutoCategoryRuleDirection.EXPENSE,
+            minAbsoluteAmount = 500.0,
+            accountId = "account-1",
+            categoryId = "expense-shopping",
+        )
+        val structuredRule = AutoCategoryRule(id = "text", name = "Text")
+        val source = AutoCategoryRuleCsvImport(
+            rules = listOf(noTextRule, structuredRule),
+            conditionsByRuleId = mapOf(
+                noTextRule.id to emptyList(),
+                structuredRule.id to listOf(
+                    AutoCategoryRuleCondition(
+                        structuredRule.id,
+                        7,
+                        AutoCategoryRuleConditionGroup.INCLUDE_ALL,
+                        AutoCategoryRuleConditionField.DESCRIPTION,
+                        AutoCategoryRuleConditionMatchMode.CONTAINS,
+                        "quoted, \"merchant\"",
+                    ),
+                ),
+            ),
+            tagsByRuleId = mapOf(
+                noTextRule.id to listOf("tag-household", "tag-2026"),
+                structuredRule.id to emptyList(),
+            ),
+        )
+
+        val result = AutoCategoryRuleCsvCodec.decode(AutoCategoryRuleCsvCodec.encode(source))
+
+        assertTrue(result is AutoCategoryRuleCsvDecodeResult.Success)
+        val value = (result as AutoCategoryRuleCsvDecodeResult.Success).value
+        assertEquals(source.rules.sortedBy { it.id }, value.rules)
+        assertEquals(emptyList<AutoCategoryRuleCondition>(), value.conditionsByRuleId.getValue(noTextRule.id))
+        assertEquals(
+            source.conditionsByRuleId.getValue(structuredRule.id),
+            value.conditionsByRuleId.getValue(structuredRule.id),
+        )
+        assertEquals(
+            source.tagsByRuleId.getValue(noTextRule.id).sorted(),
+            value.tagsByRuleId.getValue(noTextRule.id),
+        )
+    }
+
+    @Test
     fun `v2 round trip retains positioned structured conditions`() {
         val rule = AutoCategoryRule(id = "rule", name = "quoted, rule")
         val source = AutoCategoryRuleCsvImport(
@@ -114,6 +181,56 @@ class AutoCategoryRuleCsvCodecTest {
         )
         assertTrue(
             AutoCategoryRuleCsvCodec.decode(oversized) is AutoCategoryRuleCsvDecodeResult.Failure,
+        )
+    }
+
+    @Test
+    fun `v3 rejects orphan records unknown columns and duplicate tags`() {
+        val header = """
+            moneylook-auto-category-rules,3
+            recordType,id,name,descriptionContains,direction,minAbsoluteAmount,maxAbsoluteAmount,accountId,categoryId,enabled,priority,descriptionMatchMode,isDefault,ruleSetId,extensionId,accountKind,origin,action,conditionGroup,conditionPosition,conditionField,conditionMatchMode,conditionPattern,tagId
+        """.trimIndent()
+        val orphanTag = "$header\nTAG,missing,,,,,,,,,,,,,,,,,,,,,,tag"
+        val unknownColumn = header.replace("tagId", "tagId,unexpected") +
+            "\nRULE,rule,Rule,,ANY,,,,,true,0,CONTAINS,false,,,," +
+            "LEGACY,AUTO_APPLY,,,,,,,payload"
+        val duplicateTag = "$header\n" +
+            "RULE,rule,Rule,,ANY,,,,,true,0,CONTAINS,false,,,,LEGACY,AUTO_APPLY,,,,,,\n" +
+            "TAG,rule,,,,,,,,,,,,,,,,,,,,,,tag\n" +
+            "TAG,rule,,,,,,,,,,,,,,,,,,,,,,tag"
+
+        assertTrue(AutoCategoryRuleCsvCodec.decode(orphanTag) is AutoCategoryRuleCsvDecodeResult.Failure)
+        assertTrue(AutoCategoryRuleCsvCodec.decode(unknownColumn) is AutoCategoryRuleCsvDecodeResult.Failure)
+        assertTrue(AutoCategoryRuleCsvCodec.decode(duplicateTag) is AutoCategoryRuleCsvDecodeResult.Failure)
+    }
+
+    @Test
+    fun `hostile malformed quoting and excessive rows fail closed`() {
+        val quoteInUnquotedCell = """
+            moneylook-auto-category-rules,1
+            id,name,descriptionContains,direction,minAbsoluteAmount,maxAbsoluteAmount,accountId,categoryId,enabled,priority
+            old,bad"name,refund,INCOME,,,,income-refund,true,5
+        """.trimIndent()
+        val charactersAfterQuote = """
+            moneylook-auto-category-rules,1
+            id,name,descriptionContains,direction,minAbsoluteAmount,maxAbsoluteAmount,accountId,categoryId,enabled,priority
+            old,"name"payload,refund,INCOME,,,,income-refund,true,5
+        """.trimIndent()
+        val excessiveRows = buildString {
+            append("moneylook-auto-category-rules,1\n")
+            repeat(10_000) { append("\n") }
+        }
+
+        assertTrue(
+            AutoCategoryRuleCsvCodec.decode(quoteInUnquotedCell) is
+                AutoCategoryRuleCsvDecodeResult.Failure,
+        )
+        assertTrue(
+            AutoCategoryRuleCsvCodec.decode(charactersAfterQuote) is
+                AutoCategoryRuleCsvDecodeResult.Failure,
+        )
+        assertTrue(
+            AutoCategoryRuleCsvCodec.decode(excessiveRows) is AutoCategoryRuleCsvDecodeResult.Failure,
         )
     }
 }
