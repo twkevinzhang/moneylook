@@ -31,14 +31,14 @@ import tw.kevinzhang.moneylook.ui.settings.DataTransferRoute
 import tw.kevinzhang.moneylook.ui.transactions.AutoRuleScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryManagementScreen
 import tw.kevinzhang.moneylook.ui.transactions.CategoryTransactionsScreen
-import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionsScreen
-import tw.kevinzhang.moneylook.ui.transactions.GlobalTransactionsViewModel
+import tw.kevinzhang.moneylook.ui.transactions.GlobalLedgerScreen
+import tw.kevinzhang.moneylook.ui.transactions.GlobalLedgerViewModel
 import tw.kevinzhang.moneylook.ui.transactions.TagManagementScreen
 import tw.kevinzhang.moneylook.ui.transactions.TransactionDetailScreen
 
 private val bottomBarRoutes = setOf(
     Screen.Home.route,
-    Screen.GlobalTransactions.route,
+    Screen.GlobalLedger.route,
     Screen.Settings.route,
 )
 
@@ -63,16 +63,16 @@ fun AppNavHost(navController: NavHostController) {
                     label = { Text("首頁") },
                 )
                 NavigationBarItem(
-                    selected = currentRoute == Screen.GlobalTransactions.route,
+                    selected = currentRoute == Screen.GlobalLedger.route,
                     onClick = {
-                        navController.navigate(Screen.GlobalTransactions.route) {
+                        navController.navigate(Screen.GlobalLedger.route) {
                             launchSingleTop = true
                             restoreState = true
                             popUpTo(Screen.Home.route) { saveState = true }
                         }
                     },
-                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "明細") },
-                    label = { Text("明細") },
+                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "帳本") },
+                    label = { Text("帳本") },
                 )
                 NavigationBarItem(
                     selected = currentRoute == Screen.Settings.route,
@@ -118,8 +118,8 @@ fun AppNavHost(navController: NavHostController) {
                 onNavigateToManageRepos = { navController.navigate(Screen.ManageRepos.route) },
             )
         }
-        composable(Screen.GlobalTransactions.route) {
-            GlobalTransactionsScreen(
+        composable(Screen.GlobalLedger.route) {
+            GlobalLedgerScreen(
                 bottomBar = bottomBar,
                 onNavigateToTransaction = { transferId ->
                     navController.navigate(Screen.TransactionDetail.route(transferId))
@@ -141,9 +141,9 @@ fun AppNavHost(navController: NavHostController) {
             ),
         ) { backStackEntry ->
             val parentEntry = remember(backStackEntry) {
-                navController.getBackStackEntry(Screen.GlobalTransactions.route)
+                navController.getBackStackEntry(Screen.GlobalLedger.route)
             }
-            val viewModel: GlobalTransactionsViewModel = hiltViewModel(parentEntry)
+            val viewModel: GlobalLedgerViewModel = hiltViewModel(parentEntry)
             val categoryId = backStackEntry.arguments?.getString("categoryId")
                 ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
             CategoryTransactionsScreen(

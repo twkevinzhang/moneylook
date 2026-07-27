@@ -56,18 +56,18 @@ class DesignQaCaptureTest {
             item("jun", "2026-06-03", 66_000.0, "薪資", CategoryReportingGroup.INCOME, "#43B96D"),
             item("jun-expense", "2026-06-18", -33_000.0, "生活", CategoryReportingGroup.EXPENSE, "#FB8C00"),
         ) + currentItems
-        val state = GlobalTransactionsUiState(
+        val state = GlobalLedgerUiState(
             dateRange = GlobalDateRange(LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 22)),
-            activeTab = GlobalTransactionsTab.ANALYSIS,
+            activeTab = GlobalLedgerTab.ANALYSIS,
             allItems = currentItems,
             items = currentItems,
             trendItems = trendItems,
-            summary = globalTransactionsSummary(currentItems),
+            summary = globalLedgerSummary(currentItems),
         )
 
         composeRule.setContent {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
-                GlobalTransactionsContent(
+                GlobalLedgerContent(
                     state = state,
                     onNavigateToTransaction = {},
                     onSelectDateRange = {},
@@ -101,20 +101,20 @@ class DesignQaCaptureTest {
             item("cash", "2026-07-18", -3_240.0, "現金消費", CategoryReportingGroup.EXPENSE, "#66BB6A"),
             item("uncategorized", "2026-07-20", -1_180.0, null, null, null),
         )
-        val base = GlobalTransactionsUiState(
+        val base = GlobalLedgerUiState(
             dateRange = GlobalDateRange(LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 22)),
-            activeTab = GlobalTransactionsTab.CATEGORY,
-            categoryDirection = GlobalTransactionDirection.EXPENSE,
+            activeTab = GlobalLedgerTab.CATEGORY,
+            categoryDirection = GlobalLedgerDirection.EXPENSE,
             allItems = items,
             items = items,
-            summary = globalTransactionsSummary(items),
-            categories = globalCategorySummaries(items, GlobalTransactionDirection.EXPENSE),
+            summary = globalLedgerSummary(items),
+            categories = globalCategorySummaries(items, GlobalLedgerDirection.EXPENSE),
         )
         val state = mutableStateOf(base)
 
         composeRule.setContent {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
-                GlobalTransactionsContent(
+                GlobalLedgerContent(
                     state = state.value,
                     onNavigateToTransaction = {},
                     onSelectDateRange = {},
@@ -133,7 +133,7 @@ class DesignQaCaptureTest {
 
         composeRule.waitForIdle()
         capture("design-qa-category.png")
-        composeRule.runOnUiThread { state.value = base.copy(activeTab = GlobalTransactionsTab.DETAILS) }
+        composeRule.runOnUiThread { state.value = base.copy(activeTab = GlobalLedgerTab.DETAILS) }
         composeRule.waitForIdle()
         capture("design-qa-details.png")
     }
@@ -153,7 +153,7 @@ class DesignQaCaptureTest {
         categoryName: String?,
         categoryReportingGroup: CategoryReportingGroup?,
         categoryColor: String?,
-    ) = GlobalTransactionItem(
+    ) = GlobalLedgerItem(
         transferId = id,
         transactionDateTime = "${date}T12:00:00+08:00",
         description = categoryName ?: "一般交易",
@@ -178,7 +178,7 @@ class DesignQaCaptureTest {
 private fun QaBottomBar() {
     NavigationBar {
         NavigationBarItem(false, {}, { Icon(Icons.Default.Home, "首頁") }, label = { Text("首頁") })
-        NavigationBarItem(true, {}, { Icon(Icons.AutoMirrored.Filled.List, "明細") }, label = { Text("明細") })
+        NavigationBarItem(true, {}, { Icon(Icons.AutoMirrored.Filled.List, "帳本") }, label = { Text("帳本") })
         NavigationBarItem(false, {}, { Icon(Icons.Default.Settings, "設定") }, label = { Text("設定") })
     }
 }

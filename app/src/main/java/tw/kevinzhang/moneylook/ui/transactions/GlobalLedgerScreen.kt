@@ -91,15 +91,15 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 @Composable
-fun GlobalTransactionsScreen(
+fun GlobalLedgerScreen(
     onNavigateToTransaction: (String) -> Unit,
     onNavigateToCategoryTransactions: (String?) -> Unit,
-    analysisContent: @Composable (GlobalTransactionsUiState) -> Unit = {},
+    analysisContent: @Composable (GlobalLedgerUiState) -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
-    viewModel: GlobalTransactionsViewModel = hiltViewModel(),
+    viewModel: GlobalLedgerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    GlobalTransactionsContent(
+    GlobalLedgerContent(
         state = state,
         onNavigateToTransaction = onNavigateToTransaction,
         onSelectDateRange = viewModel::selectDateRange,
@@ -128,7 +128,7 @@ fun CategoryTransactionsScreen(
     categoryId: String?,
     onNavigateUp: () -> Unit,
     onNavigateToTransaction: (String) -> Unit,
-    viewModel: GlobalTransactionsViewModel,
+    viewModel: GlobalLedgerViewModel,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val categoryItems = remember(state.allItems, state.filter, categoryId) {
@@ -158,7 +158,7 @@ fun CategoryTransactionsScreen(
 @Composable
 fun CategoryTransactionsContent(
     categoryName: String,
-    items: List<GlobalTransactionItem>,
+    items: List<GlobalLedgerItem>,
     onNavigateUp: () -> Unit,
     onNavigateToTransaction: (String) -> Unit,
 ) {
@@ -185,8 +185,8 @@ fun CategoryTransactionsContent(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
             ) {
-                items(items, key = GlobalTransactionItem::transferId) { item ->
-                    GlobalTransactionRow(item, onClick = { onNavigateToTransaction(item.transferId) })
+                items(items, key = GlobalLedgerItem::transferId) { item ->
+                    GlobalLedgerRow(item, onClick = { onNavigateToTransaction(item.transferId) })
                 }
             }
         }
@@ -195,19 +195,19 @@ fun CategoryTransactionsContent(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GlobalTransactionsContent(
-    state: GlobalTransactionsUiState,
+fun GlobalLedgerContent(
+    state: GlobalLedgerUiState,
     onNavigateToTransaction: (String) -> Unit,
     onSelectDateRange: (GlobalDateRange) -> Unit,
     onResetToThisMonth: () -> Unit,
     onSetDateRange: (LocalDate?, LocalDate?) -> Boolean,
     onSetQuery: (String) -> Unit,
-    onUpdateFilter: ((GlobalTransactionsFilter) -> GlobalTransactionsFilter) -> Unit,
+    onUpdateFilter: ((GlobalLedgerFilter) -> GlobalLedgerFilter) -> Unit,
     onClearFilters: () -> Unit,
-    onSelectTab: (GlobalTransactionsTab) -> Unit,
-    onSelectReportDirection: (GlobalTransactionDirection) -> Unit,
+    onSelectTab: (GlobalLedgerTab) -> Unit,
+    onSelectReportDirection: (GlobalLedgerDirection) -> Unit,
     onCategoryClick: (String?) -> Unit,
-    analysisContent: @Composable (GlobalTransactionsUiState) -> Unit = {},
+    analysisContent: @Composable (GlobalLedgerUiState) -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -278,7 +278,7 @@ fun GlobalTransactionsContent(
                                 .testTag("transaction-search-field"),
                         )
                     } else {
-                        Text("明細")
+                        Text("帳本")
                     }
                 },
                 actions = {
@@ -303,7 +303,7 @@ fun GlobalTransactionsContent(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item("controls") {
-                GlobalTransactionControls(
+                GlobalLedgerControls(
                     dateRange = state.dateRange,
                     datePagerAnchor = state.datePagerAnchor,
                     onSelectDateRange = onSelectDateRange,
@@ -315,8 +315,8 @@ fun GlobalTransactionsContent(
                     summary = state.summary,
                     currency = "TWD",
                     selectedDirection = state.categoryDirection,
-                    onIncome = { onSelectReportDirection(GlobalTransactionDirection.INCOME) },
-                    onExpense = { onSelectReportDirection(GlobalTransactionDirection.EXPENSE) },
+                    onIncome = { onSelectReportDirection(GlobalLedgerDirection.INCOME) },
+                    onExpense = { onSelectReportDirection(GlobalLedgerDirection.EXPENSE) },
                 )
             }
             item("exchange-rate-notice") {
@@ -329,26 +329,26 @@ fun GlobalTransactionsContent(
                 GlobalTabs(selected = state.activeTab, onSelect = onSelectTab)
             }
             when (state.activeTab) {
-                GlobalTransactionsTab.CATEGORY -> {
+                GlobalLedgerTab.CATEGORY -> {
                     if (state.categories.isEmpty()) item("empty-category") { GlobalEmptyState("這個條件下沒有可統計的收支分類") }
                     else items(state.categories, key = { "category-${it.id}-${it.name}" }) { category ->
                         CategorySummaryRow(category, "TWD", onClick = { onCategoryClick(category.id) })
                     }
                 }
-                GlobalTransactionsTab.DETAILS -> {
+                GlobalLedgerTab.DETAILS -> {
                     if (state.items.isEmpty()) item("empty-details") { GlobalEmptyState("這個條件下沒有交易明細") }
-                    else items(state.items, key = GlobalTransactionItem::transferId) { item ->
-                        GlobalTransactionRow(item, onClick = { onNavigateToTransaction(item.transferId) })
+                    else items(state.items, key = GlobalLedgerItem::transferId) { item ->
+                        GlobalLedgerRow(item, onClick = { onNavigateToTransaction(item.transferId) })
                     }
                 }
-                GlobalTransactionsTab.ANALYSIS -> item("analysis") { analysisContent(state) }
+                GlobalLedgerTab.ANALYSIS -> item("analysis") { analysisContent(state) }
             }
             item("bottom-space") { Spacer(Modifier.height(20.dp)) }
         }
     }
 
     if (showFilters) {
-        GlobalTransactionFilterSheet(
+        GlobalLedgerFilterSheet(
             state = state,
             onDismiss = { showFilters = false },
             onUpdate = onUpdateFilter,
@@ -366,7 +366,7 @@ fun GlobalTransactionsContent(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GlobalTransactionControls(
+private fun GlobalLedgerControls(
     dateRange: GlobalDateRange,
     datePagerAnchor: GlobalDateRange,
     onSelectDateRange: (GlobalDateRange) -> Unit,
@@ -487,15 +487,23 @@ private fun ExchangeRateNotice(loading: Boolean, hasMissingCurrencies: Boolean) 
 
 @Composable
 private fun GlobalSummaryCards(
-    summary: GlobalTransactionsSummary,
+    summary: GlobalLedgerSummary,
     currency: String,
-    selectedDirection: GlobalTransactionDirection?,
+    selectedDirection: GlobalLedgerDirection?,
     onIncome: () -> Unit,
     onExpense: () -> Unit,
 ) {
-    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        SummaryCard("收入", summary.income, currency, MaterialTheme.colorScheme.primary, selectedDirection == GlobalTransactionDirection.INCOME, onIncome, Modifier.weight(1f).testTag("summary-income"))
-        SummaryCard("支出", summary.expense, currency, MaterialTheme.colorScheme.error, selectedDirection == GlobalTransactionDirection.EXPENSE, onExpense, Modifier.weight(1f).testTag("summary-expense"))
+    Column(Modifier.padding(horizontal = 16.dp), horizontalAlignment = Alignment.End) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            SummaryCard("收入", summary.income, currency, MaterialTheme.colorScheme.primary, selectedDirection == GlobalLedgerDirection.INCOME, onIncome, Modifier.weight(1f).testTag("summary-income"))
+            SummaryCard("支出", summary.expense, currency, MaterialTheme.colorScheme.error, selectedDirection == GlobalLedgerDirection.EXPENSE, onExpense, Modifier.weight(1f).testTag("summary-expense"))
+        }
+        Text(
+            text = "不統計 ${summary.excludedCount} 筆",
+            modifier = Modifier.padding(top = 6.dp).testTag("summary-excluded-count"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -516,11 +524,11 @@ private fun SummaryCard(label: String, amount: Double, currency: String, color: 
 }
 
 @Composable
-private fun GlobalTabs(selected: GlobalTransactionsTab, onSelect: (GlobalTransactionsTab) -> Unit) {
+private fun GlobalTabs(selected: GlobalLedgerTab, onSelect: (GlobalLedgerTab) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected == GlobalTransactionsTab.CATEGORY, { onSelect(GlobalTransactionsTab.CATEGORY) }, { Text("分類") }, Modifier.weight(1f))
-        FilterChip(selected == GlobalTransactionsTab.DETAILS, { onSelect(GlobalTransactionsTab.DETAILS) }, { Text("明細") }, Modifier.weight(1f))
-        FilterChip(selected == GlobalTransactionsTab.ANALYSIS, { onSelect(GlobalTransactionsTab.ANALYSIS) }, { Text("分析") }, Modifier.weight(1f))
+        FilterChip(selected == GlobalLedgerTab.CATEGORY, { onSelect(GlobalLedgerTab.CATEGORY) }, { Text("分類") }, Modifier.weight(1f))
+        FilterChip(selected == GlobalLedgerTab.DETAILS, { onSelect(GlobalLedgerTab.DETAILS) }, { Text("明細") }, Modifier.weight(1f))
+        FilterChip(selected == GlobalLedgerTab.ANALYSIS, { onSelect(GlobalLedgerTab.ANALYSIS) }, { Text("分析") }, Modifier.weight(1f))
     }
 }
 
@@ -545,11 +553,11 @@ private fun CategorySummaryRow(item: GlobalCategorySummary, currency: String, on
 }
 
 @Composable
-fun GlobalTransactionRow(item: GlobalTransactionItem, onClick: () -> Unit) {
-    val amountColor = when (globalTransactionAmountTone(item)) {
-        GlobalTransactionAmountTone.POSITIVE -> MaterialTheme.colorScheme.primary
-        GlobalTransactionAmountTone.NEGATIVE -> MaterialTheme.colorScheme.error
-        GlobalTransactionAmountTone.MUTED -> MaterialTheme.colorScheme.onSurfaceVariant
+fun GlobalLedgerRow(item: GlobalLedgerItem, onClick: () -> Unit) {
+    val amountColor = when (globalLedgerAmountTone(item)) {
+        GlobalLedgerAmountTone.POSITIVE -> MaterialTheme.colorScheme.primary
+        GlobalLedgerAmountTone.NEGATIVE -> MaterialTheme.colorScheme.error
+        GlobalLedgerAmountTone.MUTED -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -607,10 +615,10 @@ private fun GlobalEmptyState(text: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GlobalTransactionFilterSheet(
-    state: GlobalTransactionsUiState,
+private fun GlobalLedgerFilterSheet(
+    state: GlobalLedgerUiState,
     onDismiss: () -> Unit,
-    onUpdate: ((GlobalTransactionsFilter) -> GlobalTransactionsFilter) -> Unit,
+    onUpdate: ((GlobalLedgerFilter) -> GlobalLedgerFilter) -> Unit,
     onClear: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -623,7 +631,7 @@ private fun GlobalTransactionFilterSheet(
                         title = "資料來源",
                         options = state.extensions,
                         selected = state.filter.extensionId,
-                        onSelect = { id -> onUpdate { selectGlobalTransactionExtension(it, id) } },
+                        onSelect = { id -> onUpdate { selectGlobalLedgerExtension(it, id) } },
                     )
                     FilterOptions(
                         title = "帳戶",
@@ -639,9 +647,9 @@ private fun GlobalTransactionFilterSheet(
             item {
                 Text("收支類型", fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DirectionChip("收入", GlobalTransactionDirection.INCOME, state.filter.direction, onUpdate)
-                    DirectionChip("支出", GlobalTransactionDirection.EXPENSE, state.filter.direction, onUpdate)
-                    DirectionChip("不統計", GlobalTransactionDirection.EXCLUDED, state.filter.direction, onUpdate)
+                    DirectionChip("收入", GlobalLedgerDirection.INCOME, state.filter.direction, onUpdate)
+                    DirectionChip("支出", GlobalLedgerDirection.EXPENSE, state.filter.direction, onUpdate)
+                    DirectionChip("不統計", GlobalLedgerDirection.EXCLUDED, state.filter.direction, onUpdate)
                 }
             }
             item {
@@ -693,12 +701,12 @@ private fun FilterOptions(
 }
 
 @Composable
-private fun DirectionChip(label: String, direction: GlobalTransactionDirection, selected: GlobalTransactionDirection?, onUpdate: ((GlobalTransactionsFilter) -> GlobalTransactionsFilter) -> Unit) {
+private fun DirectionChip(label: String, direction: GlobalLedgerDirection, selected: GlobalLedgerDirection?, onUpdate: ((GlobalLedgerFilter) -> GlobalLedgerFilter) -> Unit) {
     FilterChip(selected == direction, { onUpdate { it.copy(direction = if (it.direction == direction) null else direction) } }, { Text(label) })
 }
 
 @Composable
-private fun AssignmentChip(label: String, assignment: GlobalCategoryAssignment, selected: GlobalCategoryAssignment, onUpdate: ((GlobalTransactionsFilter) -> GlobalTransactionsFilter) -> Unit) {
+private fun AssignmentChip(label: String, assignment: GlobalCategoryAssignment, selected: GlobalCategoryAssignment, onUpdate: ((GlobalLedgerFilter) -> GlobalLedgerFilter) -> Unit) {
     FilterChip(selected == assignment, { onUpdate { it.copy(assignment = if (it.assignment == assignment) GlobalCategoryAssignment.ALL else assignment) } }, { Text(label) })
 }
 
