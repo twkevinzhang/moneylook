@@ -836,3 +836,10 @@ val MIGRATION_23_24 = object : Migration(23, 24) {
         DefaultClassificationSeeder.upgradePublicCatalogToV5(db)
     }
 }
+
+/** Adds the aggressive public rule layer while preserving edited or deleted user-owned rows. */
+val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        DefaultClassificationSeeder.upgradePublicCatalogToV6(db)
+    }
+}

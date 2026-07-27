@@ -73,7 +73,7 @@ class DefaultClassificationCatalogTest {
     }
 
     @Test
-    fun `public generic v4 rules exclude private scopes and search structured merchant facts`() {
+    fun `public generic v5 rules exclude private scopes and search structured merchant facts`() {
         val privateContext = Regex(
             "台北|新北|桃園|台中|台南|高雄|基隆|新竹|嘉義|彰化|中壢|內湖|信義|板橋|新店|" +
                 "分行|分店|門市|卡號|訂單|序號|先生|小姐",
@@ -86,7 +86,7 @@ class DefaultClassificationCatalogTest {
         )
         val categoryIds = DefaultClassificationCatalog.categories.mapTo(mutableSetOf()) { it.id }
 
-        assertEquals(55, DefaultClassificationCatalog.publicGenericRules.size)
+        assertEquals(72, DefaultClassificationCatalog.publicGenericRules.size)
         assertEquals(
             DefaultClassificationCatalog.publicGenericRules.size,
             DefaultClassificationCatalog.publicGenericRules.map { it.rule.id }.toSet().size,
@@ -111,7 +111,16 @@ class DefaultClassificationCatalogTest {
             assertEquals(null, rule.minAbsoluteAmount)
             assertEquals(null, rule.maxAbsoluteAmount)
             assertEquals(null, rule.descriptionContains)
-            assertTrue(publicRule.conditions.isNotEmpty())
+            if (rule.id == "public-v4-income-credit-card-refund-fallback") {
+                assertTrue(publicRule.conditions.isEmpty())
+                assertEquals(
+                    tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign.POSITIVE,
+                    rule.amountSign,
+                )
+                assertEquals(tw.kevinzhang.core.data.model.AssetKind.CREDIT_CARD, rule.accountKind)
+            } else {
+                assertTrue(publicRule.conditions.isNotEmpty())
+            }
             publicRule.conditions.forEach { condition ->
                 assertTrue(
                     "rule ${rule.id} must only inspect public transaction text",
@@ -166,5 +175,38 @@ class DefaultClassificationCatalogTest {
         }.rule
         assertEquals(tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign.ANY, easycard.amountSign)
         assertEquals(null, easycard.accountKind)
+    }
+
+    @Test
+    fun `v25 aggressive catalog keeps every new category in exactly one reporting group`() {
+        val digitalWallet = DefaultClassificationCatalog.categories.single {
+            it.id == "expense-digital-wallet"
+        }
+        val subsidy = DefaultClassificationCatalog.categories.single { it.id == "income-subsidy" }
+        assertEquals(
+            tw.kevinzhang.core.data.model.CategoryReportingGroup.EXPENSE,
+            digitalWallet.reportingGroup,
+        )
+        assertEquals(
+            tw.kevinzhang.core.data.model.CategoryReportingGroup.INCOME,
+            subsidy.reportingGroup,
+        )
+
+        val v4Rules = DefaultClassificationCatalog.publicGenericRules.filter {
+            it.rule.id.startsWith("public-v4-")
+        }
+        assertEquals(17, v4Rules.size)
+        assertTrue(v4Rules.all { it.rule.categoryId != null })
+        assertTrue(
+            v4Rules.mapNotNull { it.rule.categoryId }.all {
+                categoryId -> DefaultClassificationCatalog.categories.any { it.id == categoryId }
+            },
+        )
+
+        val wallet = v4Rules.single { it.rule.id == "public-v4-expense-digital-wallet" }
+        assertTrue(wallet.conditions.any {
+            it.conditionGroup ==
+                tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup.EXCLUDE_ANY
+        })
     }
 }

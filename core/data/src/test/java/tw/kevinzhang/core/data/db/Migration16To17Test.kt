@@ -73,7 +73,7 @@ class Migration16To17Test {
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(databaseName)
-                .callback(object : SupportSQLiteOpenHelper.Callback(24) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(25) {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(
                         db: SupportSQLiteDatabase,
@@ -96,12 +96,13 @@ class Migration16To17Test {
                 MIGRATION_21_22,
                 MIGRATION_22_23,
                 MIGRATION_23_24,
+                MIGRATION_24_25,
             )
             .allowMainThreadQueries()
             .build()
             .also { database ->
                 val migrated = database.openHelper.writableDatabase
-                assertEquals(24, migrated.version)
+                assertEquals(25, migrated.version)
                 assertTrue(tableExists(migrated, "auto_category_rule_sets"))
                 assertTrue(tableExists(migrated, "auto_category_rule_conditions"))
                 assertTrue(tableExists(migrated, "ingestion_runs"))

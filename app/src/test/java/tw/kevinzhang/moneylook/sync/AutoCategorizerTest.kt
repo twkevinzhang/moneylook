@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.db.AutoCategoryRuleWithTags
+import tw.kevinzhang.core.data.db.DefaultClassificationCatalog
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.RoomClassificationTraceStore
 import tw.kevinzhang.core.data.db.TransferClassificationCandidate
@@ -848,6 +849,66 @@ class AutoCategorizerTest {
         )
         assertNull(
             selectedCategoryId(transfer("other-topup", "代扣：一卡通儲值", -200.0), AssetKind.DEPOSIT),
+        )
+    }
+
+    @Test
+    fun `aggressive defaults preserve precise winners while covering broad fallbacks`() {
+        val categories = DefaultClassificationCatalog.categories.associateBy { it.id }
+        val rules = (
+            DefaultClassificationCatalog.publicStructuralRules +
+                DefaultClassificationCatalog.publicGenericRules
+            ).map { publicRule ->
+            AutoCategoryRuleWithTags(
+                rule = publicRule.rule,
+                category = categories[publicRule.rule.categoryId],
+                tags = emptyList(),
+                conditions = publicRule.conditions,
+            )
+        }
+
+        fun selectedCategory(
+            description: String,
+            amount: Double,
+            accountKind: AssetKind,
+            memo: String = "",
+        ): String? = (
+            rules.classificationDecision(
+                classificationCandidate(
+                    transfer(
+                        id = "$description-$amount",
+                        description = description,
+                        amount = amount,
+                        memo = memo,
+                    ),
+                    accountKind = accountKind,
+                ),
+            ) as? ClassificationDecision.AutoApply
+            )?.evaluation?.ruleWithTags?.rule?.categoryId
+
+        assertEquals(
+            "transfer-account",
+            selectedCategory("連結帳戶交易", -500.0, AssetKind.DEPOSIT),
+        )
+        assertEquals(
+            "transfer-account",
+            selectedCategory("繳費轉出", -500.0, AssetKind.DEPOSIT, "繳費名稱：信用卡費"),
+        )
+        assertEquals(
+            "income-refund",
+            selectedCategory("未辨識商戶退款", 500.0, AssetKind.CREDIT_CARD),
+        )
+        assertEquals(
+            "income-cashback",
+            selectedCategory("刷卡現金回饋", 50.0, AssetKind.CREDIT_CARD),
+        )
+        assertEquals(
+            "expense-digital-wallet",
+            selectedCategory("街口電支－未辨識商戶", -120.0, AssetKind.CREDIT_CARD),
+        )
+        assertEquals(
+            "expense-food",
+            selectedCategory("街口電支－全家便利商店", -120.0, AssetKind.CREDIT_CARD),
         )
     }
 
