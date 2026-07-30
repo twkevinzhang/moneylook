@@ -1,47 +1,74 @@
 package tw.kevinzhang.moneylook.ui.transactions
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Label
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Source
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -82,7 +109,18 @@ fun AutoRuleListContent(
 ) {
     var editing by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
+    var selectedRule by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var moreMenuExpanded by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var groupingModeName by rememberSaveable { mutableStateOf(AutoRuleGroupingMode.CATEGORY.name) }
+    var disabledOnly by rememberSaveable { mutableStateOf(false) }
+    var expandedGroupKeys by rememberSaveable { mutableStateOf<List<String>?>(null) }
+    var fullyShownGroupKeys by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var isWideLayout by remember { mutableStateOf(false) }
+    val groupingMode = AutoRuleGroupingMode.valueOf(groupingModeName)
+    val groups = remember(rules, categories, tags, groupingMode, query, disabledOnly) {
+        buildAutoRuleGroups(rules, categories, tags, groupingMode, query, disabledOnly)
+    }
     val classificationSystemBusy =
         applyAllRulesUiState != ApplyAllRulesUiState.Idle ||
             classificationResetUiState != ClassificationResetUiState.Idle
@@ -104,6 +142,21 @@ fun AutoRuleListContent(
             confirmButton = { TextButton(onClick = { onDelete(id); deleteId = null }) { Text("刪除") } },
             dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } },
         )
+    }
+    selectedRule?.takeUnless { isWideLayout }?.let { rule ->
+        ModalBottomSheet(onDismissRequest = { selectedRule = null }) {
+            RuleDetailContent(
+                rule = rule,
+                categories = categories,
+                tags = tags,
+                onEdit = { if (rule.isEditableInLegacyEditor()) editing = rule },
+                onDuplicate = {
+                    onSave(rule.duplicateAsUserRule(nextUserRulePriority(rules)))
+                    selectedRule = null
+                },
+                onDelete = { deleteId = rule.id; selectedRule = null },
+            )
+        }
     }
     ApplyAllRulesDialog(
         state = applyAllRulesUiState,
@@ -155,16 +208,78 @@ fun AutoRuleListContent(
                 },
             )
         },
-        floatingActionButton = { FloatingActionButton(onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) }) { Icon(Icons.Default.Add, "新增規則") } },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) },
+                icon = { Icon(Icons.Default.Add, null) },
+                text = { Text("新增規則") },
+            )
+        },
     ) { padding ->
         if (rules.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("尚未設定規則", style = MaterialTheme.typography.bodyLarge)
-                Text("新同步的交易會依規則由上而下比對。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("新增規則後，會依匹配條件與同分時優先判斷。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        } else LazyColumn(modifier = Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(rules.sortedWith(autoRuleDraftComparator), key = { it.id }) { rule ->
-                RuleCard(rule, categories, tags, onToggle = { onSave(rule.copy(enabled = it)) }, onEdit = { editing = rule }, onDelete = { deleteId = rule.id })
+        } else {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
+                val isWide = maxWidth >= 840.dp
+                SideEffect { isWideLayout = isWide }
+                val effectiveExpandedGroupKeys = when {
+                    expandedGroupKeys == null ->
+                        groups.firstOrNull()?.let { listOf(it.key) }.orEmpty()
+                    expandedGroupKeys!!.isNotEmpty() &&
+                        expandedGroupKeys!!.none { expandedKey -> groups.any { it.key == expandedKey } } ->
+                        groups.firstOrNull()?.let { listOf(it.key) }.orEmpty()
+                    else -> expandedGroupKeys.orEmpty()
+                }
+                val listContent: @Composable () -> Unit = {
+                    RuleGroupsContent(
+                        groups = groups,
+                        query = query,
+                        onQueryChange = { query = it },
+                        groupingMode = groupingMode,
+                        onGroupingModeChange = { groupingModeName = it.name },
+                        disabledOnly = disabledOnly,
+                        onDisabledOnlyChange = { disabledOnly = it },
+                        expandedGroupKeys = effectiveExpandedGroupKeys,
+                        fullyShownGroupKeys = fullyShownGroupKeys,
+                        onToggleGroup = { key ->
+                            expandedGroupKeys =
+                                if (key in effectiveExpandedGroupKeys) {
+                                    effectiveExpandedGroupKeys - key
+                                } else {
+                                    effectiveExpandedGroupKeys + key
+                                }
+                        },
+                        onShowAll = { key -> fullyShownGroupKeys = fullyShownGroupKeys + key },
+                        onRuleClick = { selectedRule = it },
+                        onToggle = { rule, enabled -> onSave(rule.copy(enabled = enabled)) },
+                        onEdit = { editing = it },
+                        onDuplicate = { onSave(it.duplicateAsUserRule(nextUserRulePriority(rules))) },
+                        onDelete = { deleteId = it.id },
+                    )
+                }
+                if (isWide) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Box(modifier = Modifier.weight(1f)) { listContent() }
+                        VerticalDivider(modifier = Modifier.fillMaxHeight())
+                        Box(modifier = Modifier.weight(1f).padding(24.dp)) {
+                            selectedRule?.let {
+                                RuleDetailContent(
+                                    rule = it,
+                                    categories = categories,
+                                    tags = tags,
+                                    onEdit = { if (it.isEditableInLegacyEditor()) editing = it },
+                                    onDuplicate = { onSave(it.duplicateAsUserRule(nextUserRulePriority(rules))) },
+                                    onDelete = { deleteId = it.id },
+                                )
+                            } ?: EmptyRuleDetailPane()
+                        }
+                    }
+                } else {
+                    listContent()
+                }
             }
         }
     }
@@ -187,7 +302,7 @@ private fun ApplyAllRulesDialog(
             title = { Text("套用所有規則？") },
             text = {
                 Text(
-                    "會依優先順序，將所有已啟用規則套用到全部交易明細。" +
+                    "會依匹配條件與同分時優先，將所有已啟用規則套用到全部交易明細。" +
                         "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
                 )
             },
@@ -374,29 +489,305 @@ private fun ClassificationOperationRunningDialog(
 }
 
 @Composable
-private fun RuleCard(
+private fun RuleGroupsContent(
+    groups: List<AutoRuleGroupUi>,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    groupingMode: AutoRuleGroupingMode,
+    onGroupingModeChange: (AutoRuleGroupingMode) -> Unit,
+    disabledOnly: Boolean,
+    onDisabledOnlyChange: (Boolean) -> Unit,
+    expandedGroupKeys: List<String>,
+    fullyShownGroupKeys: List<String>,
+    onToggleGroup: (String) -> Unit,
+    onShowAll: (String) -> Unit,
+    onRuleClick: (AutoRuleDraft) -> Unit,
+    onToggle: (AutoRuleDraft, Boolean) -> Unit,
+    onEdit: (AutoRuleDraft) -> Unit,
+    onDuplicate: (AutoRuleDraft) -> Unit,
+    onDelete: (AutoRuleDraft) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                TextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "搜尋規則" },
+                    singleLine = true,
+                    shape = RoundedCornerShape(28.dp),
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    placeholder = { Text("搜尋名稱、條件或分類") },
+                    colors = TextFieldDefaults.colors(
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                        errorIndicatorColor = Color.Transparent,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilterChip(
+                        selected = groupingMode == AutoRuleGroupingMode.CATEGORY,
+                        onClick = { onGroupingModeChange(AutoRuleGroupingMode.CATEGORY) },
+                        label = { Text("依分類") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Label, null) },
+                    )
+                    FilterChip(
+                        selected = groupingMode == AutoRuleGroupingMode.ORIGIN,
+                        onClick = { onGroupingModeChange(AutoRuleGroupingMode.ORIGIN) },
+                        label = { Text("依來源") },
+                        leadingIcon = { Icon(Icons.Default.AccountBalance, null) },
+                    )
+                    FilterChip(
+                        selected = disabledOnly,
+                        onClick = { onDisabledOnlyChange(!disabledOnly) },
+                        label = { Text("停用") },
+                        leadingIcon = { Icon(Icons.Default.Block, null) },
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text("${groups.sumOf { it.rules.size }} 項規則", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+        if (groups.isEmpty()) {
+            item {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 72.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("找不到符合的規則", style = MaterialTheme.typography.titleMedium)
+                    Text("請調整搜尋文字或篩選條件。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        } else {
+            groups.forEach { group ->
+                item(key = group.key) {
+                    RuleGroupCard(
+                        group = group,
+                        expanded = group.key in expandedGroupKeys,
+                        showAll = group.key in fullyShownGroupKeys,
+                        onToggleGroup = { onToggleGroup(group.key) },
+                        onShowAll = { onShowAll(group.key) },
+                        onRuleClick = onRuleClick,
+                        onToggle = onToggle,
+                        onEdit = onEdit,
+                        onDuplicate = onDuplicate,
+                        onDelete = onDelete,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RuleGroupCard(
+    group: AutoRuleGroupUi,
+    expanded: Boolean,
+    showAll: Boolean,
+    onToggleGroup: () -> Unit,
+    onShowAll: () -> Unit,
+    onRuleClick: (AutoRuleDraft) -> Unit,
+    onToggle: (AutoRuleDraft, Boolean) -> Unit,
+    onEdit: (AutoRuleDraft) -> Unit,
+    onDuplicate: (AutoRuleDraft) -> Unit,
+    onDelete: (AutoRuleDraft) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().semantics {
+                    contentDescription = "${group.label} 分組"
+                    stateDescription = if (expanded) "已展開" else "已收合"
+                }.padding(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(end = 12.dp)
+                        .size(40.dp)
+                        .background(Color(group.color), RoundedCornerShape(20.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = groupIcon(group.kind, group.label),
+                        contentDescription = null,
+                        tint = Color.White,
+                    )
+                }
+                Text(group.label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(" ${group.rules.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onToggleGroup, modifier = Modifier.semantics { contentDescription = "${group.label} ${if (expanded) "收合" else "展開"}" }) {
+                    Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+                }
+            }
+            if (expanded) {
+                HorizontalDivider()
+                val displayed = if (showAll) group.rules else group.rules.take(5)
+                displayed.forEachIndexed { index, rule ->
+                    RuleRow(
+                        rule = rule,
+                        color = Color(group.color),
+                        onClick = { onRuleClick(rule) },
+                        onToggle = { onToggle(rule, it) },
+                        onEdit = { onEdit(rule) },
+                        onDuplicate = { onDuplicate(rule) },
+                        onDelete = { onDelete(rule) },
+                    )
+                    if (index != displayed.lastIndex) HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+                }
+                if (!showAll && group.rules.size > 5) {
+                    TextButton(onClick = onShowAll, modifier = Modifier.padding(8.dp)) {
+                        Text("查看全部 ${group.rules.size} 項")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RuleRow(
+    rule: AutoRuleDraft,
+    color: Color,
+    onClick: () -> Unit,
+    onToggle: (Boolean) -> Unit,
+    onEdit: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(4.dp).height(28.dp).background(color, RoundedCornerShape(2.dp)))
+        Spacer(Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f).semantics { contentDescription = "查看規則 ${rule.name.ifBlank { "未命名規則" }}" },
+        ) {
+            Text(rule.name.ifBlank { "未命名規則" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+            Text(rule.compactConditionSummary(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+        Switch(
+            checked = rule.enabled,
+            onCheckedChange = onToggle,
+            modifier = Modifier.semantics { contentDescription = "${rule.name.ifBlank { "未命名規則" }}啟用狀態" },
+        )
+        Box {
+            IconButton(onClick = { menuExpanded = true }) { Icon(Icons.Default.MoreVert, "規則選項") }
+            RuleOverflowMenu(
+                expanded = menuExpanded,
+                rule = rule,
+                onDismiss = { menuExpanded = false },
+                onView = { menuExpanded = false; onClick() },
+                onEdit = { menuExpanded = false; onEdit() },
+                onDuplicate = { menuExpanded = false; onDuplicate() },
+                onDelete = { menuExpanded = false; onDelete() },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RuleOverflowMenu(
+    expanded: Boolean,
+    rule: AutoRuleDraft,
+    onDismiss: () -> Unit,
+    onView: () -> Unit,
+    onEdit: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(text = { Text("查看詳情") }, onClick = onView)
+        if (rule.isEditableInLegacyEditor()) {
+            DropdownMenuItem(text = { Text("編輯") }, onClick = onEdit, leadingIcon = { Icon(Icons.Default.Edit, null) })
+        } else {
+            DropdownMenuItem(
+                text = { Column { Text("編輯") ; Text("此規則含多個結構化條件，請複製為自訂規則後編輯", style = MaterialTheme.typography.bodySmall) } },
+                onClick = {},
+                enabled = false,
+                leadingIcon = { Icon(Icons.Default.Edit, null) },
+            )
+        }
+        DropdownMenuItem(text = { Text("複製為自訂規則") }, onClick = onDuplicate, leadingIcon = { Icon(Icons.Default.Add, null) })
+        DropdownMenuItem(text = { Text("刪除") }, onClick = onDelete, leadingIcon = { Icon(Icons.Default.Delete, null) })
+    }
+}
+
+@Composable
+private fun EmptyRuleDetailPane() {
+    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Icon(Icons.Default.Category, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        Text("選擇一條規則查看詳情", style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+private fun RuleDetailContent(
     rule: AutoRuleDraft,
     categories: List<CategoryOption>,
     tags: List<TagOption>,
-    onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
+    onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(rule.name.ifBlank { "未命名規則" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("優先順序 ${rule.priority + 1}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = rule.enabled, onCheckedChange = onToggle)
-                IconButton(onClick = onEdit, enabled = rule.isEditableInLegacyEditor()) {
-                    Icon(Icons.Default.Edit, "編輯")
-                }
-                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "刪除") }
-            }
-            Text(ruleSummary(rule, categories, tags), style = MaterialTheme.typography.bodySmall)
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(rule.name.ifBlank { "未命名規則" }, style = MaterialTheme.typography.headlineSmall)
+        Text(if (rule.enabled) "已啟用" else "已停用", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        DetailSection("如果", rule.readableConditionLines().joinToString("\n").ifBlank { "所有交易" })
+        DetailSection("則", rule.readableActionSummary(categories, tags))
+        DetailSection("來源", rule.origin.originLabel())
+        DetailSection("同分時優先", "${rule.priority + 1}")
+        if (!rule.isEditableInLegacyEditor()) {
+            Text("此規則含多個結構化條件，無法直接編輯。請先複製為自訂規則。", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onEdit, enabled = rule.isEditableInLegacyEditor()) { Text("編輯") }
+            TextButton(onClick = onDuplicate) { Text("複製為自訂規則") }
+            TextButton(onClick = onDelete) { Text("刪除") }
+        }
+    }
+}
+
+@Composable
+private fun DetailSection(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Text(value, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
+private fun groupIcon(kind: AutoRuleGroupKind, label: String) = when (kind) {
+    AutoRuleGroupKind.TAG_ONLY -> Icons.AutoMirrored.Filled.Label
+    AutoRuleGroupKind.ABSTAIN -> Icons.Default.Block
+    AutoRuleGroupKind.MISSING_CATEGORY -> Icons.Default.Category
+    AutoRuleGroupKind.ORIGIN -> Icons.Default.Source
+    AutoRuleGroupKind.CATEGORY -> when {
+        label.contains("交通") || label.contains("轉") -> Icons.Default.SwapHoriz
+        label.contains("餐") || label.contains("食") -> Icons.Default.Restaurant
+        label.contains("儲") || label.contains("錢") -> Icons.Default.AccountBalance
+        else -> Icons.Default.Category
     }
 }
 
@@ -463,7 +854,7 @@ fun AutoRuleEditorDialog(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("啟用規則", modifier = Modifier.weight(1f)); Switch(draft.enabled, { draft = draft.copy(enabled = it) }) }
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("儲存後套用到既有交易", modifier = Modifier.weight(1f)); Switch(draft.applyExisting, { draft = draft.copy(applyExisting = it) }) }
-                OutlinedTextField(draft.priority.toString(), { draft = draft.copy(priority = it.toIntOrNull()?.coerceAtLeast(0) ?: draft.priority) }, label = { Text("優先順序（數字愈小愈優先）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(draft.priority.toString(), { draft = draft.copy(priority = it.toIntOrNull()?.coerceAtLeast(0) ?: draft.priority) }, label = { Text("同分時優先（數字愈小愈優先）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {

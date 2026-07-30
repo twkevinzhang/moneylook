@@ -183,6 +183,169 @@ class AutoRulePresentationTest {
         assertEquals("結構化規則：MCC 1項／負額／信用卡", rule.structuredRuleSummary())
     }
 
+    @Test fun `category groups follow category input order before special buckets`() {
+        val categories = listOf(category("food", "餐飲"), category("transport", "交通"))
+        val groups = buildAutoRuleGroups(
+            rules = listOf(
+                rule(id = "transport", categoryId = "transport"),
+                rule(id = "food", categoryId = "food"),
+            ),
+            categories = categories,
+            tags = emptyList(),
+            groupingMode = AutoRuleGroupingMode.CATEGORY,
+            query = "",
+            disabledOnly = false,
+        )
+
+        assertEquals(listOf("餐飲", "交通"), groups.map(AutoRuleGroupUi::label))
+        assertEquals(listOf(AutoRuleGroupKind.CATEGORY, AutoRuleGroupKind.CATEGORY), groups.map(AutoRuleGroupUi::kind))
+    }
+
+    @Test fun `category groups keep tag only abstain and missing category buckets`() {
+        val categories = listOf(category("food", "餐飲"))
+        val groups = buildAutoRuleGroups(
+            rules = listOf(
+                rule(id = "tag", tagIds = setOf("daily")),
+                rule(id = "abstain", categoryId = "food", action = AutoCategoryRuleAction.ABSTAIN),
+                rule(id = "missing", categoryId = "removed"),
+                rule(id = "no-action"),
+            ),
+            categories = categories,
+            tags = listOf(TagOption("daily", "日常", 0xFF123456)),
+            groupingMode = AutoRuleGroupingMode.CATEGORY,
+            query = "",
+            disabledOnly = false,
+        )
+
+        assertEquals(
+            listOf("僅套用標籤", "放棄自動分類", "分類已刪除"),
+            groups.map(AutoRuleGroupUi::label),
+        )
+        assertEquals(
+            listOf(AutoRuleGroupKind.TAG_ONLY, AutoRuleGroupKind.ABSTAIN, AutoRuleGroupKind.MISSING_CATEGORY),
+            groups.map(AutoRuleGroupUi::kind),
+        )
+        assertEquals(listOf("missing", "no-action"), groups.last().rules.map(AutoRuleDraft::id))
+    }
+
+    @Test fun `origin groups use fixed user to legacy order`() {
+        val groups = buildAutoRuleGroups(
+            rules = listOf(
+                rule(id = "legacy", origin = AutoCategoryRuleOrigin.LEGACY),
+                rule(id = "default", origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT),
+                rule(id = "import", origin = AutoCategoryRuleOrigin.IMPORTED),
+                rule(id = "learned", origin = AutoCategoryRuleOrigin.PRIVATE_LEARNED),
+                rule(id = "user", origin = AutoCategoryRuleOrigin.USER_CONFIRMED),
+            ),
+            categories = emptyList(),
+            tags = emptyList(),
+            groupingMode = AutoRuleGroupingMode.ORIGIN,
+            query = "",
+            disabledOnly = false,
+        )
+
+        assertEquals(listOf("我建立的", "個人學習", "匯入規則", "內建規則", "舊版規則"), groups.map(AutoRuleGroupUi::label))
+    }
+
+    @Test fun `search matches readable rule fields with unicode normalization`() {
+        val searchable = rule(
+            id = "searchable",
+            name = "Coffee Shop",
+            descriptionContains = "咖啡",
+            categoryId = "food",
+            tagIds = setOf("daily"),
+            accountId = "account",
+            accountKind = AssetKind.CREDIT_CARD,
+            origin = AutoCategoryRuleOrigin.IMPORTED,
+            conditions = listOf(condition("searchable", "5411")),
+        )
+        val categories = listOf(category("food", "餐飲"))
+        val tags = listOf(TagOption("daily", "日常", 0xFF123456))
+
+        listOf("ＣＯＦＦＥＥ", "咖啡", "5411", "餐飲", "日常", "匯入規則", "指定帳戶", "信用卡").forEach { query ->
+            val matched = buildAutoRuleGroups(
+                rules = listOf(searchable),
+                categories = categories,
+                tags = tags,
+                groupingMode = AutoRuleGroupingMode.CATEGORY,
+                query = query,
+                disabledOnly = false,
+            )
+            assertEquals("query=$query", listOf("searchable"), matched.single().rules.map(AutoRuleDraft::id))
+        }
+    }
+
+    @Test fun `disabled filter only keeps disabled rules`() {
+        val groups = buildAutoRuleGroups(
+            rules = listOf(rule(id = "enabled", categoryId = "food"), rule(id = "disabled", categoryId = "food", enabled = false)),
+            categories = listOf(category("food", "餐飲")),
+            tags = emptyList(),
+            groupingMode = AutoRuleGroupingMode.CATEGORY,
+            query = "",
+            disabledOnly = true,
+        )
+
+        assertEquals(listOf("disabled"), groups.single().rules.map(AutoRuleDraft::id))
+    }
+
+    @Test fun `rules inside each group use the existing stable draft comparator`() {
+        val groups = buildAutoRuleGroups(
+            rules = listOf(
+                rule(id = "late", categoryId = "food", priority = 9),
+                rule(id = "default", categoryId = "food", priority = 0, isDefault = true),
+                rule(id = "first", categoryId = "food", priority = 2),
+            ),
+            categories = listOf(category("food", "餐飲")),
+            tags = emptyList(),
+            groupingMode = AutoRuleGroupingMode.CATEGORY,
+            query = "",
+            disabledOnly = false,
+        )
+
+        assertEquals(listOf("first", "late", "default"), groups.single().rules.map(AutoRuleDraft::id))
+    }
+
+    @Test fun `duplicate creates an enabled user owned draft and normalizes condition ownership`() {
+        val original = rule(
+            id = "default-rule",
+            name = "超商",
+            categoryId = "food",
+            tagIds = setOf("daily"),
+            enabled = false,
+            priority = 3,
+            isDefault = true,
+            ruleSetId = "public-v2",
+            extensionId = "bank",
+            accountKind = AssetKind.CREDIT_CARD,
+            origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+            conditions = listOf(condition("default-rule", "便利商店")),
+        )
+
+        val copy = original.duplicateAsUserRule(priority = 42)
+        assertEquals("", copy.id)
+        assertEquals("超商 副本", copy.name)
+        assertTrue(copy.enabled)
+        assertFalse(copy.isDefault)
+        assertEquals(null, copy.ruleSetId)
+        assertEquals(AutoCategoryRuleOrigin.USER_CONFIRMED, copy.origin)
+        assertEquals(42, copy.priority)
+        assertEquals(original.categoryId, copy.categoryId)
+        assertEquals(original.tagIds, copy.tagIds)
+        assertEquals(original.extensionId, copy.extensionId)
+        assertEquals(original.accountKind, copy.accountKind)
+
+        val normalized = copy.normalizedOrNull()!!
+        assertTrue(normalized.rule.id.isNotBlank())
+        assertEquals(normalized.rule.id, normalized.conditions.single().ruleId)
+    }
+
+    @Test fun `priority copy is labelled only as tie break priority`() {
+        val summary = rule(id = "priority", priority = 6).readableSourceSummary()
+
+        assertTrue(summary.contains("同分時優先：6"))
+        assertFalse(summary.contains("執行優先"))
+    }
+
     private fun detailState() = TransactionDetailUiState(
         title = "餐飲",
         amountText = "- 100",
@@ -197,5 +360,49 @@ class AutoRulePresentationTest {
         userNote = "原本備註",
         categories = emptyList(),
         tags = emptyList(),
+    )
+
+    private fun category(id: String, name: String) = CategoryOption(id, name, 0xFF123456)
+
+    private fun rule(
+        id: String,
+        name: String = id,
+        descriptionContains: String = "",
+        categoryId: String? = null,
+        tagIds: Set<String> = emptySet(),
+        enabled: Boolean = true,
+        priority: Int = 0,
+        isDefault: Boolean = false,
+        ruleSetId: String? = null,
+        extensionId: String? = null,
+        accountId: String? = null,
+        accountKind: AssetKind? = null,
+        origin: AutoCategoryRuleOrigin = AutoCategoryRuleOrigin.USER_CONFIRMED,
+        action: AutoCategoryRuleAction = AutoCategoryRuleAction.AUTO_APPLY,
+        conditions: List<AutoCategoryRuleCondition> = emptyList(),
+    ) = AutoRuleDraft(
+        id = id,
+        name = name,
+        descriptionContains = descriptionContains,
+        categoryId = categoryId,
+        tagIds = tagIds,
+        enabled = enabled,
+        priority = priority,
+        isDefault = isDefault,
+        ruleSetId = ruleSetId,
+        extensionId = extensionId,
+        accountId = accountId,
+        accountKind = accountKind,
+        origin = origin,
+        action = action,
+        conditions = conditions,
+    )
+
+    private fun condition(ruleId: String, pattern: String) = AutoCategoryRuleCondition(
+        ruleId = ruleId,
+        position = 0,
+        field = AutoCategoryRuleConditionField.MERCHANT_CATEGORY_CODE,
+        matchMode = AutoCategoryRuleConditionMatchMode.EXACT,
+        pattern = pattern,
     )
 }

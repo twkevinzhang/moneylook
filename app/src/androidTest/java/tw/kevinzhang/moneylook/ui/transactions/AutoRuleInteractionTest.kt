@@ -5,9 +5,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -15,6 +17,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import tw.kevinzhang.moneylook.sync.ClassificationResetStage
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
+import tw.kevinzhang.core.data.model.AutoCategoryRuleCondition
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
+import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
+import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 
 @RunWith(AndroidJUnit4::class)
 class AutoRuleInteractionTest {
@@ -38,7 +44,7 @@ class AutoRuleInteractionTest {
         composeRule.onNodeWithText("套用所有規則").performClick()
         composeRule.onNodeWithText("套用所有規則？").assertExists()
         composeRule.onNodeWithText(
-            "會依優先順序，將所有已啟用規則套用到全部交易明細。" +
+            "會依匹配條件與同分時優先，將所有已啟用規則套用到全部交易明細。" +
                 "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
         ).assertExists()
         composeRule.onNodeWithText("取消").performClick()
@@ -251,8 +257,84 @@ class AutoRuleInteractionTest {
         composeRule.runOnIdle { assertEquals(2, finishCount) }
     }
 
+    @Test
+    fun categoryViewInitiallyExpandsOnlyFirstGroupAndCanExpandAnother() {
+        setAutoRuleContent(
+            rules = listOf(rule("food-rule", "午餐", "food"), rule("transfer-rule", "帳戶移轉", "transfer")),
+            categories = testCategories(),
+        )
+
+        composeRule.onNodeWithText("午餐").assertExists()
+        composeRule.onNodeWithText("帳戶移轉").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("轉帳 展開").performClick()
+        composeRule.onNodeWithText("午餐").assertExists()
+        composeRule.onNodeWithText("帳戶移轉").assertExists()
+
+        composeRule.onNodeWithText("依來源").performClick()
+        composeRule.onNodeWithText("我建立的").assertExists()
+        composeRule.onNodeWithText("午餐").assertExists()
+    }
+
+    @Test
+    fun searchOriginAndDisabledFiltersUpdateRuleLibrary() {
+        setAutoRuleContent(
+            rules = listOf(
+                rule("food-rule", "午餐", "food", origin = AutoCategoryRuleOrigin.USER_CONFIRMED),
+                rule("imported-rule", "匯入早餐", "food", origin = AutoCategoryRuleOrigin.IMPORTED, enabled = false),
+            ),
+            categories = testCategories(),
+        )
+
+        composeRule.onNodeWithContentDescription("搜尋規則").performTextInput("早餐")
+        composeRule.onNodeWithText("匯入早餐").assertExists()
+        composeRule.onNodeWithText("午餐").assertDoesNotExist()
+        composeRule.onNodeWithText("依來源").performClick()
+        composeRule.onNodeWithText("匯入規則").assertExists()
+        composeRule.onNodeWithText("停用").performClick()
+        composeRule.onNodeWithText("匯入早餐").assertExists()
+    }
+
+    @Test
+    fun rowDetailOverflowDuplicateDeleteAndStructuredEditReasonAreAvailable() {
+        var saved: AutoRuleDraft? = null
+        var deleted: String? = null
+        val structured = rule("structured-rule", "結構化規則", "food").copy(
+            conditions = listOf(
+                AutoCategoryRuleCondition(
+                    ruleId = "structured-rule",
+                    position = 0,
+                    field = AutoCategoryRuleConditionField.MERCHANT_NAME,
+                    matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    pattern = "虛構商家",
+                ),
+            ),
+        )
+        setAutoRuleContent(
+            rules = listOf(structured),
+            categories = testCategories(),
+            onSaveRule = { saved = it },
+            onDeleteRule = { deleted = it },
+        )
+
+        composeRule.onNodeWithText("結構化規則").performClick()
+        composeRule.onNodeWithText("如果").assertExists()
+        composeRule.onNodeWithText("複製為自訂規則").performClick()
+        composeRule.runOnIdle { assertEquals("", saved?.id) }
+
+        composeRule.onAllNodesWithContentDescription("規則選項")[0].performClick()
+        composeRule.onNodeWithText("此規則含多個結構化條件，請複製為自訂規則後編輯").assertExists()
+        composeRule.onNodeWithText("刪除").performClick()
+        composeRule.onNodeWithText("刪除自動分類規則？").assertExists()
+        composeRule.onNodeWithText("刪除").performClick()
+        composeRule.runOnIdle { assertEquals("structured-rule", deleted) }
+    }
+
     private fun setAutoRuleContent(
         rules: List<AutoRuleDraft> = emptyList(),
+        categories: List<CategoryOption> = emptyList(),
+        tags: List<TagOption> = emptyList(),
+        onSaveRule: (AutoRuleDraft) -> Unit = {},
+        onDeleteRule: (String) -> Unit = {},
         applyState: () -> ApplyAllRulesUiState = { ApplyAllRulesUiState.Idle },
         resetState: () -> ClassificationResetUiState = { ClassificationResetUiState.Idle },
         onShowApply: () -> Unit = {},
@@ -270,12 +352,12 @@ class AutoRuleInteractionTest {
             MoneylookTheme(darkTheme = false, dynamicColor = false) {
                 AutoRuleListContent(
                     rules = rules,
-                    categories = emptyList(),
-                    tags = emptyList(),
+                    categories = categories,
+                    tags = tags,
                     accounts = emptyList(),
                     onNavigateUp = {},
-                    onSave = {},
-                    onDelete = {},
+                    onSave = onSaveRule,
+                    onDelete = onDeleteRule,
                     applyAllRulesUiState = applyState(),
                     onShowApplyAllRulesConfirmation = onShowApply,
                     onCancelApplyAllRules = onCancelApply,
@@ -298,5 +380,25 @@ class AutoRuleInteractionTest {
         name = "虛構規則",
         descriptionContains = "FICTIONAL",
         categoryId = "fictional-category",
+    )
+
+    private fun testCategories() = listOf(
+        CategoryOption(id = "food", name = "餐飲", color = 0xFFF57C00),
+        CategoryOption(id = "transfer", name = "轉帳", color = 0xFF1565C0),
+    )
+
+    private fun rule(
+        id: String,
+        name: String,
+        categoryId: String,
+        origin: AutoCategoryRuleOrigin = AutoCategoryRuleOrigin.USER_CONFIRMED,
+        enabled: Boolean = true,
+    ) = AutoRuleDraft(
+        id = id,
+        name = name,
+        descriptionContains = name,
+        categoryId = categoryId,
+        origin = origin,
+        enabled = enabled,
     )
 }
