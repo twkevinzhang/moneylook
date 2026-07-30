@@ -52,6 +52,25 @@ class BankSyncWorkerRequestTest {
         assertFalse(BankSyncWorker.isPending(workInfo(WorkInfo.State.SUCCEEDED)))
     }
 
+    @Test
+    fun `pre-extension failure is the only boundary eligible for bounded retry`() {
+        assertTrue(BankSyncWorker.shouldRetry(BankSyncWorker.FailureBoundary.PRE_EXTENSION, 0))
+        assertTrue(BankSyncWorker.shouldRetry(BankSyncWorker.FailureBoundary.PRE_EXTENSION, 1))
+        assertFalse(BankSyncWorker.shouldRetry(BankSyncWorker.FailureBoundary.PRE_EXTENSION, 2))
+    }
+
+    @Test
+    fun `extension and persistence failures never resubmit the bank session`() {
+        for (attempt in 0..3) {
+            assertFalse(
+                BankSyncWorker.shouldRetry(
+                    BankSyncWorker.FailureBoundary.EXTENSION_OR_PERSISTENCE,
+                    attempt,
+                ),
+            )
+        }
+    }
+
     private fun workInfo(state: WorkInfo.State): WorkInfo = WorkInfo(
         id = java.util.UUID.randomUUID(),
         state = state,
