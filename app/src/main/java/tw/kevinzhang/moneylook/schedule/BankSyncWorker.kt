@@ -49,10 +49,20 @@ class BankSyncWorker @AssistedInject constructor(
             ?: return Result.failure(resultData(RESULT_ERROR))
         val trigger = SyncTrigger.fromWireValue(inputData.getString(KEY_TRIGGER))
             ?: return Result.failure(resultData(RESULT_ERROR))
-        val extension = installedExtensionDao.getById(extensionId)
-            ?: return Result.success(resultData(RESULT_SKIPPED))
-        val profile = credentialProfileDao.getByExtensionId(extensionId)
-            ?: return Result.success(resultData(RESULT_SKIPPED))
+        val extension = try {
+            installedExtensionDao.getById(extensionId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return retryOrFinishPreExtensionFailure(extensionId)
+        } ?: return Result.success(resultData(RESULT_SKIPPED))
+        val profile = try {
+            credentialProfileDao.getByExtensionId(extensionId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return retryOrFinishPreExtensionFailure(extensionId)
+        } ?: return Result.success(resultData(RESULT_SKIPPED))
 
         // A scheduled run must honour a newly-disabled schedule. A user request intentionally
         // does not, because changing the schedule is unrelated to an explicit sync action.
@@ -74,7 +84,7 @@ class BankSyncWorker @AssistedInject constructor(
                 rawStack = error.stackTraceToString(),
             )
             recordFailureSafely(extension, trigger.ingestionTrigger, failure = failure)
-            return retryOrFinishFailure(extensionId)
+            return finishTerminalFailure(extensionId)
         }
 
         return when (syncResult) {
@@ -88,7 +98,7 @@ class BankSyncWorker @AssistedInject constructor(
                     sourceRunStartedAt = syncResult.runStartedAt,
                     failure = syncResult,
                 )
-                retryOrFinishFailure(extensionId)
+                finishTerminalFailure(extensionId)
             }
         }
     }
@@ -110,18 +120,25 @@ class BankSyncWorker @AssistedInject constructor(
         throw error
     } catch (error: Exception) {
         // persist() records its own persistence failure when possible. Keep the profile state
-        // aligned even if that diagnostic recording itself failed.
+        // aligned even if that diagnostic recording itself failed. Never retry the whole Worker
+        // here: the bank session already completed, so WorkManager retry would submit the login
+        // and scrape again merely to recover a local persistence failure.
         updateLastRunErrorSafely(extensionId)
-        retryOrFinishFailure(extensionId)
+        Result.success(resultData(RESULT_ERROR))
     }
 
-    private suspend fun retryOrFinishFailure(extensionId: String): Result {
+    private suspend fun retryOrFinishPreExtensionFailure(extensionId: String): Result {
         updateLastRunErrorSafely(extensionId)
-        return if (runAttemptCount < MAX_IMMEDIATE_RETRIES) {
+        return if (shouldRetry(FailureBoundary.PRE_EXTENSION, runAttemptCount)) {
             Result.retry()
         } else {
             Result.success(resultData(RESULT_ERROR))
         }
+    }
+
+    private suspend fun finishTerminalFailure(extensionId: String): Result {
+        updateLastRunErrorSafely(extensionId)
+        return Result.success(resultData(RESULT_ERROR))
     }
 
     private suspend fun recordFailureSafely(
@@ -183,7 +200,7 @@ class BankSyncWorker @AssistedInject constructor(
         private const val UNIQUE_QUEUE_NAME = "bank-sync:queue"
         private const val TAG_PREFIX = "bank-sync:"
         private const val ALL_TAG = "bank-sync:all"
-        private const val MAX_IMMEDIATE_RETRIES = 2
+        private const val MAX_PRE_EXTENSION_RETRIES = 2
 
         fun uniqueQueueName(): String = UNIQUE_QUEUE_NAME
         fun tag(extensionId: String): String = "$TAG_PREFIX$extensionId"
@@ -210,6 +227,10 @@ class BankSyncWorker @AssistedInject constructor(
                 workInfo.state == WorkInfo.State.RUNNING ||
                 workInfo.state == WorkInfo.State.BLOCKED
 
+        internal fun shouldRetry(boundary: FailureBoundary, runAttemptCount: Int): Boolean =
+            boundary == FailureBoundary.PRE_EXTENSION &&
+                runAttemptCount < MAX_PRE_EXTENSION_RETRIES
+
         fun enqueue(context: Context, requests: List<OneTimeWorkRequest>) {
             if (requests.isEmpty()) return
             val continuation = WorkManager.getInstance(context).beginUniqueWork(
@@ -221,5 +242,10 @@ class BankSyncWorker @AssistedInject constructor(
         }
 
         private fun resultData(status: String): Data = workDataOf(KEY_RESULT_STATUS to status)
+    }
+
+    internal enum class FailureBoundary {
+        PRE_EXTENSION,
+        EXTENSION_OR_PERSISTENCE,
     }
 }
