@@ -142,8 +142,31 @@ abstract class TransferAnnotationDao {
     @Query("SELECT * FROM transfer_annotations WHERE transferId IN (:transferIds)")
     abstract suspend fun getByTransferIds(transferIds: List<String>): List<TransferAnnotation>
 
+    /** Used by the catalog reset transaction to preserve annotation ownership and notes. */
+    @Query("SELECT * FROM transfer_annotations")
+    abstract suspend fun getAll(): List<TransferAnnotation>
+
     @Query("SELECT * FROM transfer_tag_cross_refs WHERE transferId = :transferId")
     abstract suspend fun getTagCrossRefs(transferId: String): List<TransferTagCrossRef>
+
+    /** Used only to record aggregate tag-removal evidence during a catalog reset. */
+    @Query("SELECT * FROM transfer_tag_cross_refs")
+    abstract suspend fun getAllTagCrossRefs(): List<TransferTagCrossRef>
+
+    /** Clears classification-derived state while preserving the annotation row and its note. */
+    @Query(
+        """
+        UPDATE transfer_annotations
+        SET categoryId = NULL,
+            categoryAssignment = 'AUTO',
+            manualOverride = 0,
+            autoRuleId = NULL,
+            autoRuleSetId = NULL,
+            autoMatchScore = NULL,
+            classifierVersion = NULL
+        """,
+    )
+    abstract suspend fun resetClassificationState()
 
     @Upsert
     protected abstract suspend fun upsertTagCrossRefs(crossRefs: List<TransferTagCrossRef>)

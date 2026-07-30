@@ -13,11 +13,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -67,11 +70,16 @@ fun AutoRuleListContent(
     onDelete: (String) -> Unit,
     isApplyingAllRules: Boolean,
     onApplyAllRules: () -> Unit,
+    isResettingClassification: Boolean,
+    onResetClassificationSystem: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     var editing by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
     var confirmApplyAllRules by remember { mutableStateOf(false) }
+    var moreMenuExpanded by remember { mutableStateOf(false) }
+    var confirmResetClassification by remember { mutableStateOf(false) }
+    val classificationSystemBusy = isApplyingAllRules || isResettingClassification
     editing?.let { draft ->
         AutoRuleEditorDialog(
             initial = draft,
@@ -111,6 +119,26 @@ fun AutoRuleListContent(
             dismissButton = { TextButton(onClick = { confirmApplyAllRules = false }) { Text("取消") } },
         )
     }
+    if (confirmResetClassification) {
+        AlertDialog(
+            onDismissRequest = { confirmResetClassification = false },
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("清除並回到預設規則？") },
+            text = {
+                Text(
+                    "這會永久清除所有自動分類規則、分類與標籤，並移除所有交易的手動分類與標籤指派。" +
+                        "交易與備註會保留，接著會重新分類所有交易。此操作無法復原。",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirmResetClassification = false
+                    onResetClassificationSystem()
+                }) { Text("清除並恢復") }
+            },
+            dismissButton = { TextButton(onClick = { confirmResetClassification = false }) { Text("取消") } },
+        )
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -119,7 +147,7 @@ fun AutoRuleListContent(
                 actions = {
                     IconButton(
                         onClick = { confirmApplyAllRules = true },
-                        enabled = rules.any(AutoRuleDraft::enabled) && !isApplyingAllRules,
+                        enabled = rules.any(AutoRuleDraft::enabled) && !classificationSystemBusy,
                     ) {
                         if (isApplyingAllRules) {
                             CircularProgressIndicator(
@@ -131,6 +159,34 @@ fun AutoRuleListContent(
                         } else {
                             Icon(Icons.Default.Refresh, "套用所有規則到所有交易明細")
                         }
+                    }
+                    IconButton(
+                        onClick = { moreMenuExpanded = true },
+                        enabled = !classificationSystemBusy,
+                    ) {
+                        if (isResettingClassification) {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .semantics { contentDescription = "正在重設分類系統" },
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Default.MoreVert, "更多選項")
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = moreMenuExpanded,
+                        onDismissRequest = { moreMenuExpanded = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("清除並回到預設規則") },
+                            onClick = {
+                                moreMenuExpanded = false
+                                confirmResetClassification = true
+                            },
+                            enabled = !classificationSystemBusy,
+                        )
                     }
                 },
             )

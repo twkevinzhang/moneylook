@@ -76,6 +76,7 @@ class ClassificationViewModel @Inject constructor(
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
     private val isApplyingAllRules = MutableStateFlow(false)
+    private val isResettingClassification = MutableStateFlow(false)
     private val _autoRuleApplicationMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     private val auditState = MutableStateFlow(TransactionAuditUi())
 
@@ -94,6 +95,7 @@ class ClassificationViewModel @Inject constructor(
         rules.map(AutoCategoryRuleWithTags::toDraft)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val applyingAllRules: StateFlow<Boolean> = isApplyingAllRules
+    val resettingClassification: StateFlow<Boolean> = isResettingClassification
     val autoRuleApplicationMessages: SharedFlow<String> = _autoRuleApplicationMessages.asSharedFlow()
 
     private val transferId: String = URLDecoder.decode(savedStateHandle.get<String>("transferId").orEmpty(), "UTF-8")
@@ -307,9 +309,9 @@ class ClassificationViewModel @Inject constructor(
     fun deleteRule(id: String) = viewModelScope.launch { autoCategoryRuleDao.deleteById(id) }
 
     fun applyAllRulesToExistingTransactions() {
-        if (isApplyingAllRules.value) return
+        if (isApplyingAllRules.value || isResettingClassification.value) return
+        isApplyingAllRules.value = true
         viewModelScope.launch {
-            isApplyingAllRules.value = true
             try {
                 val result = autoCategorizer.applyToExistingTransactions()
                 _autoRuleApplicationMessages.emit(
@@ -321,6 +323,25 @@ class ClassificationViewModel @Inject constructor(
                 _autoRuleApplicationMessages.emit("套用規則失敗，請稍後再試。")
             } finally {
                 isApplyingAllRules.value = false
+            }
+        }
+    }
+
+    fun resetClassificationSystem() {
+        if (isApplyingAllRules.value || isResettingClassification.value) return
+        isResettingClassification.value = true
+        viewModelScope.launch {
+            try {
+                val result = autoCategorizer.resetClassificationSystem()
+                _autoRuleApplicationMessages.emit(
+                    "重設完成：處理 ${result.processedTransferCount} 筆，符合 ${result.matchedTransferCount} 筆。",
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _autoRuleApplicationMessages.emit("重設分類系統失敗，請稍後再試。")
+            } finally {
+                isResettingClassification.value = false
             }
         }
     }

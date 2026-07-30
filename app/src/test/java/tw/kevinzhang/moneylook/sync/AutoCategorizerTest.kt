@@ -16,6 +16,7 @@ import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.db.AutoCategoryRuleWithTags
 import tw.kevinzhang.core.data.db.DefaultClassificationCatalog
 import tw.kevinzhang.core.data.db.MoneylookDatabase
+import tw.kevinzhang.core.data.db.RoomClassificationCatalogResetStore
 import tw.kevinzhang.core.data.db.RoomClassificationTraceStore
 import tw.kevinzhang.core.data.db.TransferClassificationCandidate
 import tw.kevinzhang.core.data.model.Account
@@ -66,6 +67,11 @@ class AutoCategorizerTest {
             annotationDao = database.transferAnnotationDao(),
             ruleDao = database.autoCategoryRuleDao(),
             categoryDao = database.categoryDao(),
+            classificationCatalogResetStore = RoomClassificationCatalogResetStore(
+                database,
+                database.transferAnnotationDao(),
+                database.ingestionProvenanceDao(),
+            ),
             ruleSetDao = database.autoCategoryRuleSetDao(),
             classificationTraceStore = RoomClassificationTraceStore(
                 database,
@@ -360,6 +366,60 @@ class AutoCategorizerTest {
         assertNull(database.transferAnnotationDao().observeDetail(unmatched.id).first()!!.annotation)
         Unit
     }
+
+    @Test
+    fun `classification reset removes manual catalog state and reclassifies while preserving note and audit`() =
+        runBlocking {
+            val customCategory = Category("custom-category", "自訂分類", "#123456")
+            val customTag = Tag("custom-tag", "自訂標籤", "#654321")
+            val customRule = AutoCategoryRule(
+                id = "custom-rule",
+                name = "自訂規則",
+                descriptionContains = "薪資入帳",
+                categoryId = customCategory.id,
+            )
+            database.categoryDao().upsert(customCategory)
+            database.tagDao().upsert(customTag)
+            database.autoCategoryRuleDao().upsertWithTags(customRule, setOf(customTag.id))
+            val transfer = transfer("reset-transfer", "薪資入帳", 30_000.0)
+            database.transferDao().upsertAll(listOf(transfer))
+            database.transferAnnotationDao().saveManualAnnotation(
+                TransferAnnotation(
+                    transferId = transfer.id,
+                    extensionId = transfer.extensionId,
+                    categoryId = customCategory.id,
+                    note = "這段備註必須保留",
+                    categoryAssignment = AssignmentSource.MANUAL,
+                ),
+                setOf(customTag.id),
+            )
+
+            val result = categorizer.resetClassificationSystem()
+
+            assertEquals(1, result.processedTransferCount)
+            assertEquals(1, result.matchedTransferCount)
+            assertEquals(0, result.preservedManualOverrideCount)
+            assertEquals(
+                DefaultClassificationCatalog.categories.map { it.id }.toSet(),
+                database.categoryDao().observeAll().first().map { it.id }.toSet(),
+            )
+            assertTrue(database.tagDao().observeAll().first().isEmpty())
+            assertFalse(
+                database.autoCategoryRuleDao().observeAll().first()
+                    .any { it.rule.id == customRule.id },
+            )
+            database.transferAnnotationDao().observeDetail(transfer.id).first()!!.also { detail ->
+                assertEquals("income-salary", detail.annotation?.categoryId)
+                assertEquals("這段備註必須保留", detail.annotation?.note)
+                assertEquals(AssignmentSource.AUTO, detail.annotation?.categoryAssignment)
+                assertFalse(detail.annotation?.manualOverride == true)
+                assertTrue(detail.tags.isEmpty())
+            }
+            val audit = database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id)
+            assertTrue(audit.any { it.trigger == ClassificationTrigger.MANUAL_EDIT })
+            assertTrue(audit.any { it.trigger == ClassificationTrigger.CATALOG_RESET })
+            Unit
+        }
 
     @Test
     fun `matcher normalizes transaction text and keeps amount-sign amount and account conditions`() {

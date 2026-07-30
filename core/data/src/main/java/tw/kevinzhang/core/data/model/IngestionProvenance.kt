@@ -30,6 +30,7 @@ enum class ClassificationTrigger {
     RESUME,
     INTERNAL_BACKFILL,
     MANUAL_EDIT,
+    CATALOG_RESET,
 }
 
 /** Result of evaluating categorization, including deliberately preserved/manual outcomes. */
@@ -37,6 +38,7 @@ enum class ClassificationOutcome {
     AUTO_APPLIED,
     ABSTAINED,
     NO_MATCH,
+    CATALOG_RESET,
     PRESERVED_MANUAL,
     MANUAL_ASSIGNED,
     MANUAL_CLEARED,
