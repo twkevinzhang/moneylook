@@ -27,6 +27,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -55,6 +56,7 @@ import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
+import tw.kevinzhang.moneylook.sync.ClassificationResetStage
 
 data class AccountOption(val id: String, val name: String)
 
@@ -70,16 +72,19 @@ fun AutoRuleListContent(
     onDelete: (String) -> Unit,
     isApplyingAllRules: Boolean,
     onApplyAllRules: () -> Unit,
-    isResettingClassification: Boolean,
-    onResetClassificationSystem: () -> Unit,
+    classificationResetUiState: ClassificationResetUiState,
+    onShowResetClassificationConfirmation: () -> Unit,
+    onCancelClassificationReset: () -> Unit,
+    onStartClassificationReset: () -> Unit,
+    onRetryClassificationReset: () -> Unit,
+    onDismissClassificationReset: () -> Unit,
     snackbarHostState: SnackbarHostState,
 ) {
     var editing by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
     var confirmApplyAllRules by remember { mutableStateOf(false) }
     var moreMenuExpanded by remember { mutableStateOf(false) }
-    var confirmResetClassification by remember { mutableStateOf(false) }
-    val classificationSystemBusy = isApplyingAllRules || isResettingClassification
+    val classificationSystemBusy = isApplyingAllRules || classificationResetUiState != ClassificationResetUiState.Idle
     editing?.let { draft ->
         AutoRuleEditorDialog(
             initial = draft,
@@ -119,26 +124,13 @@ fun AutoRuleListContent(
             dismissButton = { TextButton(onClick = { confirmApplyAllRules = false }) { Text("取消") } },
         )
     }
-    if (confirmResetClassification) {
-        AlertDialog(
-            onDismissRequest = { confirmResetClassification = false },
-            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("清除並回到預設規則？") },
-            text = {
-                Text(
-                    "這會永久清除所有自動分類規則、分類與標籤，並移除所有交易的手動分類與標籤指派。" +
-                        "交易與備註會保留，接著會重新分類所有交易。此操作無法復原。",
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    confirmResetClassification = false
-                    onResetClassificationSystem()
-                }) { Text("清除並恢復") }
-            },
-            dismissButton = { TextButton(onClick = { confirmResetClassification = false }) { Text("取消") } },
-        )
-    }
+    ClassificationResetDialog(
+        state = classificationResetUiState,
+        onCancel = onCancelClassificationReset,
+        onStart = onStartClassificationReset,
+        onRetry = onRetryClassificationReset,
+        onDismiss = onDismissClassificationReset,
+    )
     Scaffold(
         topBar = {
             TopAppBar(
@@ -164,16 +156,7 @@ fun AutoRuleListContent(
                         onClick = { moreMenuExpanded = true },
                         enabled = !classificationSystemBusy,
                     ) {
-                        if (isResettingClassification) {
-                            CircularProgressIndicator(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .semantics { contentDescription = "正在重設分類系統" },
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Icon(Icons.Default.MoreVert, "更多選項")
-                        }
+                        Icon(Icons.Default.MoreVert, "更多選項")
                     }
                     DropdownMenu(
                         expanded = moreMenuExpanded,
@@ -183,7 +166,7 @@ fun AutoRuleListContent(
                             text = { Text("清除並回到預設規則") },
                             onClick = {
                                 moreMenuExpanded = false
-                                confirmResetClassification = true
+                                onShowResetClassificationConfirmation()
                             },
                             enabled = !classificationSystemBusy,
                         )
@@ -205,6 +188,120 @@ fun AutoRuleListContent(
             }
         }
     }
+}
+
+@Composable
+private fun ClassificationResetDialog(
+    state: ClassificationResetUiState,
+    onCancel: () -> Unit,
+    onStart: () -> Unit,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var resetStartRequested by remember(state) { mutableStateOf(false) }
+    when (state) {
+        ClassificationResetUiState.Idle -> Unit
+        ClassificationResetUiState.Confirming -> AlertDialog(
+            onDismissRequest = onCancel,
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("清除並回到預設規則？") },
+            text = {
+                Text(
+                    "這會永久清除所有自動分類規則、分類與標籤，並移除所有交易的手動分類與標籤指派。" +
+                        "交易與備註會保留，接著會重新分類所有交易。此操作無法復原。",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        resetStartRequested = true
+                        onStart()
+                    },
+                    enabled = !resetStartRequested,
+                ) { Text("清除並恢復") }
+            },
+            dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },
+        )
+        ClassificationResetUiState.ResettingCatalog -> ClassificationResetRunningDialog(
+            title = "正在清除分類資料",
+            message = "正在恢復內建分類、標籤與自動規則，請勿關閉此視窗。",
+        )
+        is ClassificationResetUiState.Reclassifying -> {
+            val total = state.totalTransferCount.coerceAtLeast(0)
+            val processed = state.processedTransferCount.coerceIn(0, total)
+            ClassificationResetRunningDialog(
+                title = "正在重新分類交易",
+                message = "已處理 $processed / $total 筆交易",
+                progress = if (total == 0) 0f else processed.toFloat() / total,
+            )
+        }
+        is ClassificationResetUiState.Success -> AlertDialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("分類系統已重設") },
+            text = { Text("已重新分類 ${state.processedTransferCount} 筆交易，符合 ${state.matchedTransferCount} 筆規則。") },
+            confirmButton = { Button(onClick = onDismiss) { Text("完成") } },
+        )
+        is ClassificationResetUiState.Error -> AlertDialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("重設分類系統失敗") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(state.message)
+                    Text(
+                        state.lastStageDescription(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = { Button(onClick = onRetry) { Text("重試") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("關閉") } },
+        )
+    }
+}
+
+private fun ClassificationResetUiState.Error.lastStageDescription(): String =
+    when (lastStage) {
+        ClassificationResetStage.RESETTING_CATALOG -> "失敗階段：正在清除分類資料"
+        ClassificationResetStage.RECLASSIFYING_TRANSACTIONS ->
+            "失敗階段：正在重新分類交易（已處理 ${processedTransferCount.coerceAtLeast(0)} / " +
+                "${totalTransferCount.coerceAtLeast(0)} 筆交易）"
+    }
+
+@Composable
+private fun ClassificationResetRunningDialog(
+    title: String,
+    message: String,
+    progress: Float? = null,
+) {
+    AlertDialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .semantics { contentDescription = title },
+                    )
+                    Text(message)
+                }
+                if (progress != null) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "重新分類進度" },
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+    )
 }
 
 @Composable
