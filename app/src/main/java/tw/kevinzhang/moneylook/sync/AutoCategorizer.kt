@@ -65,6 +65,17 @@ data class AutoCategoryApplicationResult(
     val preservedManualOverrideCount: Int,
 )
 
+enum class ClassificationResetStage {
+    RESETTING_CATALOG,
+    RECLASSIFYING_TRANSACTIONS,
+}
+
+data class ClassificationResetProgress(
+    val stage: ClassificationResetStage,
+    val processedTransferCount: Int = 0,
+    val totalTransferCount: Int = 0,
+)
+
 /** Evaluates enabled rules conservatively while preserving every explicit user transaction edit. */
 @Singleton
 class AutoCategorizer @Inject constructor(
@@ -149,16 +160,34 @@ class AutoCategorizer @Inject constructor(
      * The catalog reset is atomic. If classification fails afterwards, invoking this method again
      * safely resets the same catalog and retries the complete transfer set.
      */
-    suspend fun resetClassificationSystem(): AutoCategoryApplicationResult =
+    suspend fun resetClassificationSystem(
+        onProgress: (ClassificationResetProgress) -> Unit = {},
+    ): AutoCategoryApplicationResult =
         categorizationMutex.withLock {
+            onProgress(ClassificationResetProgress(ClassificationResetStage.RESETTING_CATALOG))
             classificationCatalogResetStore.resetToDefaults()
             val context = loadClassificationContext()
+            onProgress(
+                ClassificationResetProgress(
+                    stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                    totalTransferCount = context.candidates.size,
+                ),
+            )
             categorize(
                 candidates = context.candidates,
                 internalTransferIds = context.internalTransferCounterparts.keys,
                 ingestionRunId = null,
                 trigger = ClassificationTrigger.CATALOG_RESET,
                 ruleSetContentById = context.ruleSetContentById,
+                onProgress = { processedTransferCount ->
+                    onProgress(
+                        ClassificationResetProgress(
+                            stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                            processedTransferCount = processedTransferCount,
+                            totalTransferCount = context.candidates.size,
+                        ),
+                    )
+                },
             )
         }
 
@@ -205,6 +234,7 @@ class AutoCategorizer @Inject constructor(
         ingestionRunId: String?,
         trigger: ClassificationTrigger,
         ruleSetContentById: Map<String, String>,
+        onProgress: ((processedTransferCount: Int) -> Unit)? = null,
     ): AutoCategoryApplicationResult {
         if (candidates.isEmpty()) {
             return AutoCategoryApplicationResult(
@@ -218,7 +248,7 @@ class AutoCategorizer @Inject constructor(
         var matchedTransferCount = 0
         var preservedManualOverrideCount = 0
 
-        candidates.forEach { candidate ->
+        candidates.forEachIndexed { index, candidate ->
             val transfer = candidate.transfer
             val isInternalTransfer = transfer.id in internalTransferIds
             val decision = if (isInternalTransfer) null else rules.classificationDecision(candidate)
@@ -269,6 +299,12 @@ class AutoCategorizer @Inject constructor(
                 AutomaticClassificationWriteResult.PRESERVED_MANUAL ->
                     preservedManualOverrideCount += 1
                 AutomaticClassificationWriteResult.RECORDED_ONLY -> Unit
+            }
+            val processedTransferCount = index + 1
+            if (processedTransferCount % CLASSIFICATION_RESET_PROGRESS_BATCH_SIZE == 0 ||
+                processedTransferCount == candidates.size
+            ) {
+                onProgress?.invoke(processedTransferCount)
             }
         }
         return AutoCategoryApplicationResult(
@@ -467,6 +503,7 @@ private inline fun parseDateTimeOrNull(parse: () -> LocalDateTime): LocalDateTim
 
 private const val INTERNAL_TRANSFER_CATEGORY_ID = "transfer-account"
 private val INTERNAL_TRANSFER_WINDOW: Duration = Duration.ofSeconds(30)
+private const val CLASSIFICATION_RESET_PROGRESS_BATCH_SIZE = 25
 
 /**
  * Evaluates every matching rule before selecting an automatic action.  Rule priority only breaks

@@ -394,11 +394,27 @@ class AutoCategorizerTest {
                 setOf(customTag.id),
             )
 
-            val result = categorizer.resetClassificationSystem()
+            val progress = mutableListOf<ClassificationResetProgress>()
+            val result = categorizer.resetClassificationSystem(progress::add)
 
             assertEquals(1, result.processedTransferCount)
             assertEquals(1, result.matchedTransferCount)
             assertEquals(0, result.preservedManualOverrideCount)
+            assertEquals(
+                listOf(
+                    ClassificationResetProgress(ClassificationResetStage.RESETTING_CATALOG),
+                    ClassificationResetProgress(
+                        stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                        totalTransferCount = 1,
+                    ),
+                    ClassificationResetProgress(
+                        stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                        processedTransferCount = 1,
+                        totalTransferCount = 1,
+                    ),
+                ),
+                progress,
+            )
             assertEquals(
                 DefaultClassificationCatalog.categories.map { it.id }.toSet(),
                 database.categoryDao().observeAll().first().map { it.id }.toSet(),
@@ -420,6 +436,39 @@ class AutoCategorizerTest {
             assertTrue(audit.any { it.trigger == ClassificationTrigger.CATALOG_RESET })
             Unit
         }
+
+    @Test
+    fun `classification reset reports every 25 transactions and the final transaction`() = runBlocking {
+        database.transferDao().upsertAll(
+            (1..26).map { index ->
+                transfer("reset-progress-$index", "未分類交易 $index", -index.toDouble())
+            },
+        )
+        val progress = mutableListOf<ClassificationResetProgress>()
+
+        categorizer.resetClassificationSystem(progress::add)
+
+        assertEquals(
+            listOf(
+                ClassificationResetProgress(ClassificationResetStage.RESETTING_CATALOG),
+                ClassificationResetProgress(
+                    stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                    totalTransferCount = 26,
+                ),
+                ClassificationResetProgress(
+                    stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                    processedTransferCount = 25,
+                    totalTransferCount = 26,
+                ),
+                ClassificationResetProgress(
+                    stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                    processedTransferCount = 26,
+                    totalTransferCount = 26,
+                ),
+            ),
+            progress,
+        )
+    }
 
     @Test
     fun `matcher normalizes transaction text and keeps amount-sign amount and account conditions`() {
