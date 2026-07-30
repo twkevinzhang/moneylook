@@ -9,12 +9,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
@@ -53,6 +50,7 @@ import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.moneylook.sync.AutoCategorizer
+import tw.kevinzhang.moneylook.sync.AutoCategoryApplicationProgress
 import tw.kevinzhang.moneylook.sync.ClassificationResetProgress
 import tw.kevinzhang.moneylook.sync.ClassificationResetStage
 import java.net.URLDecoder
@@ -85,6 +83,34 @@ sealed interface ClassificationResetUiState {
     ) : ClassificationResetUiState
 }
 
+enum class ApplyAllRulesStage {
+    PREPARING,
+    APPLYING,
+}
+
+sealed interface ApplyAllRulesUiState {
+    data object Idle : ApplyAllRulesUiState
+    data object Confirming : ApplyAllRulesUiState
+    data object Preparing : ApplyAllRulesUiState
+    data class Applying(
+        val processedTransferCount: Int,
+        val totalTransferCount: Int,
+    ) : ApplyAllRulesUiState
+
+    data class Success(
+        val processedTransferCount: Int,
+        val matchedTransferCount: Int,
+        val preservedManualOverrideCount: Int,
+    ) : ApplyAllRulesUiState
+
+    data class Error(
+        val message: String,
+        val lastStage: ApplyAllRulesStage = ApplyAllRulesStage.PREPARING,
+        val processedTransferCount: Int = 0,
+        val totalTransferCount: Int = 0,
+    ) : ApplyAllRulesUiState
+}
+
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
 class ClassificationViewModel @Inject constructor(
@@ -101,9 +127,8 @@ class ClassificationViewModel @Inject constructor(
     private val ingestionProvenanceDao: IngestionProvenanceDao,
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
-    private val isApplyingAllRules = MutableStateFlow(false)
+    private val _applyAllRulesUiState = MutableStateFlow<ApplyAllRulesUiState>(ApplyAllRulesUiState.Idle)
     private val _classificationResetUiState = MutableStateFlow<ClassificationResetUiState>(ClassificationResetUiState.Idle)
-    private val _autoRuleApplicationMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     private val auditState = MutableStateFlow(TransactionAuditUi())
 
     init {
@@ -120,9 +145,8 @@ class ClassificationViewModel @Inject constructor(
     val rules: StateFlow<List<AutoRuleDraft>> = autoCategoryRuleDao.observeAll().map { rules ->
         rules.map(AutoCategoryRuleWithTags::toDraft)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val applyingAllRules: StateFlow<Boolean> = isApplyingAllRules
+    val applyAllRulesUiState: StateFlow<ApplyAllRulesUiState> = _applyAllRulesUiState
     val classificationResetUiState: StateFlow<ClassificationResetUiState> = _classificationResetUiState
-    val autoRuleApplicationMessages: SharedFlow<String> = _autoRuleApplicationMessages.asSharedFlow()
 
     private val transferId: String = URLDecoder.decode(savedStateHandle.get<String>("transferId").orEmpty(), "UTF-8")
     init {
@@ -334,27 +358,86 @@ class ClassificationViewModel @Inject constructor(
 
     fun deleteRule(id: String) = viewModelScope.launch { autoCategoryRuleDao.deleteById(id) }
 
-    fun applyAllRulesToExistingTransactions() {
-        if (isApplyingAllRules.value || _classificationResetUiState.value != ClassificationResetUiState.Idle) return
-        isApplyingAllRules.value = true
+    fun showApplyAllRulesConfirmation() {
+        if (
+            _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
+            _classificationResetUiState.value != ClassificationResetUiState.Idle
+        ) return
+        _applyAllRulesUiState.value = ApplyAllRulesUiState.Confirming
+    }
+
+    fun cancelApplyAllRules() {
+        if (_applyAllRulesUiState.value == ApplyAllRulesUiState.Confirming) {
+            _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
+        }
+    }
+
+    fun startApplyAllRules() {
+        if (
+            _applyAllRulesUiState.value != ApplyAllRulesUiState.Confirming ||
+            _classificationResetUiState.value != ClassificationResetUiState.Idle
+        ) return
+        runApplyAllRules()
+    }
+
+    fun retryApplyAllRules() {
+        if (
+            _applyAllRulesUiState.value !is ApplyAllRulesUiState.Error ||
+            _classificationResetUiState.value != ClassificationResetUiState.Idle
+        ) return
+        runApplyAllRules()
+    }
+
+    fun dismissApplyAllRules() {
+        when (_applyAllRulesUiState.value) {
+            is ApplyAllRulesUiState.Success,
+            is ApplyAllRulesUiState.Error,
+            -> _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
+            else -> Unit
+        }
+    }
+
+    private fun runApplyAllRules() {
+        _applyAllRulesUiState.value = ApplyAllRulesUiState.Preparing
         viewModelScope.launch {
+            var latestProgress: AutoCategoryApplicationProgress? = null
             try {
-                val result = autoCategorizer.applyToExistingTransactions()
-                _autoRuleApplicationMessages.emit(
-                    "套用完成：處理 ${result.processedTransferCount} 筆，符合 ${result.matchedTransferCount} 筆，保留手動調整 ${result.preservedManualOverrideCount} 筆。",
+                val result = withContext(Dispatchers.Default) {
+                    autoCategorizer.applyToExistingTransactions { progress ->
+                        latestProgress = progress
+                        _applyAllRulesUiState.value = ApplyAllRulesUiState.Applying(
+                            processedTransferCount = progress.processedTransferCount,
+                            totalTransferCount = progress.totalTransferCount,
+                        )
+                    }
+                }
+                _applyAllRulesUiState.value = ApplyAllRulesUiState.Success(
+                    processedTransferCount = result.processedTransferCount,
+                    matchedTransferCount = result.matchedTransferCount,
+                    preservedManualOverrideCount = result.preservedManualOverrideCount,
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _autoRuleApplicationMessages.emit("套用規則失敗，請稍後再試。")
-            } finally {
-                isApplyingAllRules.value = false
+                _applyAllRulesUiState.value = ApplyAllRulesUiState.Error(
+                    message = "套用規則失敗，請稍後再試。",
+                    lastStage = if (latestProgress == null) {
+                        ApplyAllRulesStage.PREPARING
+                    } else {
+                        ApplyAllRulesStage.APPLYING
+                    },
+                    processedTransferCount = latestProgress?.processedTransferCount ?: 0,
+                    totalTransferCount = latestProgress?.totalTransferCount ?: 0,
+                )
             }
         }
     }
 
     fun showResetClassificationConfirmation() {
-        if (isApplyingAllRules.value || _classificationResetUiState.value != ClassificationResetUiState.Idle) return
+        if (
+            _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
+            _classificationResetUiState.value != ClassificationResetUiState.Idle
+        ) return
         _classificationResetUiState.value = ClassificationResetUiState.Confirming
     }
 
@@ -365,12 +448,18 @@ class ClassificationViewModel @Inject constructor(
     }
 
     fun startClassificationReset() {
-        if (isApplyingAllRules.value || _classificationResetUiState.value != ClassificationResetUiState.Confirming) return
+        if (
+            _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
+            _classificationResetUiState.value != ClassificationResetUiState.Confirming
+        ) return
         runClassificationReset()
     }
 
     fun retryClassificationReset() {
-        if (isApplyingAllRules.value || _classificationResetUiState.value !is ClassificationResetUiState.Error) return
+        if (
+            _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
+            _classificationResetUiState.value !is ClassificationResetUiState.Error
+        ) return
         runClassificationReset()
     }
 

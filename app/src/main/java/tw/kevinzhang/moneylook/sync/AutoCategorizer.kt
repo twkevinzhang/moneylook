@@ -65,6 +65,11 @@ data class AutoCategoryApplicationResult(
     val preservedManualOverrideCount: Int,
 )
 
+data class AutoCategoryApplicationProgress(
+    val processedTransferCount: Int,
+    val totalTransferCount: Int,
+)
+
 enum class ClassificationResetStage {
     RESETTING_CATALOG,
     RECLASSIFYING_TRANSACTIONS,
@@ -141,15 +146,30 @@ class AutoCategorizer @Inject constructor(
 
     suspend fun applyToExistingTransactions(
         trigger: ClassificationTrigger = ClassificationTrigger.BULK_REAPPLY,
+        onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
     ): AutoCategoryApplicationResult =
         categorizationMutex.withLock {
             val context = loadClassificationContext()
+            onProgress(
+                AutoCategoryApplicationProgress(
+                    processedTransferCount = 0,
+                    totalTransferCount = context.candidates.size,
+                ),
+            )
             categorize(
                 candidates = context.candidates,
                 internalTransferIds = context.internalTransferCounterparts.keys,
                 ingestionRunId = null,
                 trigger = trigger,
                 ruleSetContentById = context.ruleSetContentById,
+                onProgress = { processedTransferCount ->
+                    onProgress(
+                        AutoCategoryApplicationProgress(
+                            processedTransferCount = processedTransferCount,
+                            totalTransferCount = context.candidates.size,
+                        ),
+                    )
+                },
             )
         }
 
@@ -301,7 +321,7 @@ class AutoCategorizer @Inject constructor(
                 AutomaticClassificationWriteResult.RECORDED_ONLY -> Unit
             }
             val processedTransferCount = index + 1
-            if (processedTransferCount % CLASSIFICATION_RESET_PROGRESS_BATCH_SIZE == 0 ||
+            if (processedTransferCount % CLASSIFICATION_PROGRESS_BATCH_SIZE == 0 ||
                 processedTransferCount == candidates.size
             ) {
                 onProgress?.invoke(processedTransferCount)
@@ -503,7 +523,7 @@ private inline fun parseDateTimeOrNull(parse: () -> LocalDateTime): LocalDateTim
 
 private const val INTERNAL_TRANSFER_CATEGORY_ID = "transfer-account"
 private val INTERNAL_TRANSFER_WINDOW: Duration = Duration.ofSeconds(30)
-private const val CLASSIFICATION_RESET_PROGRESS_BATCH_SIZE = 25
+private const val CLASSIFICATION_PROGRESS_BATCH_SIZE = 25
 
 /**
  * Evaluates every matching rule before selecting an automatic action.  Rule priority only breaks
