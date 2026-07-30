@@ -14,8 +14,6 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -38,14 +36,12 @@ import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.db.IngestionProvenanceDao
 import tw.kevinzhang.core.data.db.SourceDocumentSummary
 import tw.kevinzhang.core.data.model.CredentialProfile
-import tw.kevinzhang.core.data.model.IngestionTrigger
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.extension_runtime.data.SyncResult
+import tw.kevinzhang.moneylook.schedule.BankSyncWorker
 import tw.kevinzhang.moneylook.schedule.ScheduleStatus
 import tw.kevinzhang.moneylook.schedule.ScheduleWorker
 import tw.kevinzhang.moneylook.schedule.SchedulerManager
-import tw.kevinzhang.moneylook.sync.BankSyncCoordinator
-import tw.kevinzhang.moneylook.sync.SyncResultPersister
 import tw.kevinzhang.moneylook.sync.appLastRunStatus
 import tw.kevinzhang.moneylook.sync.hasPartialSyncFailure
 import java.time.ZoneId
@@ -56,10 +52,11 @@ import java.security.MessageDigest
 import android.util.Base64
 import javax.inject.Inject
 
-enum class SyncState { IDLE, SYNCING, SUCCESS, PARTIAL, ERROR }
+enum class SyncState { IDLE, QUEUED, SYNCING, SUCCESS, PARTIAL, ERROR }
 
 internal const val PARTIAL_SYNC_MESSAGE = "部分資料同步失敗，已保留上次資料"
 internal const val PERSISTENCE_FAILURE_MESSAGE = "同步資料儲存失敗"
+internal const val SYNC_FAILURE_MESSAGE = "同步失敗，請查看同步紀錄"
 
 internal fun SyncResult.Success.homeSyncState(): SyncState =
     if (hasPartialSyncFailure) SyncState.PARTIAL else SyncState.SUCCESS
@@ -68,10 +65,24 @@ internal fun SyncResult.Success.homeSyncMessage(): String? =
     PARTIAL_SYNC_MESSAGE.takeIf { hasPartialSyncFailure }
 
 internal fun persistedSyncState(lastRunStatus: String?): SyncState =
-    if (lastRunStatus == "partial") SyncState.PARTIAL else SyncState.IDLE
+    when (lastRunStatus) {
+        "partial" -> SyncState.PARTIAL
+        "error" -> SyncState.ERROR
+        else -> SyncState.IDLE
+    }
 
 internal fun persistedSyncMessage(lastRunStatus: String?): String? =
-    PARTIAL_SYNC_MESSAGE.takeIf { lastRunStatus == "partial" }
+    when (lastRunStatus) {
+        "partial" -> PARTIAL_SYNC_MESSAGE
+        "error" -> SYNC_FAILURE_MESSAGE
+        else -> null
+    }
+
+internal fun activeWorkSyncState(states: Iterable<WorkInfo.State>): SyncState? = when {
+    states.any { it == WorkInfo.State.RUNNING } -> SyncState.SYNCING
+    states.any { it == WorkInfo.State.ENQUEUED || it == WorkInfo.State.BLOCKED } -> SyncState.QUEUED
+    else -> null
+}
 
 internal suspend fun handleSuccessfulSyncPersistence(
     result: SyncResult.Success,
@@ -121,8 +132,6 @@ class HomeViewModel @Inject constructor(
     private val transferDao: TransferDao,
     private val ingestionProvenanceDao: IngestionProvenanceDao,
     private val credentialProfileDao: CredentialProfileDao,
-    private val syncCoordinator: BankSyncCoordinator,
-    private val syncResultPersister: SyncResultPersister,
     private val schedulerManager: SchedulerManager,
     gson: Gson,
 ) : ViewModel() {
@@ -214,8 +223,31 @@ class HomeViewModel @Inject constructor(
 
     private val _syncStatuses = MutableStateFlow<Map<String, ExtensionSyncStatus>>(emptyMap())
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val activeSyncStates: StateFlow<Map<String, SyncState>> = installedExtensionDao.observeAll()
+        .flatMapLatest { exts ->
+            if (exts.isEmpty()) return@flatMapLatest flowOf(emptyMap())
+            combine(
+                exts.map { ext ->
+                    workManager.getWorkInfosByTagFlow(BankSyncWorker.tag(ext.id)).map { workInfos ->
+                        ext.id to activeWorkSyncState(workInfos.map { it.state })
+                    }
+                },
+            ) { pairs ->
+                pairs.mapNotNull { (extensionId, state) ->
+                    state?.let { extensionId to it }
+                }.toMap()
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
     val syncStatuses: StateFlow<Map<String, ExtensionSyncStatus>> =
-        combine(_syncStatuses, credentialProfiles, installedExtensionDao.observeAll()) { mutable, profiles, exts ->
+        combine(
+            _syncStatuses,
+            credentialProfiles,
+            installedExtensionDao.observeAll(),
+            activeSyncStates,
+        ) { mutable, profiles, exts, active ->
             val profilesById = profiles.associateBy { it.extensionId }
             val configuredIds = profiles
                 .filter(::hasStoredCredential)
@@ -223,10 +255,17 @@ class HomeViewModel @Inject constructor(
             exts.associate { ext ->
                 val current = mutable[ext.id]
                 val lastRunStatus = profilesById[ext.id]?.lastRunStatus
+                val activeState = active[ext.id]
                 ext.id to ExtensionSyncStatus(
                     extension = ext,
-                    syncState = current?.syncState ?: persistedSyncState(lastRunStatus),
-                    errorMessage = current?.errorMessage ?: persistedSyncMessage(lastRunStatus),
+                    syncState = activeState
+                        ?: current?.syncState
+                        ?: persistedSyncState(lastRunStatus),
+                    errorMessage = if (activeState != null) {
+                        null
+                    } else {
+                        current?.errorMessage ?: persistedSyncMessage(lastRunStatus)
+                    },
                     hasCredentials = ext.id in configuredIds,
                 )
             }
@@ -278,9 +317,8 @@ class HomeViewModel @Inject constructor(
                 }
                 return@launch
             }
-            updateStatus(extension.id) { it.copy(syncState = SyncState.SYNCING, errorMessage = null) }
-            val result = runSync(extension, profile)
-            handleSyncResult(extension, result)
+            updateStatus(extension.id) { it.copy(syncState = SyncState.IDLE, errorMessage = null) }
+            schedulerManager.enqueueUserSync(extension.id)
         }
     }
 
@@ -296,15 +334,13 @@ class HomeViewModel @Inject constructor(
                     runnable.forEach { (ext, _) ->
                         statuses[ext.id] = ExtensionSyncStatus(
                             extension = ext,
-                            syncState = SyncState.SYNCING,
+                            syncState = SyncState.IDLE,
                             hasCredentials = true,
                         )
                     }
                 }
             }
-            runnable.map { (ext, profile) ->
-                async { handleSyncResult(ext, runSync(ext, profile)) }
-            }.awaitAll()
+            schedulerManager.enqueueUserSyncsSequentially(runnable.map { (ext, _) -> ext.id })
         }
     }
 
@@ -350,7 +386,7 @@ class HomeViewModel @Inject constructor(
             )
             credentialProfileDao.upsert(profile)
             if (scheduleEnabled) schedulerManager.scheduleProfile(profile)
-            else schedulerManager.cancelExtension(extension.id)
+            else schedulerManager.cancelSchedule(extension.id)
             updateStatus(extension.id) { it.copy(syncState = SyncState.IDLE, errorMessage = null) }
         }
     }
@@ -360,54 +396,6 @@ class HomeViewModel @Inject constructor(
             schedulerManager.cancelExtension(extensionId)
             credentialProfileDao.deleteByExtensionId(extensionId)
             updateStatus(extensionId) { it.copy(syncState = SyncState.IDLE, errorMessage = null) }
-        }
-    }
-
-    private suspend fun runSync(extension: InstalledExtension, profile: CredentialProfile): SyncResult = try {
-        syncCoordinator.sync(extension, profile)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        SyncResult.Error(
-            message = "sync runtime failed",
-            origin = "RUNTIME",
-            cause = e,
-            rawMessage = e.message ?: e.toString(),
-            rawStack = e.stackTraceToString(),
-        )
-    }
-
-    private suspend fun handleSyncResult(extension: InstalledExtension, result: SyncResult) {
-        val now = System.currentTimeMillis()
-        when (result) {
-            is SyncResult.Success -> {
-                handleSuccessfulSyncPersistence(
-                    result = result,
-                    persist = { syncResultPersister.persist(extension, result) },
-                    updateLastRun = { status ->
-                        credentialProfileDao.updateLastRun(extension.id, now, status)
-                    },
-                    updateUi = { state, message ->
-                    updateStatus(extension.id) {
-                            it.copy(syncState = state, errorMessage = message)
-                        }
-                    }
-                )
-            }
-            is SyncResult.Error -> {
-                syncResultPersister.recordFailure(
-                    extension,
-                    IngestionTrigger.USER_SYNC,
-                    result.sourceDocuments,
-                    result.runId,
-                    result.runStartedAt,
-                    result,
-                )
-                credentialProfileDao.updateLastRun(extension.id, now, "error")
-                updateStatus(extension.id) {
-                    it.copy(syncState = SyncState.ERROR, errorMessage = "同步失敗，請查看同步紀錄")
-                }
-            }
         }
     }
 
