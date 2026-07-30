@@ -369,10 +369,25 @@ private fun ExtensionCard(
                     if (hasCredentials) ScheduleStatusLabel(scheduleStatus, scheduleRemainingMs)
                 }
                 when {
-                    syncState == SyncState.SYNCING -> CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
+                    syncState == SyncState.QUEUED -> Text(
+                        text = "等待同步",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
                     )
+                    syncState == SyncState.SYNCING -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text(
+                            text = "同步中",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     !hasCredentials -> Unit
                     syncState == SyncState.ERROR -> IconButton(onClick = onSync) {
                         Icon(

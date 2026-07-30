@@ -1,5 +1,6 @@
 package tw.kevinzhang.moneylook.ui.home
 
+import androidx.work.WorkInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -63,8 +64,29 @@ class HomeSyncStateTest {
     fun `persisted partial state survives a Home reload without exposing a code`() {
         assertEquals(SyncState.PARTIAL, persistedSyncState("partial"))
         assertEquals(PARTIAL_SYNC_MESSAGE, persistedSyncMessage("partial"))
+        assertEquals(SyncState.ERROR, persistedSyncState("error"))
+        assertEquals(SYNC_FAILURE_MESSAGE, persistedSyncMessage("error"))
         assertEquals(SyncState.IDLE, persistedSyncState("success"))
         assertNull(persistedSyncMessage("success"))
+    }
+
+    @Test
+    fun `active background work takes running over queued and ignores terminal history`() {
+        assertEquals(
+            SyncState.SYNCING,
+            activeWorkSyncState(
+                listOf(
+                    WorkInfo.State.SUCCEEDED,
+                    WorkInfo.State.ENQUEUED,
+                    WorkInfo.State.RUNNING,
+                ),
+            ),
+        )
+        assertEquals(
+            SyncState.QUEUED,
+            activeWorkSyncState(listOf(WorkInfo.State.BLOCKED, WorkInfo.State.SUCCEEDED)),
+        )
+        assertNull(activeWorkSyncState(listOf(WorkInfo.State.SUCCEEDED, WorkInfo.State.FAILED)))
     }
 
     @Test
