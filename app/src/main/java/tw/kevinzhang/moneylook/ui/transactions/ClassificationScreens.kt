@@ -59,6 +59,7 @@ fun AutoRuleScreen(
     val tags = viewModel.tags.collectAsStateWithLifecycle().value
     val accounts = viewModel.accounts.collectAsStateWithLifecycle().value
     val isApplyingAllRules = viewModel.applyingAllRules.collectAsStateWithLifecycle().value
+    val isResettingClassification = viewModel.resettingClassification.collectAsStateWithLifecycle().value
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(viewModel) {
         viewModel.autoRuleApplicationMessages.collect { message ->
@@ -75,6 +76,8 @@ fun AutoRuleScreen(
         onDelete = viewModel::deleteRule,
         isApplyingAllRules = isApplyingAllRules,
         onApplyAllRules = viewModel::applyAllRulesToExistingTransactions,
+        isResettingClassification = isResettingClassification,
+        onResetClassificationSystem = viewModel::resetClassificationSystem,
         snackbarHostState = snackbarHostState,
     )
 }

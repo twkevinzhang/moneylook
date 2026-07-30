@@ -16,6 +16,23 @@ object DefaultClassificationSeeder {
     }
 
     /**
+     * Replaces the mutable classification catalog with the complete catalog bundled in this app.
+     *
+     * Callers must invoke this inside their enclosing Room transaction. The deliberately broad
+     * deletes include rule details and tag cross references through their foreign-key cascades;
+     * audit/provenance tables intentionally have no foreign keys to this mutable catalog and are
+     * therefore retained as historical evidence.
+     */
+    fun resetToDefaults(db: SupportSQLiteDatabase) {
+        db.execSQL("DELETE FROM `auto_category_rules`")
+        db.execSQL("DELETE FROM `auto_category_rule_sets`")
+        db.execSQL("DELETE FROM `categories`")
+        db.execSQL("DELETE FROM `tags`")
+
+        seedFreshDatabase(db)
+    }
+
+    /**
      * V22 broadens merchant/brand rules to all structured searchable fields without touching
      * transfer-structure rules or user-created rules.
      */

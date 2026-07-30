@@ -17,6 +17,8 @@ import tw.kevinzhang.core.data.db.InstalledExtensionDao
 import tw.kevinzhang.core.data.db.IngestionProvenanceDao
 import tw.kevinzhang.core.data.db.ClassificationTraceStore
 import tw.kevinzhang.core.data.db.RoomClassificationTraceStore
+import tw.kevinzhang.core.data.db.ClassificationCatalogResetStore
+import tw.kevinzhang.core.data.db.RoomClassificationCatalogResetStore
 import tw.kevinzhang.core.data.db.MIGRATION_5_6
 import tw.kevinzhang.core.data.db.MIGRATION_6_7
 import tw.kevinzhang.core.data.db.MIGRATION_7_8
@@ -117,6 +119,16 @@ object DataModule {
             db.transferAnnotationDao(),
             db.ingestionProvenanceDao(),
         )
+
+    @Provides
+    @Singleton
+    fun provideClassificationCatalogResetStore(
+        db: MoneylookDatabase,
+    ): ClassificationCatalogResetStore = RoomClassificationCatalogResetStore(
+        db,
+        db.transferAnnotationDao(),
+        db.ingestionProvenanceDao(),
+    )
 
     @Provides
     fun provideTransferDao(db: MoneylookDatabase): TransferDao = db.transferDao()

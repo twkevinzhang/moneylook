@@ -14,6 +14,7 @@ import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.db.AutoCategoryRuleSetDao
 import tw.kevinzhang.core.data.db.AutomaticClassificationDecision
 import tw.kevinzhang.core.data.db.AutomaticClassificationWriteResult
+import tw.kevinzhang.core.data.db.ClassificationCatalogResetStore
 import tw.kevinzhang.core.data.db.ClassificationTraceStore
 import tw.kevinzhang.core.data.model.ClassificationOutcome
 import tw.kevinzhang.core.data.model.ClassificationTrigger
@@ -72,6 +73,7 @@ class AutoCategorizer @Inject constructor(
     private val ruleDao: AutoCategoryRuleDao,
     private val categoryDao: CategoryDao,
     private val classificationTraceStore: ClassificationTraceStore,
+    private val classificationCatalogResetStore: ClassificationCatalogResetStore,
     private val ruleSetDao: AutoCategoryRuleSetDao? = null,
     private val gson: Gson = Gson(),
 ) : TransferAutoCategorizer {
@@ -136,6 +138,26 @@ class AutoCategorizer @Inject constructor(
                 internalTransferIds = context.internalTransferCounterparts.keys,
                 ingestionRunId = null,
                 trigger = trigger,
+                ruleSetContentById = context.ruleSetContentById,
+            )
+        }
+
+    /**
+     * Serializes the destructive catalog reset with every automatic classification run, then
+     * re-evaluates all current transactions against the freshly restored bundled catalog.
+     *
+     * The catalog reset is atomic. If classification fails afterwards, invoking this method again
+     * safely resets the same catalog and retries the complete transfer set.
+     */
+    suspend fun resetClassificationSystem(): AutoCategoryApplicationResult =
+        categorizationMutex.withLock {
+            classificationCatalogResetStore.resetToDefaults()
+            val context = loadClassificationContext()
+            categorize(
+                candidates = context.candidates,
+                internalTransferIds = context.internalTransferCounterparts.keys,
+                ingestionRunId = null,
+                trigger = ClassificationTrigger.CATALOG_RESET,
                 ruleSetContentById = context.ruleSetContentById,
             )
         }

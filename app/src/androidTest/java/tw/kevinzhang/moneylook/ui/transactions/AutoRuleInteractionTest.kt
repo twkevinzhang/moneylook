@@ -47,6 +47,8 @@ class AutoRuleInteractionTest {
                         applyCount += 1
                         isApplying = true
                     },
+                    isResettingClassification = false,
+                    onResetClassificationSystem = {},
                     snackbarHostState = SnackbarHostState(),
                 )
             }
@@ -79,11 +81,82 @@ class AutoRuleInteractionTest {
                     onDelete = {},
                     isApplyingAllRules = false,
                     onApplyAllRules = {},
+                    isResettingClassification = false,
+                    onResetClassificationSystem = {},
                     snackbarHostState = SnackbarHostState(),
                 )
             }
         }
 
+        composeRule.onNodeWithContentDescription("套用所有規則到所有交易明細")
+            .assertIsNotEnabled()
+    }
+
+    @Test
+    fun resetActionUsesOverflowMenuAndCancelDoesNotInvokeCallback() {
+        var resetCount = 0
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                AutoRuleListContent(
+                    rules = emptyList(),
+                    categories = emptyList(),
+                    tags = emptyList(),
+                    accounts = emptyList(),
+                    onNavigateUp = {},
+                    onSave = {},
+                    onDelete = {},
+                    isApplyingAllRules = false,
+                    onApplyAllRules = {},
+                    isResettingClassification = false,
+                    onResetClassificationSystem = { resetCount += 1 },
+                    snackbarHostState = SnackbarHostState(),
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("更多選項").performClick()
+        composeRule.onNodeWithText("清除並回到預設規則").performClick()
+        composeRule.onNodeWithText("清除並回到預設規則？").assertExists()
+        composeRule.onNodeWithText(
+            "這會永久清除所有自動分類規則、分類與標籤，並移除所有交易的手動分類與標籤指派。" +
+                "交易與備註會保留，接著會重新分類所有交易。此操作無法復原。",
+        )
+            .assertExists()
+        composeRule.onNodeWithText("取消").performClick()
+        composeRule.runOnIdle { assertEquals(0, resetCount) }
+    }
+
+    @Test
+    fun resetConfirmationInvokesOnceAndShowsBusyState() {
+        var resetCount = 0
+        var isResetting by mutableStateOf(false)
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                AutoRuleListContent(
+                    rules = emptyList(),
+                    categories = emptyList(),
+                    tags = emptyList(),
+                    accounts = emptyList(),
+                    onNavigateUp = {},
+                    onSave = {},
+                    onDelete = {},
+                    isApplyingAllRules = false,
+                    onApplyAllRules = {},
+                    isResettingClassification = isResetting,
+                    onResetClassificationSystem = {
+                        resetCount += 1
+                        isResetting = true
+                    },
+                    snackbarHostState = SnackbarHostState(),
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("更多選項").performClick()
+        composeRule.onNodeWithText("清除並回到預設規則").performClick()
+        composeRule.onNodeWithText("清除並恢復").performClick()
+        composeRule.runOnIdle { assertEquals(1, resetCount) }
+        composeRule.onNodeWithContentDescription("正在重設分類系統").assertExists()
         composeRule.onNodeWithContentDescription("套用所有規則到所有交易明細")
             .assertIsNotEnabled()
     }
