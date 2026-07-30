@@ -319,9 +319,11 @@ class AutoCategorizerTest {
     @Test
     fun `applying all existing transactions reports safe counts and preserves manual edits`() = runBlocking {
         val category = Category("food", "餐飲", "#2E7D32")
+        val manualCategory = Category("manual-category", "手動分類", "#EF6C00")
         val automaticTag = Tag("automatic", "自動", "#1565C0")
         val manualTag = Tag("manual", "手動", "#6A1B9A")
         database.categoryDao().upsert(category)
+        database.categoryDao().upsert(manualCategory)
         database.tagDao().upsert(automaticTag)
         database.tagDao().upsert(manualTag)
         database.autoCategoryRuleDao().upsertWithTags(
@@ -341,31 +343,99 @@ class AutoCategorizerTest {
             TransferAnnotation(
                 transferId = manual.id,
                 extensionId = manual.extensionId,
-                categoryId = null,
+                categoryId = manualCategory.id,
                 note = "保留備註",
                 categoryAssignment = AssignmentSource.MANUAL,
                 manualOverride = true,
             ),
             setOf(manualTag.id),
         )
+        val progress = mutableListOf<AutoCategoryApplicationProgress>()
 
-        val result = categorizer.applyToExistingTransactions()
+        val result = categorizer.applyToExistingTransactions(onProgress = progress::add)
 
         assertEquals(3, result.processedTransferCount)
         assertEquals(1, result.matchedTransferCount)
         assertEquals(1, result.preservedManualOverrideCount)
+        assertEquals(
+            listOf(
+                AutoCategoryApplicationProgress(
+                    processedTransferCount = 0,
+                    totalTransferCount = 3,
+                ),
+                AutoCategoryApplicationProgress(
+                    processedTransferCount = 3,
+                    totalTransferCount = 3,
+                ),
+            ),
+            progress,
+        )
         database.transferAnnotationDao().observeDetail(automatic.id).first()!!.also { detail ->
             assertEquals(category.id, detail.annotation?.categoryId)
             assertEquals(listOf(automaticTag.id), detail.tags.map(Tag::id))
         }
         database.transferAnnotationDao().observeDetail(manual.id).first()!!.also { detail ->
+            assertEquals(manualCategory.id, detail.annotation?.categoryId)
             assertEquals("保留備註", detail.annotation?.note)
             assertEquals(AssignmentSource.MANUAL, detail.annotation?.categoryAssignment)
             assertEquals(listOf(manualTag.id), detail.tags.map(Tag::id))
         }
+        val manualAudit = database.ingestionProvenanceDao()
+            .getTransferAnnotationEvents(manual.id)
+        assertTrue(manualAudit.any { it.trigger == ClassificationTrigger.MANUAL_EDIT })
+        assertTrue(manualAudit.any { it.trigger == ClassificationTrigger.BULK_REAPPLY })
         assertNull(database.transferAnnotationDao().observeDetail(unmatched.id).first()!!.annotation)
         Unit
     }
+
+    @Test
+    fun `applying all existing transactions reports zero progress for an empty catalog`() = runBlocking {
+        val progress = mutableListOf<AutoCategoryApplicationProgress>()
+
+        val result = categorizer.applyToExistingTransactions(onProgress = progress::add)
+
+        assertEquals(0, result.processedTransferCount)
+        assertEquals(
+            listOf(
+                AutoCategoryApplicationProgress(
+                    processedTransferCount = 0,
+                    totalTransferCount = 0,
+                ),
+            ),
+            progress,
+        )
+    }
+
+    @Test
+    fun `applying all existing transactions reports every 25 transactions and the final transaction`() =
+        runBlocking {
+            database.transferDao().upsertAll(
+                (1..26).map { index ->
+                    transfer("apply-progress-$index", "未分類交易 $index", -index.toDouble())
+                },
+            )
+            val progress = mutableListOf<AutoCategoryApplicationProgress>()
+
+            categorizer.applyToExistingTransactions(onProgress = progress::add)
+
+            assertEquals(
+                listOf(
+                    AutoCategoryApplicationProgress(
+                        processedTransferCount = 0,
+                        totalTransferCount = 26,
+                    ),
+                    AutoCategoryApplicationProgress(
+                        processedTransferCount = 25,
+                        totalTransferCount = 26,
+                    ),
+                    AutoCategoryApplicationProgress(
+                        processedTransferCount = 26,
+                        totalTransferCount = 26,
+                    ),
+                ),
+                progress,
+            )
+        }
 
     @Test
     fun `classification reset removes manual catalog state and reclassifies while preserving note and audit`() =

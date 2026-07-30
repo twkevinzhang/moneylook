@@ -3,15 +3,11 @@ package tw.kevinzhang.moneylook.ui.transactions
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.flow.collect
 
 @Composable
 fun TransactionDetailScreen(
@@ -58,14 +54,8 @@ fun AutoRuleScreen(
     val categories = viewModel.categories.collectAsStateWithLifecycle().value
     val tags = viewModel.tags.collectAsStateWithLifecycle().value
     val accounts = viewModel.accounts.collectAsStateWithLifecycle().value
-    val isApplyingAllRules = viewModel.applyingAllRules.collectAsStateWithLifecycle().value
+    val applyAllRulesUiState = viewModel.applyAllRulesUiState.collectAsStateWithLifecycle().value
     val classificationResetUiState = viewModel.classificationResetUiState.collectAsStateWithLifecycle().value
-    val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(viewModel) {
-        viewModel.autoRuleApplicationMessages.collect { message ->
-            snackbarHostState.showSnackbar(message)
-        }
-    }
     AutoRuleListContent(
         rules = rules,
         categories = categories,
@@ -74,14 +64,17 @@ fun AutoRuleScreen(
         onNavigateUp = onNavigateUp,
         onSave = viewModel::saveRule,
         onDelete = viewModel::deleteRule,
-        isApplyingAllRules = isApplyingAllRules,
-        onApplyAllRules = viewModel::applyAllRulesToExistingTransactions,
+        applyAllRulesUiState = applyAllRulesUiState,
+        onShowApplyAllRulesConfirmation = viewModel::showApplyAllRulesConfirmation,
+        onCancelApplyAllRules = viewModel::cancelApplyAllRules,
+        onStartApplyAllRules = viewModel::startApplyAllRules,
+        onRetryApplyAllRules = viewModel::retryApplyAllRules,
+        onDismissApplyAllRules = viewModel::dismissApplyAllRules,
         classificationResetUiState = classificationResetUiState,
         onShowResetClassificationConfirmation = viewModel::showResetClassificationConfirmation,
         onCancelClassificationReset = viewModel::cancelClassificationReset,
         onStartClassificationReset = viewModel::startClassificationReset,
         onRetryClassificationReset = viewModel::retryClassificationReset,
         onDismissClassificationReset = viewModel::dismissClassificationReset,
-        snackbarHostState = snackbarHostState,
     )
 }

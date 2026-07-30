@@ -14,7 +14,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -31,8 +30,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -70,21 +67,25 @@ fun AutoRuleListContent(
     onNavigateUp: () -> Unit,
     onSave: (AutoRuleDraft) -> Unit,
     onDelete: (String) -> Unit,
-    isApplyingAllRules: Boolean,
-    onApplyAllRules: () -> Unit,
+    applyAllRulesUiState: ApplyAllRulesUiState,
+    onShowApplyAllRulesConfirmation: () -> Unit,
+    onCancelApplyAllRules: () -> Unit,
+    onStartApplyAllRules: () -> Unit,
+    onRetryApplyAllRules: () -> Unit,
+    onDismissApplyAllRules: () -> Unit,
     classificationResetUiState: ClassificationResetUiState,
     onShowResetClassificationConfirmation: () -> Unit,
     onCancelClassificationReset: () -> Unit,
     onStartClassificationReset: () -> Unit,
     onRetryClassificationReset: () -> Unit,
     onDismissClassificationReset: () -> Unit,
-    snackbarHostState: SnackbarHostState,
 ) {
     var editing by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
-    var confirmApplyAllRules by remember { mutableStateOf(false) }
     var moreMenuExpanded by remember { mutableStateOf(false) }
-    val classificationSystemBusy = isApplyingAllRules || classificationResetUiState != ClassificationResetUiState.Idle
+    val classificationSystemBusy =
+        applyAllRulesUiState != ApplyAllRulesUiState.Idle ||
+            classificationResetUiState != ClassificationResetUiState.Idle
     editing?.let { draft ->
         AutoRuleEditorDialog(
             initial = draft,
@@ -104,26 +105,13 @@ fun AutoRuleListContent(
             dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } },
         )
     }
-    if (confirmApplyAllRules) {
-        AlertDialog(
-            onDismissRequest = { confirmApplyAllRules = false },
-            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("套用所有規則？") },
-            text = {
-                Text(
-                    "會依優先順序，將所有已啟用規則套用到全部交易明細。" +
-                        "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    confirmApplyAllRules = false
-                    onApplyAllRules()
-                }) { Text("套用") }
-            },
-            dismissButton = { TextButton(onClick = { confirmApplyAllRules = false }) { Text("取消") } },
-        )
-    }
+    ApplyAllRulesDialog(
+        state = applyAllRulesUiState,
+        onCancel = onCancelApplyAllRules,
+        onStart = onStartApplyAllRules,
+        onRetry = onRetryApplyAllRules,
+        onDismiss = onDismissApplyAllRules,
+    )
     ClassificationResetDialog(
         state = classificationResetUiState,
         onCancel = onCancelClassificationReset,
@@ -138,21 +126,6 @@ fun AutoRuleListContent(
                 navigationIcon = { BackButton(onNavigateUp) },
                 actions = {
                     IconButton(
-                        onClick = { confirmApplyAllRules = true },
-                        enabled = rules.any(AutoRuleDraft::enabled) && !classificationSystemBusy,
-                    ) {
-                        if (isApplyingAllRules) {
-                            CircularProgressIndicator(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .semantics { contentDescription = "正在套用所有規則" },
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Icon(Icons.Default.Refresh, "套用所有規則到所有交易明細")
-                        }
-                    }
-                    IconButton(
                         onClick = { moreMenuExpanded = true },
                         enabled = !classificationSystemBusy,
                     ) {
@@ -162,6 +135,14 @@ fun AutoRuleListContent(
                         expanded = moreMenuExpanded,
                         onDismissRequest = { moreMenuExpanded = false },
                     ) {
+                        DropdownMenuItem(
+                            text = { Text("套用所有規則") },
+                            onClick = {
+                                moreMenuExpanded = false
+                                onShowApplyAllRulesConfirmation()
+                            },
+                            enabled = rules.any(AutoRuleDraft::enabled) && !classificationSystemBusy,
+                        )
                         DropdownMenuItem(
                             text = { Text("清除並回到預設規則") },
                             onClick = {
@@ -175,7 +156,6 @@ fun AutoRuleListContent(
             )
         },
         floatingActionButton = { FloatingActionButton(onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) }) { Icon(Icons.Default.Add, "新增規則") } },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         if (rules.isEmpty()) {
             Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -189,6 +169,93 @@ fun AutoRuleListContent(
         }
     }
 }
+
+@Composable
+private fun ApplyAllRulesDialog(
+    state: ApplyAllRulesUiState,
+    onCancel: () -> Unit,
+    onStart: () -> Unit,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var applyStartRequested by remember(state) { mutableStateOf(false) }
+    when (state) {
+        ApplyAllRulesUiState.Idle -> Unit
+        ApplyAllRulesUiState.Confirming -> AlertDialog(
+            onDismissRequest = onCancel,
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("套用所有規則？") },
+            text = {
+                Text(
+                    "會依優先順序，將所有已啟用規則套用到全部交易明細。" +
+                        "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        applyStartRequested = true
+                        onStart()
+                    },
+                    enabled = !applyStartRequested,
+                ) { Text("套用") }
+            },
+            dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },
+        )
+        ApplyAllRulesUiState.Preparing -> ClassificationOperationRunningDialog(
+            title = "正在準備交易資料",
+            message = "正在載入交易與規則，請勿關閉此視窗。",
+        )
+        is ApplyAllRulesUiState.Applying -> {
+            val total = state.totalTransferCount.coerceAtLeast(0)
+            val processed = state.processedTransferCount.coerceIn(0, total)
+            ClassificationOperationRunningDialog(
+                title = "正在套用所有規則",
+                message = "已處理 $processed / $total 筆交易",
+                progress = if (total == 0) 0f else processed.toFloat() / total,
+                progressDescription = "套用規則進度",
+            )
+        }
+        is ApplyAllRulesUiState.Success -> AlertDialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("所有規則已套用") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("已處理 ${state.processedTransferCount} 筆交易")
+                    Text("符合 ${state.matchedTransferCount} 筆規則")
+                    Text("保留 ${state.preservedManualOverrideCount} 筆手動調整")
+                }
+            },
+            confirmButton = { Button(onClick = onDismiss) { Text("完成") } },
+        )
+        is ApplyAllRulesUiState.Error -> AlertDialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            title = { Text("套用所有規則失敗") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(state.message)
+                    Text(
+                        state.lastStageDescription(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = { Button(onClick = onRetry) { Text("重試") } },
+            dismissButton = { TextButton(onClick = onDismiss) { Text("關閉") } },
+        )
+    }
+}
+
+private fun ApplyAllRulesUiState.Error.lastStageDescription(): String =
+    when (lastStage) {
+        ApplyAllRulesStage.PREPARING -> "失敗階段：正在準備交易資料"
+        ApplyAllRulesStage.APPLYING ->
+            "失敗階段：正在套用規則（已處理 ${processedTransferCount.coerceAtLeast(0)} / " +
+                "${totalTransferCount.coerceAtLeast(0)} 筆交易）"
+    }
 
 @Composable
 private fun ClassificationResetDialog(
@@ -222,17 +289,18 @@ private fun ClassificationResetDialog(
             },
             dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },
         )
-        ClassificationResetUiState.ResettingCatalog -> ClassificationResetRunningDialog(
+        ClassificationResetUiState.ResettingCatalog -> ClassificationOperationRunningDialog(
             title = "正在清除分類資料",
             message = "正在恢復內建分類、標籤與自動規則，請勿關閉此視窗。",
         )
         is ClassificationResetUiState.Reclassifying -> {
             val total = state.totalTransferCount.coerceAtLeast(0)
             val processed = state.processedTransferCount.coerceIn(0, total)
-            ClassificationResetRunningDialog(
+            ClassificationOperationRunningDialog(
                 title = "正在重新分類交易",
                 message = "已處理 $processed / $total 筆交易",
                 progress = if (total == 0) 0f else processed.toFloat() / total,
+                progressDescription = "重新分類進度",
             )
         }
         is ClassificationResetUiState.Success -> AlertDialog(
@@ -271,10 +339,11 @@ private fun ClassificationResetUiState.Error.lastStageDescription(): String =
     }
 
 @Composable
-private fun ClassificationResetRunningDialog(
+private fun ClassificationOperationRunningDialog(
     title: String,
     message: String,
     progress: Float? = null,
+    progressDescription: String = title,
 ) {
     AlertDialog(
         onDismissRequest = {},
@@ -295,7 +364,7 @@ private fun ClassificationResetRunningDialog(
                         progress = { progress },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .semantics { contentDescription = "重新分類進度" },
+                            .semantics { contentDescription = progressDescription },
                     )
                 }
             }
