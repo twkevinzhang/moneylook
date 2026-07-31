@@ -18,7 +18,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -33,7 +32,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import tw.kevinzhang.moneylook.ui.home.formatCurrencyAmount
-import kotlin.math.max
 
 /**
  * Embeddable third tab for the global ledger. Date, account, tag, and currency filters are owned
@@ -45,14 +43,15 @@ fun AnalysisContent(
     selectedDirection: AnalysisDirection = AnalysisDirection.EXPENSE,
     modifier: Modifier = Modifier,
 ) {
+    val directionLabel = selectedDirection.label
     Column(
         modifier = modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        SectionHeading("${presentation.periodLabel}總收支", "以 ${presentation.currency} 統計")
-        SummaryCard(presentation)
+        SectionHeading("${presentation.periodLabel}總$directionLabel", "以 ${presentation.currency} 統計")
+        SummaryCard(presentation, selectedDirection)
 
-        SectionHeading("本期分類", "錢花在哪裡？")
+        SectionHeading("本期分類", selectedDirection.categorySubtitle)
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 CategoryDonut(
@@ -64,8 +63,8 @@ fun AnalysisContent(
             }
         }
 
-        SectionHeading("近半年趨勢", "收入與支出的月度變化")
-        TrendCard(presentation)
+        SectionHeading("近半年趨勢", "${directionLabel}的月度變化")
+        TrendCard(presentation, selectedDirection)
     }
 }
 
@@ -82,16 +81,18 @@ private fun SectionHeading(title: String, subtitle: String) {
 }
 
 @Composable
-private fun SummaryCard(presentation: AnalysisPresentation) {
-    val summary = presentation.summary
+private fun SummaryCard(presentation: AnalysisPresentation, direction: AnalysisDirection) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            SummaryLine("結餘", formatCurrencyAmount(summary.balance, presentation.currency), emphasized = true)
-            SummaryLine("收入", formatCurrencyAmount(summary.income, presentation.currency), accent = true)
-            SummaryLine("支出", "-${formatCurrencyAmount(summary.expense, presentation.currency)}")
+            SummaryLine(
+                label = "${direction.label}總額",
+                value = formatCurrencyAmount(presentation.summary.amount(direction), presentation.currency),
+                emphasized = true,
+                accent = direction == AnalysisDirection.INCOME,
+            )
         }
     }
 }
@@ -192,18 +193,19 @@ private fun CategoryLegendRow(slice: AnalysisCategorySlice, total: Double, index
 }
 
 @Composable
-private fun TrendCard(presentation: AnalysisPresentation) {
+private fun TrendCard(presentation: AnalysisPresentation, direction: AnalysisDirection) {
     val points = presentation.trend
-    val incomeColor = MaterialTheme.colorScheme.primary
-    val expenseColor = MaterialTheme.colorScheme.tertiary
-    val description = points.joinToString(prefix = "近半年趨勢：") { point ->
-        "${point.month.shortLabel}收入 ${formatCurrencyAmount(point.income, presentation.currency)}、支出 ${formatCurrencyAmount(point.expense, presentation.currency)}"
+    val seriesColor = when (direction) {
+        AnalysisDirection.INCOME -> MaterialTheme.colorScheme.primary
+        AnalysisDirection.EXPENSE -> MaterialTheme.colorScheme.tertiary
+    }
+    val description = points.joinToString(prefix = "近半年${direction.label}趨勢：") { point ->
+        "${point.month.shortLabel}${direction.label} ${formatCurrencyAmount(point.amount(direction), presentation.currency)}"
     }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                TrendLegend("收入", MaterialTheme.colorScheme.primary)
-                TrendLegend("支出", MaterialTheme.colorScheme.tertiary)
+                TrendLegend(direction.label, seriesColor)
             }
             Canvas(
                 modifier = Modifier
@@ -213,7 +215,8 @@ private fun TrendCard(presentation: AnalysisPresentation) {
                     .testTag("analysis-trend-chart")
                     .semantics { contentDescription = description },
             ) {
-                val maxValue = max(1.0, points.maxOfOrNull { max(it.income, it.expense) } ?: 1.0).toFloat()
+                val values = points.map { it.amount(direction) }
+                val maxValue = maxOf(1.0, values.maxOrNull() ?: 1.0).toFloat()
                 val left = 8.dp.toPx()
                 val right = size.width - 8.dp.toPx()
                 val top = 8.dp.toPx()
@@ -234,8 +237,7 @@ private fun TrendCard(presentation: AnalysisPresentation) {
                         drawCircle(color, radius = 4.dp.toPx(), center = coordinate(index, value))
                     }
                 }
-                drawSeries(points.map(AnalysisTrendPoint::income), incomeColor)
-                drawSeries(points.map(AnalysisTrendPoint::expense), expenseColor)
+                drawSeries(values, seriesColor)
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 points.forEach { point ->
@@ -252,6 +254,28 @@ private fun TrendLegend(label: String, color: Color) {
         Spacer(Modifier.size(10.dp).background(color, CircleShape))
         Text(label, modifier = Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelMedium)
     }
+}
+
+internal val AnalysisDirection.label: String
+    get() = when (this) {
+        AnalysisDirection.INCOME -> "收入"
+        AnalysisDirection.EXPENSE -> "支出"
+    }
+
+private val AnalysisDirection.categorySubtitle: String
+    get() = when (this) {
+        AnalysisDirection.INCOME -> "錢從哪裡來？"
+        AnalysisDirection.EXPENSE -> "錢花在哪裡？"
+    }
+
+internal fun AnalysisSummary.amount(direction: AnalysisDirection): Double = when (direction) {
+    AnalysisDirection.INCOME -> income
+    AnalysisDirection.EXPENSE -> expense
+}
+
+internal fun AnalysisTrendPoint.amount(direction: AnalysisDirection): Double = when (direction) {
+    AnalysisDirection.INCOME -> income
+    AnalysisDirection.EXPENSE -> expense
 }
 
 private fun String?.asChartColor(index: Int): Color {

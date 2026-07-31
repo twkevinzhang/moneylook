@@ -31,11 +31,7 @@ class GlobalLedgerViewModel @Inject constructor(
     private val today = LocalDate.now()
     private val initialRange = GlobalDateRange.thisMonth(today)
     private val periodSelection = MutableStateFlow(PeriodSelection(initialRange, initialRange))
-    /**
-     * Conditions explicitly selected from the detail filter sheet.  The
-     * category report direction deliberately lives in [categoryDirection], so
-     * touching a report card cannot silently narrow the detail ledger.
-     */
+    /** Conditions explicitly selected from the detail filter sheet. */
     private val filter = MutableStateFlow(GlobalLedgerFilter())
     private val activeTab = MutableStateFlow(GlobalLedgerTab.CATEGORY)
     private val categoryDirection = MutableStateFlow(GlobalLedgerDirection.EXPENSE)
@@ -81,7 +77,8 @@ class GlobalLedgerViewModel @Inject constructor(
         val sharedFilter = currentFilter.copy(direction = null)
         val sharedItems = filterGlobalLedger(allItems, sharedFilter)
         val reportItems = globalReportableTransactions(sharedItems)
-        val visibleItems = filterGlobalLedger(allItems, currentFilter)
+        val directionFilter = sharedFilter.copy(direction = tabState.second)
+        val visibleItems = filterGlobalLedger(allItems, directionFilter)
         GlobalLedgerUiState(
             dateRange = currentRange,
             datePagerAnchor = currentPeriod.anchor,
@@ -90,10 +87,8 @@ class GlobalLedgerViewModel @Inject constructor(
             categoryDirection = tabState.second,
             allItems = allItems,
             items = visibleItems,
-            // The analysis chart always needs both income and expense series;
-            // it shares every other filter with this screen.
-            trendItems = globalReportableTransactions(filterGlobalLedger(trendItems, sharedFilter)),
-            summary = globalLedgerSummary(reportItems),
+            trendItems = globalReportableTransactions(filterGlobalLedger(trendItems, directionFilter)),
+            summary = globalLedgerSummary(sharedItems),
             categories = globalCategorySummaries(reportItems, tabState.second),
             missingExchangeCurrencies = missingExchangeCurrencies(reportItems),
             exchangeRatesLoading = rates.loading,
