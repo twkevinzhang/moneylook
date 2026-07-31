@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertHasNoClickAction
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
@@ -25,10 +26,50 @@ import org.junit.Test
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
 import java.time.LocalDate
+import java.time.YearMonth
 
 class GlobalLedgerInteractionTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun datePagerRestoresAnOlderActiveMonthAtTheViewportCenter() {
+        val today = LocalDate.now()
+        val anchor = GlobalDateRange.thisMonth(today)
+        val activeRange = GlobalDateRange.month(YearMonth.from(today).minusMonths(2))
+
+        composeRule.setContent {
+            MoneylookTheme(darkTheme = false, dynamicColor = false) {
+                GlobalLedgerContent(
+                    state = GlobalLedgerUiState(
+                        dateRange = activeRange,
+                        datePagerAnchor = anchor,
+                    ),
+                    onNavigateToTransaction = {},
+                    onSelectDateRange = {},
+                    onResetToThisMonth = {},
+                    onSetDateRange = { _, _ -> true },
+                    onSetQuery = {},
+                    onUpdateFilter = {},
+                    onClearFilters = {},
+                    onSelectTab = {},
+                    onSelectReportDirection = {},
+                    onCategoryClick = {},
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        val activeNode = composeRule.onNodeWithTag("date-period-${activeRange.startKey}")
+        activeNode.assertIsSelected()
+        val pagerBounds = composeRule.onNodeWithTag("date-period-pager").getBoundsInRoot()
+        val activeBounds = activeNode.getBoundsInRoot()
+        assertEquals(
+            (pagerBounds.left.value + pagerBounds.right.value) / 2f,
+            (activeBounds.left.value + activeBounds.right.value) / 2f,
+            1f,
+        )
+    }
 
     @Test
     fun topBarActionsAndSummaryDirectionKeepTheActiveTab() {

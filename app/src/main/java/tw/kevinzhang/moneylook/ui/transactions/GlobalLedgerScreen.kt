@@ -437,17 +437,20 @@ private fun GlobalLedgerControls(
     val model = remember(datePagerAnchor, today) {
         globalDateRangePager(datePagerAnchor, today)
     }
+    val activePage = remember(model, dateRange) {
+        model.activePageFor(dateRange) ?: model.selectedPage
+    }
     val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = model.selectedPage,
+        initialFirstVisibleItemIndex = activePage,
     )
     val scope = rememberCoroutineScope()
-    var settledCenterPage by remember(model) { mutableIntStateOf(model.selectedPage) }
+    var settledCenterPage by remember(model, activePage) { mutableIntStateOf(activePage) }
 
-    LaunchedEffect(model) {
-        listState.scrollToItem(model.selectedPage)
+    LaunchedEffect(model, activePage) {
+        listState.scrollToItem(activePage)
     }
 
-    LaunchedEffect(listState, model) {
+    LaunchedEffect(listState, model, activePage) {
         snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
             .filter { isScrolling -> !isScrolling }
@@ -457,7 +460,7 @@ private fun GlobalLedgerControls(
                 settledCenterPage = layoutInfo.visibleItemsInfo
                     .minByOrNull { item -> abs((item.offset + item.size / 2) - viewportCenter) }
                     ?.index
-                    ?: model.selectedPage
+                    ?: activePage
             }
     }
 

@@ -211,6 +211,16 @@ class GlobalLedgerPresentationTest {
     }
 
     @Test
+    fun `active page locates an earlier complete calendar month from a current-month anchor`() {
+        val anchor = GlobalDateRange.thisMonth(today)
+        val activeRange = GlobalDateRange.month(YearMonth.of(2024, 2))
+        val pager = globalDateRangePager(anchor, today)
+
+        assertEquals(649, pager.activePageFor(activeRange))
+        assertEquals(activeRange, pager.rangeAt(requireNotNull(pager.activePageFor(activeRange))))
+    }
+
+    @Test
     fun `custom pager anchors inclusive ranges and neighbours by their day count`() {
         val selected = GlobalDateRange(LocalDate.of(2026, 3, 1), LocalDate.of(2026, 3, 3), isCustom = true)
         val pager = globalDateRangePager(selected, LocalDate.of(2026, 3, 8))
@@ -219,6 +229,31 @@ class GlobalLedgerPresentationTest {
         assertEquals(range("2026-02-26", "2026-02-28"), pager.rangeAt(pager.selectedPage - 1))
         assertEquals(range("2026-03-04", "2026-03-06"), pager.rangeAt(pager.selectedPage + 1))
         assertEquals(range("2026-03-07", "2026-03-08"), pager.rangeAt(pager.pageCount - 1))
+    }
+
+    @Test
+    fun `active page locates custom neighbour ranges including shortened boundary pages`() {
+        val pager = globalDateRangePager(
+            GlobalDateRange(LocalDate.of(1970, 1, 2), LocalDate.of(1970, 1, 4), isCustom = true),
+            LocalDate.of(1970, 1, 10),
+        )
+
+        assertEquals(0, pager.activePageFor(range("1970-01-01", "1970-01-01")))
+        assertEquals(2, pager.activePageFor(range("1970-01-05", "1970-01-07")))
+        assertEquals(3, pager.activePageFor(range("1970-01-08", "1970-01-10")))
+    }
+
+    @Test
+    fun `active page safely rejects ranges outside the pager or its page geometry`() {
+        val monthlyPager = globalDateRangePager(GlobalDateRange.thisMonth(today), today)
+        val customPager = globalDateRangePager(
+            GlobalDateRange(LocalDate.of(1970, 1, 2), LocalDate.of(1970, 1, 4), isCustom = true),
+            LocalDate.of(1970, 1, 10),
+        )
+
+        assertNull(monthlyPager.activePageFor(GlobalDateRange.month(YearMonth.of(1969, 12))))
+        assertNull(monthlyPager.activePageFor(GlobalDateRange.month(YearMonth.of(2026, 8))))
+        assertNull(customPager.activePageFor(range("1970-01-02", "1970-01-03")))
     }
 
     @Test
