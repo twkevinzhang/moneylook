@@ -71,11 +71,13 @@ class Migration18To19Test {
 
         MIGRATION_18_19.migrate(db)
 
-        val expectedRules = DefaultClassificationCatalog.publicGenericRules
-            .count { it.rule.categoryId == "expense-food" }
+        val foodRules = DefaultClassificationCatalog.publicGenericRules
+            .filter { it.rule.categoryId == "expense-food" }
+        val expectedRules = foodRules.size
+        val expectedConditions = foodRules.sumOf { it.conditions.size }
         assertEquals(1, count(db, "categories"))
         assertEquals(expectedRules, count(db, "auto_category_rules"))
-        assertEquals(expectedRules, count(db, "auto_category_rule_conditions"))
+        assertEquals(expectedConditions, count(db, "auto_category_rule_conditions"))
         assertEquals(2, count(db, "auto_category_rule_sets"))
     }
 

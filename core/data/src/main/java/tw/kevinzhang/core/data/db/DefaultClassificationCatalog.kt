@@ -70,7 +70,7 @@ object DefaultClassificationCatalog {
     val publicStructuralRules: List<PublicMccRule> = listOf(
         phraseRule("public-structural-auto-credit-card-revolving-interest-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, "循環利息", "revolving interest"),
         phraseRule("public-structural-auto-credit-card-installment-fee-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, "信用卡分期手續費", "分期手續費", "installment fee"),
-        phraseRule("public-structural-auto-credit-card-annual-fee-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, "信用卡年費", "年費", "annual fee"),
+        annualFeeRule(),
         phraseRule("public-structural-auto-credit-card-foreign-fee-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, "國外交易手續費", "foreign transaction fee"),
         phraseRule("public-structural-auto-deposit-transfer-fee-v2", "expense-fees", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.DEPOSIT, "轉帳手續費", "transfer fee"),
         phraseRule("public-structural-suggest-salary-v2", "income-salary", AutoCategoryRuleAction.AUTO_APPLY, AutoCategoryRuleAmountSign.POSITIVE, null, "薪資入帳", "薪水入帳", "salary"),
@@ -90,7 +90,7 @@ object DefaultClassificationCatalog {
         id = PUBLIC_STRUCTURAL_RULE_SET_ID,
         name = "Moneylook public structural rules v3",
         origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
-        version = "2026.07.27",
+        version = "2026.08.01",
         canonicalizerVersion = "v2-space-fold",
         contentSha256 = publicRuleCollectionContentSha256(publicStructuralRules),
     )
@@ -103,9 +103,9 @@ object DefaultClassificationCatalog {
     val publicGenericRuleSet: AutoCategoryRuleSet by lazy {
         AutoCategoryRuleSet(
             id = PUBLIC_GENERIC_RULE_SET_ID,
-            name = "Moneylook public generic rules v5",
+            name = "Moneylook public generic rules v7",
             origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
-            version = "2026.07.27.2",
+            version = "2026.08.01",
             canonicalizerVersion = "v2-space-fold",
             contentSha256 = publicRuleCollectionContentSha256(publicGenericRules),
         )
@@ -188,6 +188,57 @@ object DefaultClassificationCatalog {
         genericRule("public-v4-transport-go-share", "交通｜GoShare", "expense-transport", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 87, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "GOPOCKET", "GO SHARE"),
         genericRule("public-v4-insurance-national-health", "保險｜健保費", "expense-insurance", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 88, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "中央健康保險署"),
         genericRule("public-v4-food-mcdonalds-display-name", "餐飲｜麥當勞顯示名稱", "expense-food", AutoCategoryRuleAmountSign.NEGATIVE, AssetKind.CREDIT_CARD, 90, AutoCategoryRuleConditionField.SEARCHABLE_TEXT, AutoCategoryRuleConditionMatchMode.CONTAINS, "台灣麥當勞"),
+        // V5 is intentionally merchant-name scoped.  Bank display text and payment-provider
+        // prefixes are not merchant identities, so these rules do not inspect SEARCHABLE_TEXT.
+        merchantRule("public-v5-food-sukiya", "餐飲｜SUKIYA", "expense-food", "SUKIYA", "すき家", "台灣善商"),
+        merchantRule("public-v5-food-komeda", "餐飲｜客美多", "expense-food", "客美多"),
+        merchantRule("public-v5-food-matsuya", "餐飲｜松屋", "expense-food", "松屋"),
+        merchantRule("public-v5-food-kebuke", "餐飲｜可不可熟成紅茶", "expense-food", "可不可熟成紅茶"),
+        merchantRule("public-v5-food-pizzahut", "餐飲｜必勝客", "expense-food", "必勝客"),
+        merchantRule("public-v5-food-sato", "餐飲｜佐藤精肉店", "expense-food", "佐藤精肉店"),
+        merchantRule("public-v5-food-saizeriya", "餐飲｜薩莉亞", "expense-food", "薩莉亞"),
+        merchantRule("public-v5-food-bafang", "餐飲｜八方雲集", "expense-food", "八方雲集"),
+        merchantRule("public-v5-food-xindian", "餐飲｜辛殿麻辣鍋", "expense-food", "辛殿麻辣鍋"),
+        merchantRule("public-v5-food-hikari", "餐飲｜光鮨迴轉壽司", "expense-food", "光鮨迴轉壽司"),
+        merchantRule("public-v5-food-daoting", "餐飲｜稻町家", "expense-food", "稻町家"),
+        merchantRule("public-v5-food-kayiyi", "餐飲｜咖一味", "expense-food", "咖一味"),
+        merchantRule("public-v5-food-torijin", "餐飲｜鳥人拉麵", "expense-food", "鳥人拉麵"),
+        merchantRule("public-v5-food-su", "餐飲｜蘇氏麵館", "expense-food", "蘇氏麵館"),
+        merchantRule("public-v5-food-zen", "餐飲｜禪風茶樓", "expense-food", "禪風茶樓"),
+        merchantRule("public-v5-food-ippudo", "餐飲｜一風堂", "expense-food", "一風堂"),
+        merchantRule("public-v5-food-louisa", "餐飲｜LOUISA COFFEE", "expense-food", "LOUISA COFFEE"),
+        merchantRule("public-v5-food-starbucks", "餐飲｜星巴克", "expense-food", "星巴克"),
+        merchantRule("public-v5-food-qiaozhiwei", "餐飲｜巧之味", "expense-food", "巧之味"),
+        merchantRule("public-v5-food-chiyuan", "餐飲｜季緣", "expense-food", "季緣"),
+        merchantAllRule("public-v5-food-att4fun", "餐飲｜ATT 4 FUN 餐廳", "expense-food", "ATT 4 FUN", "餐廳"),
+        merchantAllRule("public-v5-food-teahouse-sanchuang", "餐飲｜茶屋", "expense-food", "茶屋", "三創店"),
+        merchantRule("public-v5-shopping-jinhua", "購物｜今華電子", "expense-shopping", "今華電子"),
+        merchantRule("public-v5-shopping-shengsheng", "購物｜勝勝小舖", "expense-shopping", "勝勝小舖"),
+        merchantRule("public-v5-shopping-dream", "購物｜情趣夢天堂", "expense-shopping", "情趣夢天堂"),
+        merchantRule("public-v5-shopping-shenghua", "購物｜勝華百貨行", "expense-shopping", "勝華百貨行"),
+        merchantRule("public-v5-shopping-shengyue", "購物｜勝越企業社", "expense-shopping", "勝越企業社"),
+        merchantRule("public-v5-shopping-sanchuang", "購物｜三創數位", "expense-shopping", "三創數位"),
+        merchantRule("public-v5-shopping-pchome", "購物｜PCHOME", "expense-shopping", "PCHOME"),
+        merchantRule("public-v5-shopping-carrefour", "購物｜家樂福", "expense-shopping", "家樂福"),
+        merchantRule("public-v5-shopping-rtmart", "購物｜大全聯", "expense-shopping", "大全聯"),
+        merchantRule("public-v5-shopping-jsf", "購物｜金興發", "expense-shopping", "金興發"),
+        merchantRule("public-v5-shopping-yuanda", "購物｜源達科技", "expense-shopping", "源達科技"),
+        merchantRule("public-v5-shopping-nihonbashi", "購物｜日本橋3C", "expense-shopping", "日本橋3C"),
+        merchantRule("public-v5-shopping-xiangchang", "購物｜祥昌電子", "expense-shopping", "祥昌電子"),
+        merchantRule("public-v5-shopping-miramar", "購物｜美麗華百樂園", "expense-shopping", "美麗華百樂園"),
+        merchantRule("public-v5-shopping-zhouquan", "購物｜洲全生活館", "expense-shopping", "洲全生活館"),
+        merchantRule("public-v5-transport-guoyuan", "交通｜國園加油站", "expense-transport", "國園加油站"),
+        merchantRule("public-v5-transport-sunshine", "交通｜陽光市民加油站", "expense-transport", "陽光市民加油站"),
+        merchantRule("public-v5-transport-cpc", "交通｜中油", "expense-transport", "中油"),
+        merchantAllRule("public-v5-transport-uniparking", "交通｜統一精工停車", "expense-transport", "統一精工", "停車"),
+        merchantRule("public-v5-stationery-101", "文具｜101文具天堂", "expense-stationery", "101文具天堂"),
+        merchantRule("public-v5-stationery-printing", "文具｜經典數位印刷", "expense-stationery", "經典數位印刷"),
+        merchantRule("public-v5-home-ikea", "住家｜IKEA", "expense-home", "IKEA", "宜家家居"),
+        merchantRule("public-v5-home-zhenyu", "住家｜振宇五金", "expense-home", "振宇五金"),
+        merchantRule("public-v5-clothing-net", "服飾｜NET", "expense-clothing", "NET忠孝"),
+        merchantRule("public-v5-entertainment-lihua", "休閒娛樂｜麗華行電競旗艦館", "expense-entertainment", "麗華行電競旗艦館"),
+        genericRule("public-v5-internet-squarespace", "網路活動｜Squarespace", "expense-internet", AutoCategoryRuleAmountSign.NEGATIVE, null, 28, AutoCategoryRuleConditionField.DESCRIPTION, AutoCategoryRuleConditionMatchMode.CONTAINS, "SQSP* DOMAIN"),
+        merchantRule("public-v5-medical-pharmacy", "醫療｜藥局", "expense-medical", "藥局"),
     )
     val categories: List<Category> = listOf(
         category("expense-food", "餐飲", "🍽️", "#FB8C00", CategoryReportingGroup.EXPENSE),
@@ -211,6 +262,7 @@ object DefaultClassificationCatalog {
         category("expense-jkopay", "街口儲值", "🎟️", "#EF5350", CategoryReportingGroup.EXPENSE),
         category("expense-dispute", "爭議", "🐾", "#EF5350", CategoryReportingGroup.EXPENSE),
         category("expense-digital-wallet", "電子支付", "📱", "#26A69A", CategoryReportingGroup.EXPENSE),
+        category("expense-stationery", "文具", "✏️", "#5B75C9", CategoryReportingGroup.EXPENSE),
         category("income-salary", "薪資", "💰", "#43B96D", CategoryReportingGroup.INCOME),
         category("income-bonus", "獎金", "✨", "#F9C928", CategoryReportingGroup.INCOME),
         category("income-refund", "退款", "↩️", "#3E8EEA", CategoryReportingGroup.INCOME),
@@ -325,6 +377,30 @@ object DefaultClassificationCatalog {
         },
     )
 
+    private fun annualFeeRule(): PublicMccRule {
+        val id = "public-structural-auto-credit-card-annual-fee-v2"
+        val base = phraseRule(
+            id,
+            "expense-fees",
+            AutoCategoryRuleAction.AUTO_APPLY,
+            AutoCategoryRuleAmountSign.NEGATIVE,
+            AssetKind.CREDIT_CARD,
+            "信用卡年費",
+            "年費",
+            "annual fee",
+        )
+        return base.copy(
+            conditions = base.conditions + AutoCategoryRuleCondition(
+                ruleId = id,
+                position = base.conditions.size,
+                conditionGroup = AutoCategoryRuleConditionGroup.EXCLUDE_ANY,
+                field = AutoCategoryRuleConditionField.SEARCHABLE_TEXT,
+                matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+                pattern = "減免年費",
+            ),
+        )
+    }
+
     private fun genericRule(
         id: String,
         name: String,
@@ -367,10 +443,70 @@ object DefaultClassificationCatalog {
         },
     )
 
+    private fun merchantRule(
+        id: String,
+        name: String,
+        categoryId: String,
+        vararg patterns: String,
+        matchMode: AutoCategoryRuleConditionMatchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+    ): PublicMccRule = merchantConditionsRule(
+        id = id,
+        name = name,
+        categoryId = categoryId,
+        conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+        patterns = patterns,
+        matchMode = matchMode,
+    )
+
+    private fun merchantAllRule(
+        id: String,
+        name: String,
+        categoryId: String,
+        vararg patterns: String,
+    ): PublicMccRule = merchantConditionsRule(
+        id = id,
+        name = name,
+        categoryId = categoryId,
+        conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ALL,
+        patterns = patterns,
+        matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+    )
+
+    private fun merchantConditionsRule(
+        id: String,
+        name: String,
+        categoryId: String,
+        conditionGroup: AutoCategoryRuleConditionGroup,
+        patterns: Array<out String>,
+        matchMode: AutoCategoryRuleConditionMatchMode,
+    ): PublicMccRule = PublicMccRule(
+        rule = AutoCategoryRule(
+            id = id,
+            name = name,
+            amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
+            categoryId = categoryId,
+            priority = 95,
+            isDefault = true,
+            ruleSetId = PUBLIC_GENERIC_RULE_SET_ID,
+            origin = AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+            action = AutoCategoryRuleAction.AUTO_APPLY,
+        ),
+        conditions = patterns.mapIndexed { position, pattern ->
+            AutoCategoryRuleCondition(
+                ruleId = id,
+                position = position,
+                conditionGroup = conditionGroup,
+                field = AutoCategoryRuleConditionField.MERCHANT_NAME,
+                matchMode = matchMode,
+                pattern = pattern,
+            )
+        },
+    )
+
     private fun digitalWalletRule(): PublicMccRule {
         val id = "public-v4-expense-digital-wallet"
         val includePatterns = listOf("街口電支", "街口TWQR", "連加", "連支", "TAPPAY")
-        val excludedKnownMerchants = listOf("便利商店", "停車大聲公", "茶之魔手")
+        val excludedKnownMerchants = listOf("便利商店", "停車大聲公", "茶之魔手", "連加*HOHO")
         return PublicMccRule(
             rule = AutoCategoryRule(
                 id = id,

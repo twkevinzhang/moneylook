@@ -239,6 +239,117 @@ object DefaultClassificationSeeder {
         }
     }
 
+    /**
+     * V27 appends reviewed merchant-name rules without treating payment providers as merchants.
+     * The existing generic collection marker is the user's durable opt-in: if it is absent, no
+     * category or rule is recreated.  INSERT OR IGNORE keeps any existing row untouched.
+     */
+    fun upgradePublicCatalogToV7(db: SupportSQLiteDatabase) {
+        upgradePristineAnnualFeeRule(db)
+        if (!ruleSetExists(
+                db,
+                DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID,
+                AutoCategoryRuleOrigin.PUBLIC_DEFAULT,
+            )
+        ) return
+
+        upgradePristineDigitalWalletRule(db)
+        seedCategories(
+            db,
+            DefaultClassificationCatalog.categories.filter { it.id == "expense-stationery" },
+        )
+        seedPublicRuleCollection(
+            db,
+            DefaultClassificationCatalog.publicGenericRuleSet,
+            DefaultClassificationCatalog.publicGenericRules.filter {
+                it.rule.id.startsWith("public-v5-")
+            },
+            insertRuleSet = false,
+        )
+        updatePublicRuleSetMetadata(db, DefaultClassificationCatalog.publicGenericRuleSet)
+    }
+
+    /** Keeps the ambiguous payment-provider display text unclassified without vetoing user rules. */
+    private fun upgradePristineDigitalWalletRule(db: SupportSQLiteDatabase) {
+        val id = "public-v4-expense-digital-wallet"
+        val rowMatches = db.query(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM `auto_category_rules`
+                WHERE `id` = ? AND `name` = '電子支付｜支付通路前綴'
+                  AND `descriptionContains` IS NULL AND `direction` = 'NEGATIVE'
+                  AND `minAbsoluteAmount` IS NULL AND `maxAbsoluteAmount` IS NULL
+                  AND `accountId` IS NULL AND `categoryId` = 'expense-digital-wallet'
+                  AND `enabled` = 1 AND `priority` = 25
+                  AND `descriptionMatchMode` = 'CONTAINS' AND `isDefault` = 1
+                  AND `ruleSetId` = ? AND `extensionId` IS NULL AND `accountKind` = 'CREDIT_CARD'
+                  AND `origin` = 'PUBLIC_DEFAULT' AND `action` = 'AUTO_APPLY'
+            )
+            """.trimIndent(),
+            arrayOf(id, DefaultClassificationCatalog.PUBLIC_GENERIC_RULE_SET_ID),
+        ).use { it.moveToFirst() && it.getInt(0) == 1 }
+        if (!rowMatches || !hasExactConditionRows(
+                db,
+                id,
+                listOf(
+                    listOf("INCLUDE_ANY", "DESCRIPTION", "CONTAINS", "街口電支"),
+                    listOf("INCLUDE_ANY", "DESCRIPTION", "CONTAINS", "街口TWQR"),
+                    listOf("INCLUDE_ANY", "DESCRIPTION", "CONTAINS", "連加"),
+                    listOf("INCLUDE_ANY", "DESCRIPTION", "CONTAINS", "連支"),
+                    listOf("INCLUDE_ANY", "DESCRIPTION", "CONTAINS", "TAPPAY"),
+                    listOf("EXCLUDE_ANY", "SEARCHABLE_TEXT", "CONTAINS", "便利商店"),
+                    listOf("EXCLUDE_ANY", "SEARCHABLE_TEXT", "CONTAINS", "停車大聲公"),
+                    listOf("EXCLUDE_ANY", "SEARCHABLE_TEXT", "CONTAINS", "茶之魔手"),
+                ),
+            )
+        ) return
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO `auto_category_rule_conditions`
+                (`ruleId`, `position`, `conditionGroup`, `field`, `matchMode`, `pattern`)
+            VALUES (?, 8, 'EXCLUDE_ANY', 'SEARCHABLE_TEXT', 'CONTAINS', '連加*HOHO')
+            """.trimIndent(),
+            arrayOf(id),
+        )
+    }
+
+    /** Adds the waiver exclusion only while the legacy annual-fee rule is still unmodified. */
+    private fun upgradePristineAnnualFeeRule(db: SupportSQLiteDatabase) {
+        val id = "public-structural-auto-credit-card-annual-fee-v2"
+        val rowMatches = db.query(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM `auto_category_rules`
+                WHERE `id` = ? AND `name` = '結構化｜expense-fees'
+                  AND `descriptionContains` IS NULL AND `direction` = 'NEGATIVE'
+                  AND `minAbsoluteAmount` IS NULL AND `maxAbsoluteAmount` IS NULL
+                  AND `accountId` IS NULL AND `categoryId` = 'expense-fees'
+                  AND `enabled` = 1 AND `priority` = 100
+                  AND `descriptionMatchMode` = 'CONTAINS' AND `isDefault` = 1
+                  AND `ruleSetId` = ? AND `extensionId` IS NULL AND `accountKind` = 'CREDIT_CARD'
+                  AND `origin` = 'PUBLIC_DEFAULT' AND `action` = 'AUTO_APPLY'
+            )
+            """.trimIndent(),
+            arrayOf(id, DefaultClassificationCatalog.publicStructuralRuleSet.id),
+        ).use { it.moveToFirst() && it.getInt(0) == 1 }
+        if (!rowMatches || !hasExactlyConditions(
+                db,
+                id,
+                listOf("信用卡年費", "年費", "annual fee"),
+            )
+        ) return
+
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO `auto_category_rule_conditions`
+                (`ruleId`, `position`, `conditionGroup`, `field`, `matchMode`, `pattern`)
+            VALUES (?, 9, 'EXCLUDE_ANY', 'SEARCHABLE_TEXT', 'CONTAINS', '減免年費')
+            """.trimIndent(),
+            arrayOf(id),
+        )
+        updatePublicRuleSetMetadata(db, DefaultClassificationCatalog.publicStructuralRuleSet)
+    }
+
     private data class LegacyPublicRule(
         val id: String,
         val name: String,
@@ -336,6 +447,25 @@ object DefaultClassificationSeeder {
         val actual = buildList {
             while (cursor.moveToNext()) {
                 add(listOf(cursor.getString(1), cursor.getString(2), cursor.getString(3), cursor.getString(4)))
+            }
+        }
+        actual == expected
+    }
+
+    private fun hasExactConditionRows(
+        db: SupportSQLiteDatabase,
+        ruleId: String,
+        expected: List<List<String>>,
+    ): Boolean = db.query(
+        """
+        SELECT `conditionGroup`, `field`, `matchMode`, `pattern`
+        FROM `auto_category_rule_conditions` WHERE `ruleId` = ? ORDER BY `position`
+        """.trimIndent(),
+        arrayOf(ruleId),
+    ).use { cursor ->
+        val actual = buildList {
+            while (cursor.moveToNext()) {
+                add(listOf(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3)))
             }
         }
         actual == expected

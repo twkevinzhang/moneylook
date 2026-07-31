@@ -863,3 +863,10 @@ val MIGRATION_25_26 = object : Migration(25, 26) {
         )
     }
 }
+
+/** Adds the reviewed v5 merchant-name catalog without restoring a removed public collection. */
+val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        DefaultClassificationSeeder.upgradePublicCatalogToV7(db)
+    }
+}
