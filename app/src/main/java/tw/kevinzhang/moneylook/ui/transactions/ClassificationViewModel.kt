@@ -331,6 +331,23 @@ class ClassificationViewModel @Inject constructor(
         )
     }
 
+    fun createCategory(
+        name: String,
+        color: Long,
+        reportingGroup: CategoryReportingGroup,
+        onResult: (CategoryCreationResult) -> Unit,
+    ) {
+        viewModelScope.launch {
+            try {
+                onResult(persistNewCategory(categoryDao, name, color, reportingGroup))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onResult(CategoryCreationResult.Failed)
+            }
+        }
+    }
+
     fun deleteCategory(id: String) = viewModelScope.launch { categoryDao.deleteById(id) }
 
     fun saveTag(id: String?, name: String, color: Long) = saveNamedItem(
@@ -580,7 +597,33 @@ private fun TransferDetail.toDetailUi(
 }
 
 private fun asCategoryOptions(items: List<Category>) = items.map {
-    CategoryOption(it.id, it.name, it.color.parseColor(), it.emoji, it.reportingGroup)
+    it.toCategoryOption()
+}
+
+private fun Category.toCategoryOption() =
+    CategoryOption(id, name, color.parseColor(), emoji, reportingGroup)
+
+internal suspend fun persistNewCategory(
+    categoryDao: CategoryDao,
+    name: String,
+    color: Long,
+    reportingGroup: CategoryReportingGroup,
+    idFactory: () -> String = { UUID.randomUUID().toString() },
+): CategoryCreationResult {
+    val trimmed = name.trim()
+    if (trimmed.isBlank()) return CategoryCreationResult.Failed
+    if (categoryDao.observeAll().first().any { it.name.equals(trimmed, ignoreCase = true) }) {
+        return CategoryCreationResult.DuplicateName
+    }
+    val category = Category(
+        id = idFactory(),
+        name = trimmed,
+        color = colorString(color),
+        emoji = Category.DEFAULT_EMOJI,
+        reportingGroup = reportingGroup,
+    )
+    categoryDao.upsert(category)
+    return CategoryCreationResult.Created(category.toCategoryOption())
 }
 
 private data class TransactionAuditUi(
