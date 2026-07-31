@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -44,6 +45,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -118,6 +122,12 @@ fun TransactionDetailContent(
     state: TransactionDetailUiState,
     onNavigateUp: () -> Unit,
     onSave: (TransactionDetailDraft) -> Unit,
+    onCreateCategory: (
+        name: String,
+        color: Long,
+        reportingGroup: CategoryReportingGroup,
+        onResult: (CategoryCreationResult) -> Unit,
+    ) -> Unit = { _, _, _, onResult -> onResult(CategoryCreationResult.Failed) },
     onLoadSourceBody: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -185,6 +195,7 @@ fun TransactionDetailContent(
                     extensionId = state.extensionId,
                 )
             },
+            onCreateCategory = onCreateCategory,
         )
     }
     editingRule?.let { rule ->
@@ -428,11 +439,56 @@ private fun CategoryPickerSheet(
     onSelectCategory: (String?) -> Unit,
     onRuleChange: (AutoRuleDraft?) -> Unit,
     onEditRule: () -> Unit,
+    onCreateCategory: (
+        name: String,
+        color: Long,
+        reportingGroup: CategoryReportingGroup,
+        onResult: (CategoryCreationResult) -> Unit,
+    ) -> Unit,
 ) {
-    var kind by remember(selectedCategoryId) {
+    var kind by remember {
         mutableStateOf(categories.firstOrNull { it.id == selectedCategoryId }?.reportingGroup ?: allowedKinds(amount).first())
     }
     val appliesToMatches = currentRule != null
+    var showCategoryCreator by remember { mutableStateOf(false) }
+    var categoryCreationError by remember { mutableStateOf<String?>(null) }
+    var isCreatingCategory by remember { mutableStateOf(false) }
+    if (showCategoryCreator) {
+        CategoryEditorDialog(
+            initial = null,
+            initialGroup = kind,
+            allowedGroups = allowedKinds(amount),
+            errorMessage = categoryCreationError,
+            isSaving = isCreatingCategory,
+            onNameChange = { categoryCreationError = null },
+            onDismiss = {
+                if (!isCreatingCategory) {
+                    showCategoryCreator = false
+                    categoryCreationError = null
+                }
+            },
+            onSave = { name, color, group ->
+                isCreatingCategory = true
+                categoryCreationError = null
+                onCreateCategory(name, color, group) { result ->
+                    isCreatingCategory = false
+                    when (result) {
+                        is CategoryCreationResult.Created -> {
+                            showCategoryCreator = false
+                            kind = result.category.reportingGroup
+                            onSelectCategory(result.category.id)
+                        }
+                        CategoryCreationResult.DuplicateName -> {
+                            categoryCreationError = "分類名稱已存在，請使用其他名稱。"
+                        }
+                        CategoryCreationResult.Failed -> {
+                            categoryCreationError = "建立分類失敗，請稍後再試。"
+                        }
+                    }
+                }
+            },
+        )
+    }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 28.dp),
@@ -466,6 +522,16 @@ private fun CategoryPickerSheet(
                         label = { Text(item.toDisplayName()) },
                     )
                 }
+            }
+            OutlinedButton(
+                onClick = {
+                    categoryCreationError = null
+                    showCategoryCreator = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Text("新增分類", modifier = Modifier.padding(start = 8.dp))
             }
             if (kind in allowedKinds(amount)) {
                 CategoryGrid(
@@ -521,6 +587,7 @@ private fun CategoryGrid(categories: List<CategoryOption>, selectedCategoryId: S
             name = "尚未分類",
             color = UNCATEGORIZED_COLOR,
             selected = selectedCategoryId == null,
+            testTag = "category-tile-uncategorized",
             onClick = { onSelect(null) },
         )
         categories.forEach { category ->
@@ -529,12 +596,13 @@ private fun CategoryGrid(categories: List<CategoryOption>, selectedCategoryId: S
                 name = category.name,
                 color = category.color,
                 selected = category.id == selectedCategoryId,
+                testTag = "category-tile-${category.id}",
                 onClick = { onSelect(category.id) },
             )
         }
     }
     if (categories.isEmpty()) {
-        Text("尚無此類別，請先到設定新增。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("尚無此類別，可直接新增分類。", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -544,10 +612,15 @@ private fun CategoryTile(
     name: String,
     color: Long,
     selected: Boolean,
+    testTag: String,
     onClick: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.size(width = 78.dp, height = 98.dp).clickable(onClick = onClick),
+        modifier = Modifier
+            .size(width = 78.dp, height = 98.dp)
+            .testTag(testTag)
+            .semantics { this.selected = selected }
+            .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {

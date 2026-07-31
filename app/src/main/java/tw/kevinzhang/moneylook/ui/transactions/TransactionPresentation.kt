@@ -20,6 +20,12 @@ data class CategoryOption(
     val reportingGroup: CategoryReportingGroup = CategoryReportingGroup.EXPENSE,
 )
 
+sealed interface CategoryCreationResult {
+    data class Created(val category: CategoryOption) : CategoryCreationResult
+    data object DuplicateName : CategoryCreationResult
+    data object Failed : CategoryCreationResult
+}
+
 data class TagOption(
     val id: String,
     val name: String,

@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -268,9 +269,13 @@ private fun ManagedItemDialog(
 }
 
 @Composable
-private fun CategoryEditorDialog(
+internal fun CategoryEditorDialog(
     initial: CategoryOption?,
     initialGroup: CategoryReportingGroup,
+    allowedGroups: Set<CategoryReportingGroup> = CategoryReportingGroup.entries.toSet(),
+    errorMessage: String? = null,
+    isSaving: Boolean = false,
+    onNameChange: () -> Unit = {},
     onDismiss: () -> Unit,
     onSave: (name: String, color: Long, group: CategoryReportingGroup) -> Unit,
 ) {
@@ -283,14 +288,29 @@ private fun CategoryEditorDialog(
         title = { Text(if (initial == null) "新增分類" else "編輯分類") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("名稱") }, singleLine = true)
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        onNameChange()
+                    },
+                    label = { Text("名稱") },
+                    singleLine = true,
+                    isError = errorMessage != null,
+                    supportingText = if (errorMessage == null) {
+                        null
+                    } else {
+                        { Text(errorMessage) }
+                    },
+                )
                 Text("歸屬", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CategoryReportingGroup.entries.forEach { option ->
+                    CategoryReportingGroup.entries.filter { it in allowedGroups }.forEach { option ->
                         androidx.compose.material3.FilterChip(
                             selected = group == option,
                             onClick = { group = option },
                             label = { Text(option.toDisplayName()) },
+                            modifier = Modifier.testTag("category-editor-group-${option.name}"),
                         )
                     }
                 }
@@ -307,9 +327,13 @@ private fun CategoryEditorDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(name.trim(), color, group) }, enabled = name.isNotBlank()) { Text("儲存") }
+            TextButton(
+                onClick = { onSave(name.trim(), color, group) },
+                enabled = name.isNotBlank() && !isSaving,
+                modifier = Modifier.testTag("category-editor-save"),
+            ) { Text(if (isSaving) "建立中…" else "儲存") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !isSaving) { Text("取消") } },
     )
 }
 
