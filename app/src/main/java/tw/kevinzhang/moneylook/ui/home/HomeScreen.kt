@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -70,6 +71,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -88,6 +91,7 @@ import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.AssetKind
 import tw.kevinzhang.core.data.model.InstalledExtension
 import tw.kevinzhang.moneylook.schedule.ScheduleStatus
+import tw.kevinzhang.moneylook.ui.components.fabAwareListContentPadding
 import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -240,6 +244,57 @@ fun HomeScreen(
         )
     }
 
+    HomeScaffoldLayout(
+        bottomBar = bottomBar,
+        onNavigateToMarketplace = onNavigateToMarketplace,
+        onShowSyncDialog = { showSyncDialog = true },
+    ) {
+        item(key = "home-overview") {
+            HomeOverviewCard(
+                overview = overview,
+            )
+        }
+        if (extensions.isEmpty()) {
+            item(key = "no-extensions") {
+                EmptyState(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 40.dp),
+                    onAddExtension = onNavigateToMarketplace,
+                )
+            }
+        } else {
+            items(extensions, key = { it.id }) { ext ->
+                val status = syncStatuses[ext.id]
+                val extAccounts = accounts.filter { it.extensionId == ext.id }
+                ExtensionCard(
+                    extension = ext,
+                    accounts = extAccounts,
+                    creditCardCounts = creditCardCounts,
+                    syncState = status?.syncState ?: SyncState.IDLE,
+                    hasCredentials = status?.hasCredentials ?: false,
+                    credentialSummary = credentialSummaries[ext.id],
+                    errorMessage = status?.errorMessage,
+                    scheduleStatus = scheduleStatuses[ext.id] ?: ScheduleStatus.None,
+                    scheduleRemainingMs = countdownMs[ext.id] ?: 0L,
+                    onSync = { requestBackgroundSync(PendingSyncAction.Single(ext)) },
+                    onEditCredentials = { editingExtension = ext },
+                    onViewLedger = onNavigateToLedger,
+                    onViewSyncLog = { onNavigateToSyncLog(ext.id) },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun HomeScaffoldLayout(
+    bottomBar: @Composable () -> Unit = {},
+    onNavigateToMarketplace: () -> Unit,
+    onShowSyncDialog: () -> Unit,
+    content: LazyListScope.() -> Unit,
+) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -253,52 +308,25 @@ fun HomeScreen(
         },
         bottomBar = bottomBar,
         floatingActionButton = {
-            FloatingActionButton(onClick = { showSyncDialog = true }) {
-                Icon(Icons.Default.Sync, contentDescription = "全部同步")
+            FloatingActionButton(
+                onClick = onShowSyncDialog,
+                modifier = Modifier
+                    .testTag("home-sync-fab")
+                    .semantics { contentDescription = "全部同步" },
+            ) {
+                Icon(Icons.Default.Sync, contentDescription = null)
             }
         },
     ) { innerPadding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(innerPadding),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .testTag("home-content-list"),
+            contentPadding = fabAwareListContentPadding(horizontal = 16.dp, top = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item(key = "home-overview") {
-                HomeOverviewCard(
-                    overview = overview,
-                )
-            }
-            if (extensions.isEmpty()) {
-                item(key = "no-extensions") {
-                    EmptyState(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 40.dp),
-                        onAddExtension = onNavigateToMarketplace,
-                    )
-                }
-            } else {
-                items(extensions, key = { it.id }) { ext ->
-                    val status = syncStatuses[ext.id]
-                    val extAccounts = accounts.filter { it.extensionId == ext.id }
-                    ExtensionCard(
-                        extension = ext,
-                        accounts = extAccounts,
-                        creditCardCounts = creditCardCounts,
-                        syncState = status?.syncState ?: SyncState.IDLE,
-                        hasCredentials = status?.hasCredentials ?: false,
-                        credentialSummary = credentialSummaries[ext.id],
-                        errorMessage = status?.errorMessage,
-                        scheduleStatus = scheduleStatuses[ext.id] ?: ScheduleStatus.None,
-                        scheduleRemainingMs = countdownMs[ext.id] ?: 0L,
-                        onSync = { requestBackgroundSync(PendingSyncAction.Single(ext)) },
-                        onEditCredentials = { editingExtension = ext },
-                        onViewLedger = onNavigateToLedger,
-                        onViewSyncLog = { onNavigateToSyncLog(ext.id) },
-                    )
-                }
-            }
-        }
+            content = content,
+        )
     }
 }
 

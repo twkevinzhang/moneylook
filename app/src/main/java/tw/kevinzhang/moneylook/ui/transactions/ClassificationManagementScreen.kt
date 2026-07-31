@@ -35,10 +35,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import tw.kevinzhang.core.data.model.CategoryReportingGroup
+import tw.kevinzhang.moneylook.ui.components.fabAwareListContentPadding
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -104,7 +107,14 @@ fun CategoryManagementContent(
     }
     Scaffold(
         topBar = { TopAppBar(title = { Text("分類管理") }, navigationIcon = { BackButton(onNavigateUp) }) },
-        floatingActionButton = { FloatingActionButton(onClick = { isAdding = true }) { Icon(Icons.Default.Add, "新增分類") } },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { isAdding = true },
+                modifier = Modifier
+                    .testTag("category-management-fab")
+                    .semantics { contentDescription = "新增分類" },
+            ) { Icon(Icons.Default.Add, null) }
+        },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             TabRow(selectedTabIndex = CategoryReportingGroup.entries.indexOf(activeGroup)) {
@@ -123,10 +133,16 @@ fun CategoryManagementContent(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) { Text("尚未建立${activeGroup.toDisplayName()}分類", style = MaterialTheme.typography.bodyLarge) }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().testTag("category-management-list"),
+                    contentPadding = fabAwareListContentPadding(),
+                ) {
                     items(visibleCategories, key = CategoryOption::id) { item ->
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("category-management-item-${item.id}")
+                                .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(item.emoji, style = MaterialTheme.typography.titleLarge)
@@ -203,7 +219,14 @@ private fun ClassificationManagementScaffold(
     }
     Scaffold(
         topBar = { TopAppBar(title = { Text(title) }, navigationIcon = { BackButton(onNavigateUp) }) },
-        floatingActionButton = { FloatingActionButton(onClick = { isAdding = true }) { Icon(Icons.Default.Add, "新增") } },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { isAdding = true },
+                modifier = Modifier
+                    .testTag("classification-management-fab")
+                    .semantics { contentDescription = "新增$itemLabel" },
+            ) { Icon(Icons.Default.Add, null) }
+        },
     ) { padding ->
         if (items.isEmpty()) {
             Column(
@@ -212,10 +235,19 @@ private fun ClassificationManagementScaffold(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) { Text("尚未建立$title", style = MaterialTheme.typography.bodyLarge) }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .testTag("classification-management-list"),
+                contentPadding = fabAwareListContentPadding(),
+            ) {
                 items(items, key = ManagedItem::id) { item ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("classification-management-item-${item.id}")
+                            .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         item.emoji?.let { Text(it, style = MaterialTheme.typography.titleLarge) } ?: ColorDot(item.color)
