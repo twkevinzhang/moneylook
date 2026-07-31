@@ -155,6 +155,29 @@ data class GlobalDateRangePager(
         }
     }
 
+    /**
+     * Returns the page that exactly represents [range], or null when the
+     * range cannot belong to this pager. This is intentionally non-throwing:
+     * callers can retain a safe fallback while state is being restored.
+     */
+    fun activePageFor(range: GlobalDateRange): Int? {
+        // The outer custom pages may be shortened at the 1970/today bounds,
+        // so their starts are not necessarily aligned with the anchor period.
+        if (range == rangeAt(0)) return 0
+        if (range == rangeAt(pageCount - 1)) return pageCount - 1
+        val candidate = if (selectedRange.isCustom) {
+            if (!range.isCustom) return null
+            val daysFromAnchor = ChronoUnit.DAYS.between(selectedRange.startInclusive, range.startInclusive)
+            if (daysFromAnchor % customPeriodDays != 0L) return null
+            daysFromAnchor / customPeriodDays - firstCustomOffset
+        } else {
+            if (range.isCustom || range != GlobalDateRange.month(YearMonth.from(range.startInclusive))) return null
+            ChronoUnit.MONTHS.between(YearMonth.from(GLOBAL_DATE_PAGER_START), YearMonth.from(range.startInclusive))
+        }
+        if (candidate !in 0 until pageCount.toLong()) return null
+        return candidate.toInt().takeIf { rangeAt(it) == range }
+    }
+
     private fun customRangeAt(offset: Long): GlobalDateRange {
         val start = selectedRange.startInclusive.plusDays(Math.multiplyExact(offset, customPeriodDays))
         val end = start.plusDays(customPeriodDays - 1)
