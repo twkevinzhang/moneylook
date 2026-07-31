@@ -67,6 +67,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
@@ -210,6 +212,9 @@ fun AutoRuleListContent(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
+                modifier = Modifier
+                    .testTag("add-auto-rule-fab")
+                    .semantics { contentDescription = "新增規則" },
                 onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) },
                 icon = { Icon(Icons.Default.Add, null) },
                 text = { Text("新增規則") },
@@ -508,8 +513,13 @@ private fun RuleGroupsContent(
     onDelete: (AutoRuleDraft) -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        modifier = Modifier.fillMaxSize().testTag("auto-rule-groups-list"),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = 16.dp,
+            top = 16.dp,
+            end = 16.dp,
+            bottom = 96.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
@@ -610,10 +620,14 @@ private fun RuleGroupCard(
     ) {
         Column {
             Row(
-                modifier = Modifier.fillMaxWidth().semantics {
-                    contentDescription = "${group.label} 分組"
-                    stateDescription = if (expanded) "已展開" else "已收合"
-                }.padding(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button, onClick = onToggleGroup)
+                    .semantics {
+                        contentDescription = "${group.label} ${if (expanded) "收合" else "展開"}"
+                        stateDescription = if (expanded) "已展開" else "已收合"
+                    }
+                    .padding(start = 16.dp, top = 12.dp, end = 8.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -632,7 +646,7 @@ private fun RuleGroupCard(
                 Text(group.label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Text(" ${group.rules.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.weight(1f))
-                IconButton(onClick = onToggleGroup, modifier = Modifier.semantics { contentDescription = "${group.label} ${if (expanded) "收合" else "展開"}" }) {
+                Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
                 }
             }
