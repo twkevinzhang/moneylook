@@ -83,6 +83,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.moneylook.sync.ClassificationResetStage
+import tw.kevinzhang.moneylook.ui.components.fabAwareListContentPadding
 
 data class AccountOption(val id: String, val name: String)
 
@@ -514,12 +515,7 @@ private fun RuleGroupsContent(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("auto-rule-groups-list"),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 16.dp,
-            top = 16.dp,
-            end = 16.dp,
-            bottom = 96.dp,
-        ),
+        contentPadding = fabAwareListContentPadding(horizontal = 16.dp, top = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
