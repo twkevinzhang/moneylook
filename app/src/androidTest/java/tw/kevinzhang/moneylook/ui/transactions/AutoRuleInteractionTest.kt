@@ -7,11 +7,14 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -258,7 +261,7 @@ class AutoRuleInteractionTest {
     }
 
     @Test
-    fun categoryViewInitiallyExpandsOnlyFirstGroupAndCanExpandAnother() {
+    fun categoryViewInitiallyExpandsOnlyFirstGroupAndCanToggleAnotherFromItsTitleBar() {
         setAutoRuleContent(
             rules = listOf(rule("food-rule", "午餐", "food"), rule("transfer-rule", "帳戶移轉", "transfer")),
             categories = testCategories(),
@@ -266,13 +269,39 @@ class AutoRuleInteractionTest {
 
         composeRule.onNodeWithText("午餐").assertExists()
         composeRule.onNodeWithText("帳戶移轉").assertDoesNotExist()
-        composeRule.onNodeWithContentDescription("轉帳 展開").performClick()
+        composeRule.onNodeWithText("轉帳").performClick()
         composeRule.onNodeWithText("午餐").assertExists()
         composeRule.onNodeWithText("帳戶移轉").assertExists()
+        composeRule.onNodeWithText("轉帳").performClick()
+        composeRule.onNodeWithText("帳戶移轉").assertDoesNotExist()
 
         composeRule.onNodeWithText("依來源").performClick()
         composeRule.onNodeWithText("我建立的").assertExists()
         composeRule.onNodeWithText("午餐").assertExists()
+    }
+
+    @Test
+    fun lastCategoryCanScrollAboveFabAndExpandFromItsTitleBar() {
+        val categories = (1..9).map { index ->
+            CategoryOption(id = "category-$index", name = "分類 $index", color = 0xFF607D8B)
+        } + CategoryOption(id = "food", name = "餐飲", color = 0xFFF57C00)
+        val rules = categories.map { category ->
+            rule("rule-${category.id}", "${category.name} 規則", category.id)
+        }
+        setAutoRuleContent(rules = rules, categories = categories)
+
+        composeRule.onNodeWithTag("auto-rule-groups-list").performScrollToIndex(categories.size)
+        val restaurantGroup = composeRule.onNodeWithContentDescription("餐飲 展開")
+        val fab = composeRule.onNodeWithTag("add-auto-rule-fab")
+        val restaurantBottom = restaurantGroup.fetchSemanticsNode().boundsInRoot.bottom
+        val fabTop = fab.fetchSemanticsNode().boundsInRoot.top
+
+        assertTrue(
+            "最後一個分類標題列應可捲動到 FAB 上方",
+            restaurantBottom <= fabTop,
+        )
+        composeRule.onNodeWithText("餐飲").performClick()
+        composeRule.onNodeWithText("餐飲 規則").assertExists()
     }
 
     @Test
