@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import kotlinx.coroutines.runBlocking
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.SyncRequestStatus
 import tw.kevinzhang.extension_runtime.data.AccountData
 import tw.kevinzhang.extension_runtime.data.KindSyncResult
 import tw.kevinzhang.extension_runtime.data.KindSyncStatus
@@ -87,6 +88,14 @@ class HomeSyncStateTest {
             activeWorkSyncState(listOf(WorkInfo.State.BLOCKED, WorkInfo.State.SUCCEEDED)),
         )
         assertNull(activeWorkSyncState(listOf(WorkInfo.State.SUCCEEDED, WorkInfo.State.FAILED)))
+    }
+
+    @Test
+    fun `durable pending requests keep Home sync state across WorkManager process recreation`() {
+        assertEquals(SyncState.QUEUED, pendingSyncState(SyncRequestStatus.QUEUED))
+        assertEquals(SyncState.SYNCING, pendingSyncState(SyncRequestStatus.RUNNING))
+        assertNull(pendingSyncState(SyncRequestStatus.SUCCESS))
+        assertNull(pendingSyncState(SyncRequestStatus.ERROR))
     }
 
     @Test

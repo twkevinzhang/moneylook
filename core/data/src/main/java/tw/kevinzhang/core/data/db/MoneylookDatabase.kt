@@ -12,6 +12,7 @@ import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.CreditCardInstrument
 import tw.kevinzhang.core.data.model.InstalledExtension
+import tw.kevinzhang.core.data.model.PendingSyncRequest
 import tw.kevinzhang.core.data.model.IngestionRun
 import tw.kevinzhang.core.data.model.AutoCategoryRuleSet
 import tw.kevinzhang.core.data.model.Tag
@@ -36,6 +37,7 @@ import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
         CredentialProfile::class,
         CreditCardInstrument::class,
         InstalledExtension::class,
+        PendingSyncRequest::class,
         IngestionRun::class,
         AutoCategoryRuleSet::class,
         Tag::class,
@@ -50,7 +52,7 @@ import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
         ClassificationRuleEvaluation::class,
         ClassificationConditionEvaluation::class,
     ],
-    version = 25,
+    version = 26,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
@@ -62,6 +64,7 @@ abstract class MoneylookDatabase : RoomDatabase() {
     abstract fun credentialProfileDao(): CredentialProfileDao
     abstract fun creditCardInstrumentDao(): CreditCardInstrumentDao
     abstract fun installedExtensionDao(): InstalledExtensionDao
+    abstract fun pendingSyncRequestDao(): PendingSyncRequestDao
     abstract fun ingestionProvenanceDao(): IngestionProvenanceDao
     abstract fun transferDao(): TransferDao
     abstract fun transferAnnotationDao(): TransferAnnotationDao

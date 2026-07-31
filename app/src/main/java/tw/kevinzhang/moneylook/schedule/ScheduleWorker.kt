@@ -30,6 +30,7 @@ class ScheduleWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val credentialProfileDao: CredentialProfileDao,
+    private val schedulerManager: SchedulerManager,
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -42,10 +43,9 @@ class ScheduleWorker @AssistedInject constructor(
         // Re-arm before appending the actual sync. A bank failure/retry must never erase the
         // next cron occurrence, and the schedule queue is intentionally distinct from sync work.
         enqueueNext(applicationContext, profile)
-        BankSyncWorker.enqueue(
-            applicationContext,
-            listOf(BankSyncWorker.request(extensionId, BankSyncWorker.SyncTrigger.SCHEDULED_SYNC)),
-        )
+        // A denied or globally-disabled notification skips this occurrence. The timer above has
+        // already re-armed the next cron occurrence, so permission recovery needs no migration.
+        schedulerManager.enqueueScheduledSync(extensionId)
         return Result.success()
     }
 

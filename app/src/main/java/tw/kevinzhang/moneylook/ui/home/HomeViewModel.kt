@@ -32,13 +32,14 @@ import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.CreditCardInstrumentDao
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
+import tw.kevinzhang.core.data.db.PendingSyncRequestDao
 import tw.kevinzhang.core.data.db.TransferDao
 import tw.kevinzhang.core.data.db.IngestionProvenanceDao
 import tw.kevinzhang.core.data.db.SourceDocumentSummary
 import tw.kevinzhang.core.data.model.CredentialProfile
 import tw.kevinzhang.core.data.model.InstalledExtension
+import tw.kevinzhang.core.data.model.SyncRequestStatus
 import tw.kevinzhang.extension_runtime.data.SyncResult
-import tw.kevinzhang.moneylook.schedule.BankSyncWorker
 import tw.kevinzhang.moneylook.schedule.ScheduleStatus
 import tw.kevinzhang.moneylook.schedule.ScheduleWorker
 import tw.kevinzhang.moneylook.schedule.SchedulerManager
@@ -82,6 +83,16 @@ internal fun activeWorkSyncState(states: Iterable<WorkInfo.State>): SyncState? =
     states.any { it == WorkInfo.State.RUNNING } -> SyncState.SYNCING
     states.any { it == WorkInfo.State.ENQUEUED || it == WorkInfo.State.BLOCKED } -> SyncState.QUEUED
     else -> null
+}
+
+internal fun pendingSyncState(status: SyncRequestStatus): SyncState? = when (status) {
+    SyncRequestStatus.QUEUED -> SyncState.QUEUED
+    SyncRequestStatus.RUNNING -> SyncState.SYNCING
+    SyncRequestStatus.SUCCESS,
+    SyncRequestStatus.PARTIAL,
+    SyncRequestStatus.ERROR,
+    SyncRequestStatus.SKIPPED,
+    -> null
 }
 
 internal suspend fun handleSuccessfulSyncPersistence(
@@ -132,6 +143,7 @@ class HomeViewModel @Inject constructor(
     private val transferDao: TransferDao,
     private val ingestionProvenanceDao: IngestionProvenanceDao,
     private val credentialProfileDao: CredentialProfileDao,
+    private val pendingSyncRequestDao: PendingSyncRequestDao,
     private val schedulerManager: SchedulerManager,
     gson: Gson,
 ) : ViewModel() {
@@ -223,21 +235,11 @@ class HomeViewModel @Inject constructor(
 
     private val _syncStatuses = MutableStateFlow<Map<String, ExtensionSyncStatus>>(emptyMap())
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val activeSyncStates: StateFlow<Map<String, SyncState>> = installedExtensionDao.observeAll()
-        .flatMapLatest { exts ->
-            if (exts.isEmpty()) return@flatMapLatest flowOf(emptyMap())
-            combine(
-                exts.map { ext ->
-                    workManager.getWorkInfosByTagFlow(BankSyncWorker.tag(ext.id)).map { workInfos ->
-                        ext.id to activeWorkSyncState(workInfos.map { it.state })
-                    }
-                },
-            ) { pairs ->
-                pairs.mapNotNull { (extensionId, state) ->
-                    state?.let { extensionId to it }
-                }.toMap()
-            }
+    private val activeSyncStates: StateFlow<Map<String, SyncState>> = pendingSyncRequestDao.observeAll()
+        .map { requests ->
+            requests.mapNotNull { request ->
+                pendingSyncState(request.status)?.let { request.extensionId to it }
+            }.toMap()
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
@@ -340,7 +342,7 @@ class HomeViewModel @Inject constructor(
                     }
                 }
             }
-            schedulerManager.enqueueUserSyncsSequentially(runnable.map { (ext, _) -> ext.id })
+            schedulerManager.enqueueUserSyncs(runnable.map { (ext, _) -> ext.id })
         }
     }
 

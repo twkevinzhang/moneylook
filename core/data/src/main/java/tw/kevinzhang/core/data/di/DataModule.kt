@@ -39,6 +39,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_21_22
 import tw.kevinzhang.core.data.db.MIGRATION_22_23
 import tw.kevinzhang.core.data.db.MIGRATION_23_24
 import tw.kevinzhang.core.data.db.MIGRATION_24_25
+import tw.kevinzhang.core.data.db.MIGRATION_25_26
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -76,6 +77,7 @@ object DataModule {
                 MIGRATION_22_23,
                 MIGRATION_23_24,
                 MIGRATION_24_25,
+                MIGRATION_25_26,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .build()
@@ -107,6 +109,10 @@ object DataModule {
     @Provides
     fun provideInstalledExtensionDao(db: MoneylookDatabase): InstalledExtensionDao =
         db.installedExtensionDao()
+
+    @Provides
+    fun providePendingSyncRequestDao(db: MoneylookDatabase): tw.kevinzhang.core.data.db.PendingSyncRequestDao =
+        db.pendingSyncRequestDao()
 
     @Provides
     fun provideIngestionProvenanceDao(db: MoneylookDatabase): IngestionProvenanceDao =
