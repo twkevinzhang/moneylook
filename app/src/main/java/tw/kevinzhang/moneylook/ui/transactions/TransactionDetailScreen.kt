@@ -142,6 +142,7 @@ fun TransactionDetailContent(
     }
     var newTagName by remember { mutableStateOf("") }
     var showDiscardDialog by remember { mutableStateOf(false) }
+    var showRuleSaveConfirmation by remember { mutableStateOf(false) }
     var showCategoryPicker by remember { mutableStateOf(false) }
     var editingRule by remember { mutableStateOf<AutoRuleDraft?>(null) }
 
@@ -169,6 +170,26 @@ fun TransactionDetailContent(
             },
         )
     }
+    if (showRuleSaveConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showRuleSaveConfirmation = false },
+            title = { Text("套用到過去及未來的交易？") },
+            text = {
+                Text("儲存後，符合這項規則的過去交易將重新分類，未來符合的交易也會自動套用。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRuleSaveConfirmation = false
+                        onSave(draft.copy(note = draft.note.trim()))
+                    },
+                ) { Text("確認儲存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRuleSaveConfirmation = false }) { Text("返回編輯") }
+            },
+        )
+    }
     if (showCategoryPicker) {
         CategoryPickerSheet(
             categories = state.categories,
@@ -184,6 +205,7 @@ fun TransactionDetailContent(
                     categoryId = categoryId,
                     matchingRule = draft.matchingRule?.copy(categoryId = categoryId),
                 )
+                showCategoryPicker = false
             },
             onRuleChange = { rule -> draft = draft.copy(matchingRule = rule?.copy(categoryId = draft.categoryId)) },
             onEditRule = {
@@ -228,7 +250,13 @@ fun TransactionDetailContent(
             DetailSaveBar(
                 enabled = !state.isSaving,
                 onCancel = requestExit,
-                onSave = { onSave(draft.copy(note = draft.note.trim())) },
+                onSave = {
+                    if (draft.matchingRule == null) {
+                        onSave(draft.copy(note = draft.note.trim()))
+                    } else {
+                        showRuleSaveConfirmation = true
+                    }
+                },
             )
         },
     ) { padding ->
@@ -453,6 +481,7 @@ private fun CategoryPickerSheet(
     var showCategoryCreator by remember { mutableStateOf(false) }
     var categoryCreationError by remember { mutableStateOf<String?>(null) }
     var isCreatingCategory by remember { mutableStateOf(false) }
+    var pendingCategoryCreation by remember { mutableStateOf<PendingCategoryCreation?>(null) }
     if (showCategoryCreator) {
         CategoryEditorDialog(
             initial = null,
@@ -465,27 +494,49 @@ private fun CategoryPickerSheet(
                 if (!isCreatingCategory) {
                     showCategoryCreator = false
                     categoryCreationError = null
+                    pendingCategoryCreation = null
                 }
             },
             onSave = { name, color, group ->
-                isCreatingCategory = true
                 categoryCreationError = null
-                onCreateCategory(name, color, group) { result ->
-                    isCreatingCategory = false
-                    when (result) {
-                        is CategoryCreationResult.Created -> {
-                            showCategoryCreator = false
-                            kind = result.category.reportingGroup
-                            onSelectCategory(result.category.id)
+                pendingCategoryCreation = PendingCategoryCreation(name, color, group)
+            },
+        )
+    }
+    pendingCategoryCreation?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingCategoryCreation = null },
+            title = { Text("建立全域分類？") },
+            text = {
+                Text("這個分類建立後會顯示在所有交易中。即使取消目前交易的變更，分類仍會保留。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingCategoryCreation = null
+                        isCreatingCategory = true
+                        categoryCreationError = null
+                        onCreateCategory(pending.name, pending.color, pending.group) { result ->
+                            isCreatingCategory = false
+                            when (result) {
+                                is CategoryCreationResult.Created -> {
+                                    showCategoryCreator = false
+                                    kind = result.category.reportingGroup
+                                    onSelectCategory(result.category.id)
+                                }
+                                CategoryCreationResult.DuplicateName -> {
+                                    categoryCreationError = "分類名稱已存在，請使用其他名稱。"
+                                }
+                                CategoryCreationResult.Failed -> {
+                                    categoryCreationError = "建立分類失敗，請稍後再試。"
+                                }
+                            }
                         }
-                        CategoryCreationResult.DuplicateName -> {
-                            categoryCreationError = "分類名稱已存在，請使用其他名稱。"
-                        }
-                        CategoryCreationResult.Failed -> {
-                            categoryCreationError = "建立分類失敗，請稍後再試。"
-                        }
-                    }
-                }
+                    },
+                ) { Text("建立分類") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingCategoryCreation = null }) { Text("返回編輯") }
             },
         )
     }
@@ -543,6 +594,12 @@ private fun CategoryPickerSheet(
         }
     }
 }
+
+private data class PendingCategoryCreation(
+    val name: String,
+    val color: Long,
+    val group: CategoryReportingGroup,
+)
 
 @Composable
 private fun ApplyScopeRow(
