@@ -57,6 +57,21 @@ class AnalysisPresentationTest {
         assertNull(transaction("2026-07-01", 1.0, categoryReportingGroup = AnalysisReportingGroup.EXCLUDED).reportingDirection())
     }
 
+    @Test
+    fun directionHelpersSelectOnlyTheRequestedSummaryAndTrendValues() {
+        val summary = AnalysisSummary(income = 120.0, expense = 40.0)
+        val point = AnalysisTrendPoint(
+            month = AnalysisMonth(2026, 7),
+            income = 80.0,
+            expense = 25.0,
+        )
+
+        assertEquals(120.0, summary.amount(AnalysisDirection.INCOME), 0.0)
+        assertEquals(40.0, summary.amount(AnalysisDirection.EXPENSE), 0.0)
+        assertEquals(80.0, point.amount(AnalysisDirection.INCOME), 0.0)
+        assertEquals(25.0, point.amount(AnalysisDirection.EXPENSE), 0.0)
+    }
+
     private fun transaction(
         date: String,
         amount: Double,

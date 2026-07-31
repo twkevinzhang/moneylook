@@ -132,7 +132,7 @@ class GlobalLedgerPresentationTest {
     }
 
     @Test
-    fun `details default and search include every transaction direction across categories`() {
+    fun `shared filters remain direction-neutral before the report direction is applied`() {
         val items = listOf(
             item("expense", -120.0, description = "咖啡", categoryId = "food", categoryName = "餐飲"),
             item("income", 120.0, description = "咖啡退款", categoryId = "refund", categoryName = "退款", categoryReportingGroup = CategoryReportingGroup.INCOME),
@@ -154,7 +154,10 @@ class GlobalLedgerPresentationTest {
     fun `category details add the selected category while retaining explicit filters including uncategorized`() {
         val items = listOf(
             item("food-expense", -120.0, description = "咖啡", categoryId = "food", categoryName = "餐飲"),
+            item("food-pending-expense", -50.0, description = "咖啡待入帳", categoryId = "food", categoryName = "餐飲")
+                .copy(accountKind = AssetKind.CREDIT_CARD, status = "pending"),
             item("food-income", 120.0, description = "咖啡退款", categoryId = "food", categoryName = "餐飲", categoryReportingGroup = CategoryReportingGroup.INCOME),
+            item("food-excluded", -40.0, description = "咖啡轉帳", categoryId = "food", categoryName = "餐飲", categoryReportingGroup = CategoryReportingGroup.EXCLUDED),
             item("travel-expense", -80.0, description = "咖啡", categoryId = "travel", categoryName = "旅遊"),
             item("uncategorized", -60.0, description = "咖啡"),
         )
@@ -164,7 +167,7 @@ class GlobalLedgerPresentationTest {
         )
 
         assertEquals(
-            listOf("food-expense"),
+            listOf("food-expense", "food-pending-expense"),
             filterCategoryTransactions(items, explicitFilter, "food").map { it.transferId },
         )
         assertEquals(
@@ -324,21 +327,32 @@ class GlobalLedgerPresentationTest {
     }
 
     @Test
-    fun `pending credit card items remain in details but are excluded from every report source`() {
+    fun `posted and pending credit card items both contribute by consumption date`() {
         val posted = item("posted", -100.0, categoryId = "food", categoryName = "餐飲").copy(
+            transactionDateTime = "2026-07-03T10:00:00",
+            postingDateTime = "2026-07-05T00:00:00",
             accountKind = AssetKind.CREDIT_CARD,
             status = "posted",
         )
-        val pending = item("pending", -50.0, currency = "EUR", categoryId = "food", categoryName = "餐飲").copy(
+        val pending = item("pending", -50.0, categoryId = "food", categoryName = "餐飲").copy(
+            transactionDateTime = "2026-07-02T10:00:00",
             accountKind = AssetKind.CREDIT_CARD,
             status = "pending",
         )
+        val pendingWithoutRate = item(
+            "pending-without-rate",
+            -25.0,
+            currency = "EUR",
+            categoryId = "food",
+            categoryName = "餐飲",
+        ).copy(accountKind = AssetKind.CREDIT_CARD, status = "pending")
+        val items = listOf(posted, pending, pendingWithoutRate)
 
+        assertEquals(setOf("posted", "pending", "pending-without-rate"), globalReportableTransactions(items).map { it.transferId }.toSet())
+        assertEquals(GlobalLedgerSummary(expense = 150.0), globalLedgerSummary(items))
+        assertEquals(2, globalCategorySummaries(items, GlobalLedgerDirection.EXPENSE).single().transactionCount)
+        assertEquals(listOf("EUR"), missingExchangeCurrencies(items))
         assertEquals(listOf("posted", "pending"), filterGlobalLedger(listOf(posted, pending), GlobalLedgerFilter()).map { it.transferId })
-        assertEquals(listOf("posted"), globalReportableTransactions(listOf(posted, pending)).map { it.transferId })
-        assertEquals(GlobalLedgerSummary(expense = 100.0), globalLedgerSummary(listOf(posted, pending)))
-        assertEquals(1, globalCategorySummaries(listOf(posted, pending), GlobalLedgerDirection.EXPENSE).single().transactionCount)
-        assertTrue(missingExchangeCurrencies(listOf(posted, pending)).isEmpty())
     }
 
     @Test
@@ -357,7 +371,8 @@ class GlobalLedgerPresentationTest {
 
         val summary = globalLedgerSummary(listOf(excludedWithoutRate, pendingExcluded))
 
-        assertEquals(1, summary.excludedCount)
+        assertTrue(globalReportableTransactions(listOf(excludedWithoutRate, pendingExcluded)).isEmpty())
+        assertEquals(2, summary.excludedCount)
         assertEquals(0.0, summary.income, 0.0)
         assertEquals(0.0, summary.expense, 0.0)
     }
@@ -397,7 +412,7 @@ class GlobalLedgerPresentationTest {
     }
 
     @Test
-    fun `excluded details override only direction retain advanced filters and exclude pending`() {
+    fun `excluded details override only direction retain advanced filters and include pending`() {
         val matching = item(
             "matching",
             -120.0,
@@ -429,7 +444,7 @@ class GlobalLedgerPresentationTest {
         val excludedItems = excludedGlobalLedgerItems(items, filter)
         val sharedItems = filterGlobalLedger(items, filter.copy(direction = null))
 
-        assertEquals(listOf("matching"), excludedItems.map(GlobalLedgerItem::transferId))
+        assertEquals(listOf("matching", "pending"), excludedItems.map(GlobalLedgerItem::transferId))
         assertEquals(globalLedgerSummary(sharedItems).excludedCount, excludedItems.size)
     }
 

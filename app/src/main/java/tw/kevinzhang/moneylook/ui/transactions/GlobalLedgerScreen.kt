@@ -134,8 +134,12 @@ fun CategoryTransactionsScreen(
     viewModel: GlobalLedgerViewModel,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val categoryItems = remember(state.allItems, state.filter, categoryId) {
-        filterCategoryTransactions(state.allItems, state.filter, categoryId)
+    val categoryItems = remember(state.allItems, state.filter, state.categoryDirection, categoryId) {
+        filterCategoryTransactions(
+            state.allItems,
+            state.filter.copy(direction = state.categoryDirection),
+            categoryId,
+        )
     }
     val categoryName = remember(state.allItems, categoryId) {
         if (categoryId == null) {
@@ -727,14 +731,6 @@ private fun GlobalLedgerFilterSheet(
             item { FilterOptions("分類", state.categoryOptions, state.filter.categoryId, { id -> onUpdate { it.copy(categoryId = id) } }) }
             item { FilterOptions("標籤", state.tagOptions, state.filter.tagId, { id -> onUpdate { it.copy(tagId = id) } }) }
             item {
-                Text("收支類型", fontWeight = FontWeight.SemiBold)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DirectionChip("收入", GlobalLedgerDirection.INCOME, state.filter.direction, onUpdate)
-                    DirectionChip("支出", GlobalLedgerDirection.EXPENSE, state.filter.direction, onUpdate)
-                    DirectionChip("不統計", GlobalLedgerDirection.EXCLUDED, state.filter.direction, onUpdate)
-                }
-            }
-            item {
                 Text("分類狀態", fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AssignmentChip("已分類", GlobalCategoryAssignment.CATEGORIZED, state.filter.assignment, onUpdate)
@@ -780,11 +776,6 @@ private fun FilterOptions(
         FilterChip(selected == null, { onSelect(null) }, { Text("全部") })
         options.forEach { option -> FilterChip(selected == option.id, { onSelect(if (selected == option.id) null else option.id) }, { Text(option.name) }) }
     }
-}
-
-@Composable
-private fun DirectionChip(label: String, direction: GlobalLedgerDirection, selected: GlobalLedgerDirection?, onUpdate: ((GlobalLedgerFilter) -> GlobalLedgerFilter) -> Unit) {
-    FilterChip(selected == direction, { onUpdate { it.copy(direction = if (it.direction == direction) null else direction) } }, { Text(label) })
 }
 
 @Composable

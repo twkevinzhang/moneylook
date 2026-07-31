@@ -58,6 +58,13 @@ class GlobalTransferListDaoTest {
                 transfer("income", "account-a", "extension-a", "2026-07-01", amount = 500.0),
                 transfer("same-a", "account-a", "extension-a", "2026-07-15T09:00:00"),
                 transfer("same-b", "account-b", "extension-b", "2026-07-15T09:00:00"),
+                transfer(
+                    "cross-month-posting",
+                    "account-b",
+                    "extension-b",
+                    "2026-07-30T10:00:00",
+                    postingDateTime = "2026-08-02T09:00:00",
+                ),
                 transfer("unclassified", "account-b", "extension-b", "2026-07-31T23:59:59"),
                 transfer("end", "account-b", "extension-b", "2026-08-01"),
             ),
@@ -79,13 +86,16 @@ class GlobalTransferListDaoTest {
             .observeGlobalBetween(startInclusive = "2026-07-01", endExclusive = "2026-08-01")
             .first()
 
-        assertEquals(listOf("unclassified", "same-b", "same-a", "income"), rows.map { it.transfer.id })
+        assertEquals(
+            listOf("unclassified", "cross-month-posting", "same-b", "same-a", "income"),
+            rows.map { it.transfer.id },
+        )
         assertEquals("信用卡", rows[0].accountName)
         assertEquals("銀行 B", rows[0].extensionName)
         assertEquals("USD", rows[0].currency)
         assertEquals(AssetKind.CREDIT_CARD, rows[0].accountKind)
-        assertEquals("food", rows[1].category?.id)
-        assertEquals(listOf("receipt"), rows[1].tags.map { it.id })
+        assertEquals("food", rows[2].category?.id)
+        assertEquals(listOf("receipt"), rows[2].tags.map { it.id })
         assertNull(rows.first { it.transfer.id == "unclassified" }.annotation)
         val projectionFields = GlobalTransferListItem::class.java.declaredFields.map { it.name }.toSet()
         assertEquals(
@@ -121,6 +131,7 @@ class GlobalTransferListDaoTest {
         extensionId: String,
         txnDateTime: String,
         amount: Double = -100.0,
+        postingDateTime: String? = null,
     ) = Transfer(
         id = id,
         accountId = accountId,
@@ -130,5 +141,6 @@ class GlobalTransferListDaoTest {
         amount = amount,
         balance = null,
         memo = "",
+        postingDateTime = postingDateTime,
     )
 }

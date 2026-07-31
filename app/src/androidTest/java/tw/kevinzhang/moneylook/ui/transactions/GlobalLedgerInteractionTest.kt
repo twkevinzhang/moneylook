@@ -24,6 +24,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import tw.kevinzhang.core.data.model.AssetKind
+import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.moneylook.ui.theme.MoneylookTheme
 import java.time.LocalDate
 import java.time.YearMonth
@@ -312,7 +313,7 @@ class GlobalLedgerInteractionTest {
     }
 
     @Test
-    fun detailsTabShowsAllCurrentResultsAfterCategoryNavigationRequest() {
+    fun detailsTabKeepsTheSelectedReportDirectionAfterCategoryNavigationRequest() {
         val range = GlobalDateRange.thisMonth(LocalDate.now())
         val income = item("salary", 20_000.0, "TWD").copy(
             description = "七月薪資",
@@ -327,14 +328,19 @@ class GlobalLedgerInteractionTest {
         val uncategorized = item("uncategorized", -80.0, "TWD").copy(
             description = "未分類消費",
         )
-        val allCurrentResults = listOf(income, food, uncategorized)
+        val excluded = item("excluded", -1_000.0, "TWD").copy(
+            description = "帳戶移轉",
+            categoryReportingGroup = CategoryReportingGroup.EXCLUDED,
+        )
+        val allCurrentResults = listOf(income, food, uncategorized, excluded)
         val state = mutableStateOf(
             GlobalLedgerUiState(
                 dateRange = range,
                 filter = GlobalLedgerFilter(),
                 activeTab = GlobalLedgerTab.CATEGORY,
+                categoryDirection = GlobalLedgerDirection.EXPENSE,
                 allItems = allCurrentResults,
-                items = allCurrentResults,
+                items = listOf(food, uncategorized),
                 categories = listOf(
                     GlobalCategorySummary(
                         id = "food",
@@ -374,9 +380,10 @@ class GlobalLedgerInteractionTest {
         }
 
         composeRule.onNode(hasText("明細") and hasClickAction()).performClick()
-        composeRule.onNodeWithText("七月薪資").assertExists()
+        composeRule.onNodeWithText("七月薪資").assertDoesNotExist()
         composeRule.onNodeWithText("午餐").assertExists()
         composeRule.onNodeWithText("未分類消費").assertExists()
+        composeRule.onNodeWithText("帳戶移轉").assertDoesNotExist()
     }
 
     @Test

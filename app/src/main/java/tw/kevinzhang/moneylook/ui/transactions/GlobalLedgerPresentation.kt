@@ -224,7 +224,7 @@ data class GlobalCategorySummary(
 data class GlobalLedgerSummary(
     val income: Double = 0.0,
     val expense: Double = 0.0,
-    /** Excluded rows remain visible in the ledger but do not affect income or expense totals. */
+    /** Excluded rows live on their dedicated detail page and do not affect income or expense totals. */
     val excludedCount: Int = 0,
 ) {
     val net: Double get() = income - expense
@@ -306,21 +306,20 @@ fun globalCreditCardTransactionStatus(
 fun globalCreditCardTransactionStatus(item: GlobalLedgerItem): GlobalCreditCardTransactionStatus? =
     globalCreditCardTransactionStatus(item.accountKind, item.status)
 
-/** Pending card authorizations stay visible and editable, but are not financial reports yet. */
+/** Both posted and pending card transactions contribute; only explicitly excluded rows do not. */
 fun globalReportableTransactions(items: List<GlobalLedgerItem>): List<GlobalLedgerItem> =
-    items.filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
+    items.filter { globalLedgerDirection(it) != GlobalLedgerDirection.EXCLUDED }
 
 /**
  * Applies every ledger filter selected on the parent screen, but deliberately
  * replaces its direction with EXCLUDED for the dedicated excluded-details page.
- * Pending authorizations are not reportable and therefore never appear here.
+ * Both posted and pending excluded transactions appear on this dedicated page.
  */
 fun excludedGlobalLedgerItems(
     items: List<GlobalLedgerItem>,
     filter: GlobalLedgerFilter,
-): List<GlobalLedgerItem> = globalReportableTransactions(
-    filterGlobalLedger(items, filter.copy(direction = GlobalLedgerDirection.EXCLUDED)),
-)
+): List<GlobalLedgerItem> =
+    filterGlobalLedger(items, filter.copy(direction = GlobalLedgerDirection.EXCLUDED))
 
 /** Report totals exclude categorized "不統計" rows and zero-value rows. */
 fun globalLedgerSummary(items: List<GlobalLedgerItem>): GlobalLedgerSummary {
@@ -333,8 +332,7 @@ fun globalLedgerSummary(items: List<GlobalLedgerItem>): GlobalLedgerSummary {
     return GlobalLedgerSummary(
         income = reportable.filter { it.first == GlobalLedgerDirection.INCOME }.sumOf { abs(it.second) },
         expense = reportable.filter { it.first == GlobalLedgerDirection.EXPENSE }.sumOf { abs(it.second) },
-        excludedCount = globalReportableTransactions(items)
-            .count { globalLedgerDirection(it) == GlobalLedgerDirection.EXCLUDED },
+        excludedCount = items.count { globalLedgerDirection(it) == GlobalLedgerDirection.EXCLUDED },
     )
 }
 
@@ -379,7 +377,6 @@ fun globalLedgerAmountTone(item: GlobalLedgerItem): GlobalLedgerAmountTone = whe
 }
 
 fun missingExchangeCurrencies(items: List<GlobalLedgerItem>): List<String> = items.asSequence()
-    .filter { globalCreditCardTransactionStatus(it) != GlobalCreditCardTransactionStatus.PENDING }
     .filter { globalLedgerDirection(it) !in setOf(null, GlobalLedgerDirection.EXCLUDED) }
     .filter { it.reportingAmountTwd() == null }
     .map { it.currency.trim().uppercase(Locale.ROOT) }
