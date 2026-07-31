@@ -86,7 +86,7 @@ class DefaultClassificationCatalogTest {
         )
         val categoryIds = DefaultClassificationCatalog.categories.mapTo(mutableSetOf()) { it.id }
 
-        assertEquals(72, DefaultClassificationCatalog.publicGenericRules.size)
+        assertEquals(121, DefaultClassificationCatalog.publicGenericRules.size)
         assertEquals(
             DefaultClassificationCatalog.publicGenericRules.size,
             DefaultClassificationCatalog.publicGenericRules.map { it.rule.id }.toSet().size,
@@ -129,17 +129,20 @@ class DefaultClassificationCatalogTest {
                         AutoCategoryRuleConditionField.MEMO,
                         AutoCategoryRuleConditionField.TYPE,
                         AutoCategoryRuleConditionField.SEARCHABLE_TEXT,
+                        AutoCategoryRuleConditionField.MERCHANT_NAME,
                     ),
                 )
                 assertFalse(privateContext.containsMatchIn(condition.pattern))
                 assertFalse(sensitiveNumber.containsMatchIn(condition.pattern))
-                assertFalse(condition.pattern.any(Char::isDigit))
+                if (condition.field != AutoCategoryRuleConditionField.MERCHANT_NAME) {
+                    assertFalse(condition.pattern.any(Char::isDigit))
+                }
                 assertFalse('@' in condition.pattern)
             }
         }
         assertTrue(
             DefaultClassificationCatalog.publicGenericRules
-                .filter { it.rule.priority >= 29 }
+                .filter { it.rule.priority >= 29 && !it.rule.id.startsWith("public-v5-") }
                 .all { publicRule ->
                     publicRule.conditions.all {
                         it.field == AutoCategoryRuleConditionField.SEARCHABLE_TEXT
@@ -208,5 +211,40 @@ class DefaultClassificationCatalogTest {
             it.conditionGroup ==
                 tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup.EXCLUDE_ANY
         })
+    }
+
+    @Test
+    fun `v27 merchant catalog is field-scoped and keeps unsafe descriptions unclassified`() {
+        val v5Rules = DefaultClassificationCatalog.publicGenericRules.filter {
+            it.rule.id.startsWith("public-v5-")
+        }
+
+        assertEquals(49, v5Rules.size)
+        assertEquals(
+            "文具",
+            DefaultClassificationCatalog.categories.single { it.id == "expense-stationery" }.name,
+        )
+        val merchantRules = v5Rules.filterNot { it.rule.id.startsWith("public-v5-internet-") }
+        assertTrue(merchantRules.all { publicRule ->
+            publicRule.rule.accountKind == null &&
+                publicRule.conditions.all { it.field == AutoCategoryRuleConditionField.MERCHANT_NAME }
+        })
+        assertEquals(
+            listOf("茶屋", "三創店"),
+            v5Rules.single { it.rule.id == "public-v5-food-teahouse-sanchuang" }
+                .conditions.map { it.pattern },
+        )
+        assertTrue(
+            v5Rules.single { it.rule.id == "public-v5-food-teahouse-sanchuang" }
+                .conditions.all {
+                    it.conditionGroup ==
+                        tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup.INCLUDE_ALL
+                },
+        )
+        assertEquals(
+            AutoCategoryRuleConditionField.DESCRIPTION,
+            v5Rules.single { it.rule.id == "public-v5-internet-squarespace" }
+                .conditions.single().field,
+        )
     }
 }

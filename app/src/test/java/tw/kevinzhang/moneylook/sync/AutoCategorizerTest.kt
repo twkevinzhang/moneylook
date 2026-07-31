@@ -1092,6 +1092,168 @@ class AutoCategorizerTest {
     }
 
     @Test
+    fun `bundled merchant rules classify ASUS credit card fixtures without MCC and preserve manual choices`() = runBlocking {
+        // Exercise the catalog through the same reset/seeding path as the app.  Do not rebuild a
+        // test-only rule list here: these fixtures must fail whenever the shipped catalog drifts.
+        categorizer.resetClassificationSystem()
+        database.accountDao().upsertAll(
+            listOf(
+                account("credit-card").copy(kind = AssetKind.CREDIT_CARD),
+            ),
+        )
+
+        data class Fixture(
+            val id: String,
+            val merchantName: String?,
+            val description: String = "信用卡商戶消費",
+            val expectedCategoryId: String?,
+        )
+
+        fun merchantFixtures(
+            categoryId: String,
+            vararg merchants: Pair<String, String>,
+        ) = merchants.map { (id, merchantName) ->
+            Fixture(id, merchantName, expectedCategoryId = categoryId)
+        }
+
+        val fixtures = merchantFixtures(
+            "expense-food",
+            "sukiya-latin" to "ＭＧ- ＳＵＫＩＹＡ　南京三民店",
+            "sukiya-japanese" to "Ｇ- すき家 南京三民店",
+            "sukiya-corporate" to "Ｇ- 台灣善商股份有限公司",
+            "komeda" to "Ｇ- 客美多咖啡（民生圓環店）",
+            "matsuya" to "Ｇ- 松屋 南京東路店",
+            "kebuke" to "Ｇ- 可不可熟成紅茶 南京東店",
+            "pizzahut" to "Ｇ- 必勝客",
+            "sato" to "Ｇ- 佐藤精肉店",
+            "saizeriya" to "Ｇ- 薩莉亞",
+            "bafang" to "Ｇ- 八方雲集",
+            "xindian" to "Ｇ- 辛殿麻辣鍋",
+            "hikari" to "Ｇ- 光鮨迴轉壽司",
+            "daoting" to "Ｇ- 稻町家",
+            "kayiyi" to "Ｇ- 咖一味",
+            "torijin" to "Ｇ- 鳥人拉麵",
+            "su" to "Ｇ- 蘇氏麵館",
+            "zen" to "Ｇ- 禪風茶樓",
+            "ippudo" to "Ｇ- 一風堂",
+            "louisa" to "Ｇ- ＬＯＵＩＳＡ　ＣＯＦＦＥＥ",
+            "starbucks" to "Ｇ- 星巴克",
+            "qiaozhiwei" to "Ｇ- 巧之味",
+            "chiyuan" to "Ｇ- 季緣",
+            "att4fun-restaurant" to "Ｇ- ＡＴＴ ４ ＦＵＮ 餐廳",
+        ) + merchantFixtures(
+            "expense-shopping",
+            "jinhua" to "Ｇ- 今華電子",
+            "shengsheng" to "Ｇ- 勝勝小舖",
+            "dream" to "Ｇ- 情趣夢天堂",
+            "shenghua" to "Ｇ- 勝華百貨行",
+            "shengyue" to "Ｇ- 勝越企業社",
+            "sanchuang" to "Ｇ- 三創數位",
+            "pchome" to "Ｇ- ＰＣＨＯＭＥ",
+            "carrefour" to "Ｇ- 家樂福",
+            "rtmart" to "Ｇ- 大全聯",
+            "jsf" to "Ｇ- 金興發",
+            "yuanda" to "Ｇ- 源達科技",
+            "nihonbashi" to "Ｇ- 日本橋３Ｃ",
+            "xiangchang" to "Ｇ- 祥昌電子",
+            "miramar" to "Ｇ- 美麗華百樂園",
+            "zhouquan" to "Ｇ- 洲全生活館",
+        ) + merchantFixtures(
+            "expense-transport",
+            "guoyuan" to "Ｇ- 國園加油站",
+            "sunshine" to "Ｇ- 陽光市民加油站",
+            "cpc" to "Ｇ- 中油－復興北路站（Ｄ２１）",
+        ) + merchantFixtures(
+            "expense-stationery",
+            "stationery" to "Ｇ- １０１文具天堂－台北民生店",
+            "printing" to "Ｇ- 藍新－經典數位印刷中山民生店",
+        ) + merchantFixtures(
+            "expense-home",
+            "ikea-latin" to "Ｇ- ＩＫＥＡ",
+            "ikea-chinese" to "Ｇ- 宜家家居",
+            "zhenyu" to "Ｇ- 振宇五金",
+        ) + merchantFixtures(
+            "expense-clothing",
+            "net" to "Ｇ- ＮＥＴ忠孝旗艦",
+        ) + merchantFixtures(
+            "expense-entertainment",
+            "cyber-cafe" to "Ｇ- 麗華行電競旗艦館",
+        ) + merchantFixtures(
+            "expense-medical",
+            "pharmacy" to "Ｇ- 正康藥局",
+        ) + listOf(
+            Fixture("teahouse-sanchuang", "Ｇ- 茶屋 三創店", expectedCategoryId = "expense-food"),
+            Fixture("uniparking", "Ｇ- 統一精工 停車", expectedCategoryId = "expense-transport"),
+            Fixture("squarespace", null, description = "SQSP* DOMAIN", expectedCategoryId = "expense-internet"),
+            // Merchant evidence must win over the generic electronic-payment channel.
+            Fixture(
+                "familymart",
+                "Ｇ- 全家便利商店",
+                description = "街口電支－全家便利商店",
+                expectedCategoryId = "expense-food",
+            ),
+            Fixture("newebpay-alone", "藍新科技", expectedCategoryId = null),
+            Fixture("lianjia", "連加＊HOHO", expectedCategoryId = null),
+            Fixture("paymonade", "匯票旅支/虛擬貨幣/PAYMONADE", expectedCategoryId = null),
+            Fixture("generic-card-charge", "未辨識商戶", description = "簽帳消費", expectedCategoryId = null),
+            Fixture(
+                "annual-fee-waiver",
+                "減免年費 - 魔BUY悠遊鈦金卡",
+                description = "減免年費 - 魔BUY悠遊鈦金卡",
+                expectedCategoryId = null,
+            ),
+        )
+        val transfers = fixtures.map { fixture ->
+            transfer(
+                id = fixture.id,
+                description = fixture.description,
+                amount = -100.0,
+                accountId = "credit-card",
+                merchantName = fixture.merchantName,
+                merchantCategoryCode = null,
+            )
+        }
+        val manuallyClassified = transfer(
+            id = "manual-sukiya",
+            description = "信用卡商戶消費",
+            amount = -100.0,
+            accountId = "credit-card",
+            merchantName = "ＭＧ- ＳＵＫＩＹＡ　南京三民店",
+            merchantCategoryCode = null,
+        )
+        database.transferDao().upsertAll(transfers + manuallyClassified)
+        database.transferAnnotationDao().saveManualAnnotation(
+            TransferAnnotation(
+                transferId = manuallyClassified.id,
+                extensionId = manuallyClassified.extensionId,
+                categoryId = "expense-shopping",
+                note = "使用者指定",
+                categoryAssignment = AssignmentSource.MANUAL,
+                manualOverride = true,
+            ),
+            emptySet(),
+        )
+
+        val result = categorizer.applyToExistingTransactions()
+
+        assertEquals(1, result.preservedManualOverrideCount)
+        fixtures.forEach { fixture ->
+            assertEquals(
+                "${fixture.id} should use the seeded default catalog without an MCC",
+                fixture.expectedCategoryId,
+                database.transferAnnotationDao().observeDetail(fixture.id).first()?.annotation?.categoryId,
+            )
+        }
+        database.transferAnnotationDao().observeDetail(manuallyClassified.id).first()!!.annotation!!.also {
+            assertEquals("expense-shopping", it.categoryId)
+            assertEquals("使用者指定", it.note)
+            assertEquals(AssignmentSource.MANUAL, it.categoryAssignment)
+            assertTrue(it.manualOverride)
+        }
+        Unit
+    }
+
+    @Test
     fun `matching abstain rule vetoes a stronger automatic classification`() {
         val food = Category("food", "餐飲", "#2E7D32")
         val candidate = classificationCandidate(transfer("veto", "ACME", -50.0, merchantName = "Acme"))
