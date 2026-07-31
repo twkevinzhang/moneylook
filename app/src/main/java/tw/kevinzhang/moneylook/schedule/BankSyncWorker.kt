@@ -5,21 +5,29 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
+import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import androidx.work.workDataOf
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.supervisorScope
 import tw.kevinzhang.core.data.db.CredentialProfileDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
+import tw.kevinzhang.core.data.db.PendingSyncRequestDao
 import tw.kevinzhang.core.data.model.IngestionTrigger
+import tw.kevinzhang.core.data.model.PendingSyncRequest
+import tw.kevinzhang.core.data.model.SyncRequestStatus
+import tw.kevinzhang.core.data.model.SyncRequestTrigger
 import tw.kevinzhang.extension_runtime.data.SyncResult
 import tw.kevinzhang.moneylook.sync.BankSyncCoordinator
 import tw.kevinzhang.moneylook.sync.SyncResultPersister
@@ -28,11 +36,8 @@ import tw.kevinzhang.moneylook.sync.hasPartialSyncFailure
 import java.util.concurrent.TimeUnit
 
 /**
- * The durable execution boundary for one extension sync.
- *
- * All requests enter the same unique WorkManager chain.  This deliberately serializes bank
- * sessions: extensions use WebView and may invoke OCR, so running several at once provides no
- * useful guarantee and made the former "sync all" action contradict its UI copy.
+ * The sole foreground WorkManager boundary for all banks. Requests themselves live in Room so
+ * one extension remains deduplicated while distinct extensions run in independent coroutines.
  */
 @HiltWorker
 class BankSyncWorker @AssistedInject constructor(
@@ -42,103 +47,188 @@ class BankSyncWorker @AssistedInject constructor(
     private val syncResultPersister: SyncResultPersister,
     private val installedExtensionDao: InstalledExtensionDao,
     private val credentialProfileDao: CredentialProfileDao,
+    private val pendingSyncRequestDao: PendingSyncRequestDao,
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
-        val extensionId = inputData.getString(KEY_EXTENSION_ID)
-            ?: return Result.failure(resultData(RESULT_ERROR))
-        val trigger = SyncTrigger.fromWireValue(inputData.getString(KEY_TRIGGER))
-            ?: return Result.failure(resultData(RESULT_ERROR))
-        val extension = try {
-            installedExtensionDao.getById(extensionId)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            return retryOrFinishPreExtensionFailure(extensionId)
-        } ?: return Result.success(resultData(RESULT_SKIPPED))
-        val profile = try {
-            credentialProfileDao.getByExtensionId(extensionId)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            return retryOrFinishPreExtensionFailure(extensionId)
-        } ?: return Result.success(resultData(RESULT_SKIPPED))
-
-        // A scheduled run must honour a newly-disabled schedule. A user request intentionally
-        // does not, because changing the schedule is unrelated to an explicit sync action.
-        if (profile.credential.isBlank() || (trigger == SyncTrigger.SCHEDULED_SYNC && !profile.scheduleEnabled)) {
-            return Result.success(resultData(RESULT_SKIPPED))
+        if (!SyncNotification.isAllowed(applicationContext)) {
+            // A visible notification is mandatory for this feature. Do not leave a stale primary
+            // key that would make a later manual request look like a duplicate after permission
+            // has been restored.
+            pendingSyncRequestDao.deleteAll()
+            return Result.success()
         }
+        SyncNotification.ensureChannel(applicationContext)
+        setForeground(foregroundInfo(emptyList()))
 
-        setProgress(workDataOf(KEY_PROGRESS_STATE to PROGRESS_RUNNING))
-        val syncResult = try {
+        return try {
+            // A process death can leave rows RUNNING. There cannot be a concurrent global worker
+            // because this worker is unique, so re-claiming them is safe and avoids losing work.
+            pendingSyncRequestDao.requeueRunning(System.currentTimeMillis())
+            pendingSyncRequestDao.deleteTerminal()
+            drainRequests()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // No bank session has been deliberately retried here. Room state retains unfinished
+            // rows for the bounded WorkManager retry below.
+            Result.retry()
+        } finally {
+            SyncNotification.cancel(applicationContext)
+        }
+    }
+
+    private suspend fun drainRequests(): Result = supervisorScope {
+        val updates = Channel<Unit>(Channel.CONFLATED)
+        val observer = launch(start = CoroutineStart.UNDISPATCHED) {
+            pendingSyncRequestDao.observeAll().collect { updates.trySend(Unit) }
+        }
+        val running = linkedMapOf<String, Job>()
+        val completions = Channel<Completion>(Channel.UNLIMITED)
+        val notificationEntries = linkedMapOf<String, SyncNotificationEntry>()
+        var retryNeeded = false
+
+        try {
+            while (true) {
+                // Claim every currently queued extension. Claims make simultaneous new requests
+                // for an already-running bank a no-op, while each different bank starts now.
+                pendingSyncRequestDao.getQueued().forEach { request ->
+                    if (pendingSyncRequestDao.markRunning(request.extensionId, System.currentTimeMillis()) != 1) {
+                        return@forEach
+                    }
+                    val claimed = pendingSyncRequestDao.getByExtensionId(request.extensionId)
+                        ?: return@forEach
+                    val name = installedExtensionDao.getById(claimed.extensionId)?.name
+                        ?: request.extensionId
+                    notificationEntries[claimed.extensionId] = SyncNotificationEntry(
+                        claimed.extensionId,
+                        name,
+                        SyncNotificationStatus.RUNNING,
+                    )
+                    publish(notificationEntries.values)
+                    running[claimed.extensionId] = launchParallelSyncSession(completions) {
+                        val result = try {
+                            execute(claimed)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (_: Exception) {
+                            // This worker must never silently strand a RUNNING row. The parent
+                            // serializes all progress mutations and will retain it for retry.
+                            TerminalResult.Retry
+                        }
+                        Completion(claimed.extensionId, result)
+                    }
+                }
+
+                if (running.isEmpty()) {
+                    // The Flow subscription is established before this check. A request inserted
+                    // during the final empty check wakes this worker; APPEND_OR_REPLACE also
+                    // supplies a successor worker for the narrow post-return race.
+                    if (pendingSyncRequestDao.getQueued().isEmpty()) break
+                    continue
+                }
+                select<Unit> {
+                    updates.onReceive { }
+                    completions.onReceive { completion ->
+                        running.remove(completion.extensionId)
+                        when (val terminal = completion.result) {
+                            TerminalResult.Retry -> retryNeeded = true
+                            is TerminalResult.Done -> {
+                                notificationEntries[completion.extensionId] = notificationEntries
+                                    .getValue(completion.extensionId)
+                                    .copy(status = terminal.status)
+                                publish(notificationEntries.values)
+                                // Persist terminal status before removal. If cleanup loses a race
+                                // with process death, the next worker removes this row rather than
+                                // replaying a completed bank session.
+                                pendingSyncRequestDao.markTerminal(
+                                    completion.extensionId,
+                                    terminal.status.requestStatus,
+                                    System.currentTimeMillis(),
+                                )
+                                pendingSyncRequestDao.deleteByExtensionId(completion.extensionId)
+                            }
+                        }
+                    }
+                }
+            }
+            if (retryNeeded) Result.retry() else Result.success()
+        } finally {
+            observer.cancel()
+            updates.close()
+            completions.close()
+        }
+    }
+
+    private suspend fun execute(request: PendingSyncRequest): TerminalResult {
+        val extension = try {
+            installedExtensionDao.getById(request.extensionId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return TerminalResult.Retry
+        } ?: return TerminalResult.Done(SyncNotificationStatus.SKIPPED)
+        val profile = try {
+            credentialProfileDao.getByExtensionId(request.extensionId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return TerminalResult.Retry
+        } ?: return TerminalResult.Done(SyncNotificationStatus.SKIPPED)
+
+        if (profile.credential.isBlank() ||
+            (request.trigger == SyncRequestTrigger.SCHEDULED && !profile.scheduleEnabled)
+        ) return TerminalResult.Done(SyncNotificationStatus.SKIPPED)
+
+        val result = try {
             syncCoordinator.sync(extension, profile)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            val failure = SyncResult.Error(
-                message = "sync runtime failed",
-                origin = "RUNTIME",
-                cause = error,
-                rawMessage = error.message ?: error.toString(),
-                rawStack = error.stackTraceToString(),
+            recordFailureSafely(
+                extension = extension,
+                trigger = request.trigger.ingestionTrigger,
+                failure = SyncResult.Error(
+                    message = "sync runtime failed",
+                    origin = "RUNTIME",
+                    cause = error,
+                    rawMessage = error.message ?: error.toString(),
+                    rawStack = error.stackTraceToString(),
+                ),
             )
-            recordFailureSafely(extension, trigger.ingestionTrigger, failure = failure)
-            return finishTerminalFailure(extensionId)
+            updateLastRunErrorSafely(request.extensionId)
+            return TerminalResult.Done(SyncNotificationStatus.ERROR)
         }
-
-        return when (syncResult) {
-            is SyncResult.Success -> persistSuccess(extensionId, extension, trigger, syncResult)
+        return when (result) {
+            is SyncResult.Success -> persistSuccess(request, extension, result)
             is SyncResult.Error -> {
                 recordFailureSafely(
-                    extension = extension,
-                    trigger = trigger.ingestionTrigger,
-                    sourceDocuments = syncResult.sourceDocuments,
-                    sourceRunId = syncResult.runId,
-                    sourceRunStartedAt = syncResult.runStartedAt,
-                    failure = syncResult,
+                    extension,
+                    request.trigger.ingestionTrigger,
+                    result.sourceDocuments,
+                    result.runId,
+                    result.runStartedAt,
+                    result,
                 )
-                finishTerminalFailure(extensionId)
+                updateLastRunErrorSafely(request.extensionId)
+                TerminalResult.Done(SyncNotificationStatus.ERROR)
             }
         }
     }
 
     private suspend fun persistSuccess(
-        extensionId: String,
+        request: PendingSyncRequest,
         extension: tw.kevinzhang.core.data.model.InstalledExtension,
-        trigger: SyncTrigger,
         result: SyncResult.Success,
-    ): Result = try {
-        syncResultPersister.persist(extension, result, trigger.ingestionTrigger)
-        credentialProfileDao.updateLastRun(
-            extensionId = extensionId,
-            lastRunAt = System.currentTimeMillis(),
-            lastRunStatus = result.appLastRunStatus,
-        )
-        Result.success(resultData(if (result.hasPartialSyncFailure) RESULT_PARTIAL else RESULT_SUCCESS))
+    ): TerminalResult = try {
+        syncResultPersister.persist(extension, result, request.trigger.ingestionTrigger)
+        credentialProfileDao.updateLastRun(request.extensionId, System.currentTimeMillis(), result.appLastRunStatus)
+        TerminalResult.Done(if (result.hasPartialSyncFailure) SyncNotificationStatus.PARTIAL else SyncNotificationStatus.SUCCESS)
     } catch (error: CancellationException) {
         throw error
-    } catch (error: Exception) {
-        // persist() records its own persistence failure when possible. Keep the profile state
-        // aligned even if that diagnostic recording itself failed. Never retry the whole Worker
-        // here: the bank session already completed, so WorkManager retry would submit the login
-        // and scrape again merely to recover a local persistence failure.
-        updateLastRunErrorSafely(extensionId)
-        Result.success(resultData(RESULT_ERROR))
-    }
-
-    private suspend fun retryOrFinishPreExtensionFailure(extensionId: String): Result {
-        updateLastRunErrorSafely(extensionId)
-        return if (shouldRetry(FailureBoundary.PRE_EXTENSION, runAttemptCount)) {
-            Result.retry()
-        } else {
-            Result.success(resultData(RESULT_ERROR))
-        }
-    }
-
-    private suspend fun finishTerminalFailure(extensionId: String): Result {
-        updateLastRunErrorSafely(extensionId)
-        return Result.success(resultData(RESULT_ERROR))
+    } catch (_: Exception) {
+        updateLastRunErrorSafely(request.extensionId)
+        TerminalResult.Done(SyncNotificationStatus.ERROR)
     }
 
     private suspend fun recordFailureSafely(
@@ -150,18 +240,11 @@ class BankSyncWorker @AssistedInject constructor(
         failure: SyncResult.Error,
     ) {
         try {
-            syncResultPersister.recordFailure(
-                extension = extension,
-                trigger = trigger,
-                sourceDocuments = sourceDocuments,
-                sourceRunId = sourceRunId,
-                sourceRunStartedAt = sourceRunStartedAt,
-                failure = failure,
-            )
+            syncResultPersister.recordFailure(extension, trigger, sourceDocuments, sourceRunId, sourceRunStartedAt, failure)
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            // The work retry below is the recovery path when persistence is temporarily down.
+            // The terminal app status is still updated below; diagnostics are best effort.
         }
     }
 
@@ -171,81 +254,62 @@ class BankSyncWorker @AssistedInject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            // Preserve the WorkManager retry decision even if Room is temporarily unavailable.
+            // The durable request has already been resolved and must not re-login a bank.
         }
     }
 
-    enum class SyncTrigger(val wireValue: String, val ingestionTrigger: IngestionTrigger) {
-        USER_SYNC("USER_SYNC", IngestionTrigger.USER_SYNC),
-        SCHEDULED_SYNC("SCHEDULED_SYNC", IngestionTrigger.SCHEDULED_SYNC),
-        ;
-
-        companion object {
-            fun fromWireValue(value: String?): SyncTrigger? = entries.firstOrNull { it.wireValue == value }
-        }
+    private suspend fun publish(entries: Collection<SyncNotificationEntry>) {
+        setForeground(foregroundInfo(entries))
     }
+
+    private fun foregroundInfo(entries: Collection<SyncNotificationEntry>) = ForegroundInfo(
+        SyncNotification.NOTIFICATION_ID,
+        SyncNotification.create(applicationContext, entries),
+        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+    )
+
+    private sealed interface TerminalResult {
+        data object Retry : TerminalResult
+        data class Done(val status: SyncNotificationStatus) : TerminalResult
+    }
+
+    private data class Completion(val extensionId: String, val result: TerminalResult)
 
     companion object {
-        const val KEY_EXTENSION_ID = "extensionId"
-        const val KEY_TRIGGER = "trigger"
-        const val KEY_PROGRESS_STATE = "syncProgressState"
-        const val KEY_RESULT_STATUS = "syncResultStatus"
-
-        const val RESULT_SUCCESS = "success"
-        const val RESULT_PARTIAL = "partial"
-        const val RESULT_ERROR = "error"
-        const val RESULT_SKIPPED = "skipped"
-        const val PROGRESS_RUNNING = "running"
-
-        private const val UNIQUE_QUEUE_NAME = "bank-sync:queue"
-        private const val TAG_PREFIX = "bank-sync:"
+        private const val UNIQUE_QUEUE_NAME = "bank-sync:orchestrator"
         private const val ALL_TAG = "bank-sync:all"
-        private const val MAX_PRE_EXTENSION_RETRIES = 2
 
         fun uniqueQueueName(): String = UNIQUE_QUEUE_NAME
-        fun tag(extensionId: String): String = "$TAG_PREFIX$extensionId"
         fun allTag(): String = ALL_TAG
 
-        fun request(extensionId: String, trigger: SyncTrigger): OneTimeWorkRequest =
-            OneTimeWorkRequestBuilder<BankSyncWorker>()
-                .setInputData(requestInputData(extensionId, trigger))
-                .setConstraints(
-                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
-                )
+        /** Wakes the one global worker without encoding private bank data in WorkManager input. */
+        fun wake(context: Context) {
+            val request = OneTimeWorkRequestBuilder<BankSyncWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .addTag(tag(extensionId))
                 .addTag(ALL_TAG)
                 .build()
-
-        internal fun requestInputData(extensionId: String, trigger: SyncTrigger): Data = workDataOf(
-            KEY_EXTENSION_ID to extensionId,
-            KEY_TRIGGER to trigger.wireValue,
-        )
-
-        fun isPending(workInfo: WorkInfo): Boolean =
-            workInfo.state == WorkInfo.State.ENQUEUED ||
-                workInfo.state == WorkInfo.State.RUNNING ||
-                workInfo.state == WorkInfo.State.BLOCKED
-
-        internal fun shouldRetry(boundary: FailureBoundary, runAttemptCount: Int): Boolean =
-            boundary == FailureBoundary.PRE_EXTENSION &&
-                runAttemptCount < MAX_PRE_EXTENSION_RETRIES
-
-        fun enqueue(context: Context, requests: List<OneTimeWorkRequest>) {
-            if (requests.isEmpty()) return
-            val continuation = WorkManager.getInstance(context).beginUniqueWork(
+            WorkManager.getInstance(context).enqueueUniqueWork(
                 UNIQUE_QUEUE_NAME,
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
-                requests.first(),
+                request,
             )
-            requests.drop(1).fold(continuation) { chain, request -> chain.then(request) }.enqueue()
         }
-
-        private fun resultData(status: String): Data = workDataOf(KEY_RESULT_STATUS to status)
-    }
-
-    internal enum class FailureBoundary {
-        PRE_EXTENSION,
-        EXTENSION_OR_PERSISTENCE,
     }
 }
+
+private val SyncRequestTrigger.ingestionTrigger: IngestionTrigger
+    get() = when (this) {
+        SyncRequestTrigger.USER -> IngestionTrigger.USER_SYNC
+        SyncRequestTrigger.SCHEDULED -> IngestionTrigger.SCHEDULED_SYNC
+    }
+
+private val SyncNotificationStatus.requestStatus: SyncRequestStatus
+    get() = when (this) {
+        SyncNotificationStatus.QUEUED -> SyncRequestStatus.QUEUED
+        SyncNotificationStatus.RUNNING -> SyncRequestStatus.RUNNING
+        SyncNotificationStatus.SUCCESS -> SyncRequestStatus.SUCCESS
+        SyncNotificationStatus.PARTIAL -> SyncRequestStatus.PARTIAL
+        SyncNotificationStatus.ERROR -> SyncRequestStatus.ERROR
+        SyncNotificationStatus.SKIPPED -> SyncRequestStatus.SKIPPED
+    }

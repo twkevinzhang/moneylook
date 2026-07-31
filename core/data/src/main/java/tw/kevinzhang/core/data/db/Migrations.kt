@@ -843,3 +843,23 @@ val MIGRATION_24_25 = object : Migration(24, 25) {
         DefaultClassificationSeeder.upgradePublicCatalogToV6(db)
     }
 }
+
+/** Adds durable per-extension sync requests for the global foreground sync orchestrator. */
+val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `pending_sync_requests` (
+                `extensionId` TEXT NOT NULL,
+                `trigger` TEXT NOT NULL,
+                `status` TEXT NOT NULL,
+                `requestedAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`extensionId`),
+                FOREIGN KEY(`extensionId`) REFERENCES `installed_extensions`(`id`)
+                    ON UPDATE NO ACTION ON DELETE CASCADE
+            )
+            """.trimIndent(),
+        )
+    }
+}

@@ -19,8 +19,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.db.AccountDao
 import tw.kevinzhang.core.data.db.InstalledExtensionDao
+import tw.kevinzhang.core.data.db.PendingSyncRequestDao
 import tw.kevinzhang.core.data.model.Account
 import tw.kevinzhang.core.data.model.InstalledExtension
+import tw.kevinzhang.core.data.model.PendingSyncRequest
+import tw.kevinzhang.core.data.model.SyncRequestStatus
 import tw.kevinzhang.marketplace.MarketplaceRepository
 import tw.kevinzhang.marketplace.DownloadedExtensionArtifact
 import tw.kevinzhang.marketplace.RepoUrlRepository
@@ -101,7 +104,7 @@ class MarketplaceViewModelTest {
         repoUrlRepository = FakeRepoUrlRepository(),
         installedExtensionDao = installedDao,
         accountDao = FakeAccountDao(),
-        schedulerManager = SchedulerManager(RuntimeEnvironment.getApplication()),
+        schedulerManager = SchedulerManager(RuntimeEnvironment.getApplication(), NoopPendingSyncRequestDao),
         gson = Gson(),
     )
 
@@ -163,6 +166,25 @@ class MarketplaceViewModelTest {
         override suspend fun deleteById(id: String) {
             values.value = values.value.filterNot { it.id == id }
         }
+    }
+
+    private object NoopPendingSyncRequestDao : PendingSyncRequestDao {
+        override suspend fun insertIgnore(request: PendingSyncRequest): Long = -1
+        override fun observeAll(): Flow<List<PendingSyncRequest>> = MutableStateFlow(emptyList())
+        override suspend fun getQueued(): List<PendingSyncRequest> = emptyList()
+        override suspend fun getAll(): List<PendingSyncRequest> = emptyList()
+        override suspend fun getByExtensionId(extensionId: String): PendingSyncRequest? = null
+        override suspend fun markRunning(extensionId: String, updatedAt: Long): Int = 0
+        override suspend fun promoteQueuedToUser(extensionId: String, updatedAt: Long): Int = 0
+        override suspend fun markTerminal(
+            extensionId: String,
+            status: SyncRequestStatus,
+            updatedAt: Long,
+        ): Int = 0
+        override suspend fun requeueRunning(updatedAt: Long): Int = 0
+        override suspend fun deleteByExtensionId(extensionId: String) = Unit
+        override suspend fun deleteAll() = Unit
+        override suspend fun deleteTerminal() = Unit
     }
 
     private class FakeAccountDao : AccountDao {
