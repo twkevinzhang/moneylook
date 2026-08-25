@@ -77,8 +77,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_condition_evaluations
-        WHERE id IN (
-            SELECT c.id
+        WHERE rowid IN (
+            SELECT c.rowid
             FROM (
                 SELECT id
                 FROM classification_rule_evaluations
@@ -98,8 +98,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_rule_evaluations
-        WHERE id IN (
-            SELECT id FROM classification_rule_evaluations
+        WHERE rowid IN (
+            SELECT rowid FROM classification_rule_evaluations
             WHERE classificationExecutionId IS NULL AND matched = 0 AND selected = 0
               AND NOT EXISTS (
                   SELECT 1 FROM classification_condition_evaluations c
@@ -114,8 +114,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_condition_evaluations
-        WHERE id IN (
-            SELECT c.id
+        WHERE rowid IN (
+            SELECT c.rowid
             FROM (
                 SELECT id
                 FROM classification_rule_evaluations
@@ -135,8 +135,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_rule_evaluations
-        WHERE id IN (
-            SELECT id FROM classification_rule_evaluations
+        WHERE rowid IN (
+            SELECT rowid FROM classification_rule_evaluations
             WHERE classificationExecutionId IS NULL AND runId IS NULL
               AND NOT EXISTS (
                   SELECT 1 FROM classification_condition_evaluations c
@@ -176,8 +176,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_condition_evaluations
-        WHERE id IN (
-            SELECT c.id
+        WHERE rowid IN (
+            SELECT c.rowid
             FROM (
                 SELECT id
                 FROM classification_rule_evaluations
@@ -197,8 +197,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_rule_evaluations
-        WHERE id IN (
-            SELECT id FROM classification_rule_evaluations
+        WHERE rowid IN (
+            SELECT rowid FROM classification_rule_evaluations
             WHERE classificationExecutionId IS NULL AND runId = :runId
               AND NOT EXISTS (
                   SELECT 1 FROM classification_condition_evaluations c
@@ -275,8 +275,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_condition_evaluations
-        WHERE id IN (
-            SELECT c.id
+        WHERE rowid IN (
+            SELECT c.rowid
             FROM (
                 SELECT id
                 FROM classification_rule_evaluations
@@ -296,8 +296,8 @@ abstract class ClassificationTraceMaintenanceDao {
     @Query(
         """
         DELETE FROM classification_rule_evaluations
-        WHERE id IN (
-            SELECT id FROM classification_rule_evaluations
+        WHERE rowid IN (
+            SELECT rowid FROM classification_rule_evaluations
             WHERE classificationExecutionId = :executionId
               AND NOT EXISTS (
                   SELECT 1 FROM classification_condition_evaluations c
