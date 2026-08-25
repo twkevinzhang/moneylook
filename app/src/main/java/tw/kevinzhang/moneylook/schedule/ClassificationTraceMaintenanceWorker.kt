@@ -27,6 +27,7 @@ import javax.inject.Singleton
 private const val TRACE_MAINTENANCE_CONTINUATION_KEY = "continuation"
 private const val TRACE_MAINTENANCE_CONTINUATION_DELAY_SECONDS = 10L
 private const val TRACE_MAINTENANCE_RETRY_BACKOFF_SECONDS = 30L
+private const val TRACE_MAINTENANCE_LOG_TAG = "TraceMaintenance"
 
 /**
  * Deletes obsolete classification trace rows in bounded windows.
@@ -44,10 +45,16 @@ class ClassificationTraceMaintenanceWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result = try {
+        Log.i(
+            TRACE_MAINTENANCE_LOG_TAG,
+            "classification trace cleanup window start: " +
+                "continuation=${inputData.getInt(TRACE_MAINTENANCE_CONTINUATION_KEY, 0)}, " +
+                "attempt=$runAttemptCount",
+        )
         val outcome = runner.runWindow()
         outcome.stats?.let { stats ->
             Log.i(
-                TAG,
+                TRACE_MAINTENANCE_LOG_TAG,
                 "classification trace cleanup complete: rowsDeleted=${outcome.rowsDeleted}, " +
                     "pageCount=${stats.pageCount}, freelistCount=${stats.freelistCount}, " +
                     "pageSize=${stats.pageSize}, databaseBytes=${stats.databaseBytes}, " +
@@ -63,7 +70,7 @@ class ClassificationTraceMaintenanceWorker @AssistedInject constructor(
                 scheduler.continueAfter(continuation + 1)
             } else {
                 Log.w(
-                    TAG,
+                    TRACE_MAINTENANCE_LOG_TAG,
                     "classification trace cleanup paused at bounded continuation limit; " +
                         "the next app start or terminal sync will resume it",
                 )
@@ -78,13 +85,12 @@ class ClassificationTraceMaintenanceWorker @AssistedInject constructor(
         } else {
             // Maintenance must never turn an already-terminal bank sync into a business failure.
             // The next app start or terminal sync will create a fresh bounded attempt.
-            Log.e(TAG, "classification trace cleanup paused after bounded retries", error)
+            Log.e(TRACE_MAINTENANCE_LOG_TAG, "classification trace cleanup paused after bounded retries", error)
             Result.success()
         }
     }
 
     companion object {
-        private const val TAG = "TraceMaintenance"
         private const val UNIQUE_WORK_NAME = "classification-trace:maintenance"
         private const val ALL_TAG = "classification-trace:maintenance"
         private const val MAX_CONTINUATIONS_PER_CHAIN = 256
@@ -109,9 +115,14 @@ class ClassificationTraceMaintenanceRunner @Inject constructor(
         var rowsDeleted = 0L
         var hasMore: Boolean
         do {
+            logTraceMaintenanceDebug("classification trace cleanup batch start: batch=${batches + 1}")
             val batch = store.pruneBatch(
                 limit = ROWS_PER_BATCH,
                 retainTerminalExecutions = RETAIN_TERMINAL_EXECUTIONS,
+            )
+            logTraceMaintenanceDebug(
+                "classification trace cleanup batch end: batch=${batches + 1}, " +
+                    "phase=${batch.phase}, rowsDeleted=${batch.rowsDeleted}, hasMore=${batch.hasMore}",
             )
             batches += 1
             rowsDeleted += batch.rowsDeleted.toLong()
@@ -145,6 +156,11 @@ data class ClassificationTraceMaintenanceWindowResult(
     val hasMore: Boolean,
     val stats: tw.kevinzhang.core.data.db.ClassificationTraceDatabaseStats?,
 )
+
+/** Local JVM unit tests do not provide an Android Log implementation. */
+private fun logTraceMaintenanceDebug(message: String) {
+    runCatching { Log.d(TRACE_MAINTENANCE_LOG_TAG, message) }
+}
 
 interface ClassificationTraceMaintenanceScheduler {
     /** Best-effort external wake used at app start and after terminal sync state is durable. */

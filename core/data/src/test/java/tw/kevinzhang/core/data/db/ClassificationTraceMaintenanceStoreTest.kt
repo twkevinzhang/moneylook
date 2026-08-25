@@ -99,6 +99,37 @@ class ClassificationTraceMaintenanceStoreTest {
     }
 
     @Test
+    fun `legacy non-match batches advance parents without exceeding the row limit`() = runBlocking {
+        val dao = database.ingestionProvenanceDao()
+        dao.insertRun(run("run", 0))
+        val rules = (0 until 10).map { index ->
+            rule("miss-$index", "run", matched = false)
+        }
+        dao.insertRuleEvaluations(rules)
+        dao.insertConditionEvaluations(
+            rules.flatMap { rule ->
+                (0 until 3).map { conditionIndex ->
+                    condition("condition-${rule.id}-$conditionIndex", rule.id, matched = false)
+                }
+            },
+        )
+
+        val first = store.pruneBatch(limit = 4, retainTerminalExecutions = 5)
+
+        assertEquals(4, first.rowsDeleted)
+        assertEquals(ClassificationTraceMaintenancePhase.LEGACY_NON_MATCH_CONDITIONS, first.phase)
+        assertEquals(9, scalarInt("SELECT COUNT(*) FROM classification_rule_evaluations"))
+        assertEquals(27, scalarInt("SELECT COUNT(*) FROM classification_condition_evaluations"))
+        assertEquals(
+            0,
+            scalarInt(
+                "SELECT COUNT(*) FROM classification_condition_evaluations c " +
+                    "LEFT JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId WHERE r.id IS NULL",
+            ),
+        )
+    }
+
+    @Test
     fun `decision summary rejects overlapping or missing rule reason counts`() {
         var failed = false
         try {

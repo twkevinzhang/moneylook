@@ -79,26 +79,21 @@ abstract class ClassificationTraceMaintenanceDao {
         DELETE FROM classification_condition_evaluations
         WHERE id IN (
             SELECT c.id
-            FROM classification_condition_evaluations c
-            JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.classificationExecutionId IS NULL AND r.matched = 0 AND r.selected = 0
+            FROM (
+                SELECT id
+                FROM classification_rule_evaluations
+                    INDEXED BY index_classification_rule_evaluations_classificationExecutionId
+                WHERE classificationExecutionId IS NULL AND matched = 0 AND selected = 0
+                LIMIT :parentLimit
+            ) candidate
+            CROSS JOIN classification_condition_evaluations c
+                INDEXED BY index_classification_condition_evaluations_ruleEvaluationId_position
+            WHERE c.ruleEvaluationId = candidate.id
             LIMIT :limit
         )
         """,
     )
-    abstract suspend fun deleteLegacyNonMatchConditions(limit: Int): Int
-
-    @Query(
-        """
-        SELECT EXISTS(
-            SELECT 1
-            FROM classification_condition_evaluations c
-            JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.classificationExecutionId IS NULL AND r.matched = 0 AND r.selected = 0
-        )
-        """,
-    )
-    abstract suspend fun hasLegacyNonMatchConditions(): Boolean
+    abstract suspend fun deleteLegacyNonMatchConditions(limit: Int, parentLimit: Int): Int
 
     @Query(
         """
@@ -106,40 +101,36 @@ abstract class ClassificationTraceMaintenanceDao {
         WHERE id IN (
             SELECT id FROM classification_rule_evaluations
             WHERE classificationExecutionId IS NULL AND matched = 0 AND selected = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM classification_condition_evaluations c
+                  WHERE c.ruleEvaluationId = classification_rule_evaluations.id
+              )
             LIMIT :limit
         )
         """,
     )
     abstract suspend fun deleteLegacyNonMatchRules(limit: Int): Int
 
-    @Query("SELECT EXISTS(SELECT 1 FROM classification_rule_evaluations WHERE classificationExecutionId IS NULL AND matched = 0 AND selected = 0)")
-    abstract suspend fun hasLegacyNonMatchRules(): Boolean
-
     @Query(
         """
         DELETE FROM classification_condition_evaluations
         WHERE id IN (
             SELECT c.id
-            FROM classification_condition_evaluations c
-            LEFT JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.id IS NULL OR (r.classificationExecutionId IS NULL AND r.runId IS NULL)
+            FROM (
+                SELECT id
+                FROM classification_rule_evaluations
+                    INDEXED BY index_classification_rule_evaluations_runId
+                WHERE classificationExecutionId IS NULL AND runId IS NULL
+                LIMIT :parentLimit
+            ) candidate
+            CROSS JOIN classification_condition_evaluations c
+                INDEXED BY index_classification_condition_evaluations_ruleEvaluationId_position
+            WHERE c.ruleEvaluationId = candidate.id
             LIMIT :limit
         )
         """,
     )
-    abstract suspend fun deleteLegacyNullRunConditions(limit: Int): Int
-
-    @Query(
-        """
-        SELECT EXISTS(
-            SELECT 1
-            FROM classification_condition_evaluations c
-            LEFT JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.id IS NULL OR (r.classificationExecutionId IS NULL AND r.runId IS NULL)
-        )
-        """,
-    )
-    abstract suspend fun hasLegacyNullRunConditions(): Boolean
+    abstract suspend fun deleteLegacyNullRunConditions(limit: Int, parentLimit: Int): Int
 
     @Query(
         """
@@ -147,14 +138,15 @@ abstract class ClassificationTraceMaintenanceDao {
         WHERE id IN (
             SELECT id FROM classification_rule_evaluations
             WHERE classificationExecutionId IS NULL AND runId IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM classification_condition_evaluations c
+                  WHERE c.ruleEvaluationId = classification_rule_evaluations.id
+              )
             LIMIT :limit
         )
         """,
     )
     abstract suspend fun deleteLegacyNullRunRules(limit: Int): Int
-
-    @Query("SELECT EXISTS(SELECT 1 FROM classification_rule_evaluations WHERE classificationExecutionId IS NULL AND runId IS NULL)")
-    abstract suspend fun hasLegacyNullRunRules(): Boolean
 
     @Query(
         """
@@ -185,25 +177,22 @@ abstract class ClassificationTraceMaintenanceDao {
         """
         DELETE FROM classification_condition_evaluations
         WHERE id IN (
-            SELECT c.id FROM classification_condition_evaluations c
-            JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.classificationExecutionId IS NULL AND r.runId = :runId
+            SELECT c.id
+            FROM (
+                SELECT id
+                FROM classification_rule_evaluations
+                    INDEXED BY index_classification_rule_evaluations_runId
+                WHERE classificationExecutionId IS NULL AND runId = :runId
+                LIMIT :parentLimit
+            ) candidate
+            CROSS JOIN classification_condition_evaluations c
+                INDEXED BY index_classification_condition_evaluations_ruleEvaluationId_position
+            WHERE c.ruleEvaluationId = candidate.id
             LIMIT :limit
         )
         """,
     )
-    abstract suspend fun deleteLegacyRunConditions(runId: String, limit: Int): Int
-
-    @Query(
-        """
-        SELECT EXISTS(
-            SELECT 1 FROM classification_condition_evaluations c
-            JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.classificationExecutionId IS NULL AND r.runId = :runId
-        )
-        """,
-    )
-    abstract suspend fun hasLegacyRunConditions(runId: String): Boolean
+    abstract suspend fun deleteLegacyRunConditions(runId: String, limit: Int, parentLimit: Int): Int
 
     @Query(
         """
@@ -211,14 +200,15 @@ abstract class ClassificationTraceMaintenanceDao {
         WHERE id IN (
             SELECT id FROM classification_rule_evaluations
             WHERE classificationExecutionId IS NULL AND runId = :runId
+              AND NOT EXISTS (
+                  SELECT 1 FROM classification_condition_evaluations c
+                  WHERE c.ruleEvaluationId = classification_rule_evaluations.id
+              )
             LIMIT :limit
         )
         """,
     )
     abstract suspend fun deleteLegacyRunRules(runId: String, limit: Int): Int
-
-    @Query("SELECT EXISTS(SELECT 1 FROM classification_rule_evaluations WHERE classificationExecutionId IS NULL AND runId = :runId)")
-    abstract suspend fun hasLegacyRunRules(runId: String): Boolean
 
     @Query(
         """
@@ -286,39 +276,39 @@ abstract class ClassificationTraceMaintenanceDao {
         """
         DELETE FROM classification_condition_evaluations
         WHERE id IN (
-            SELECT c.id FROM classification_condition_evaluations c
-            JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.classificationExecutionId = :executionId
+            SELECT c.id
+            FROM (
+                SELECT id
+                FROM classification_rule_evaluations
+                    INDEXED BY index_classification_rule_evaluations_classificationExecutionId
+                WHERE classificationExecutionId = :executionId
+                LIMIT :parentLimit
+            ) candidate
+            CROSS JOIN classification_condition_evaluations c
+                INDEXED BY index_classification_condition_evaluations_ruleEvaluationId_position
+            WHERE c.ruleEvaluationId = candidate.id
             LIMIT :limit
         )
         """,
     )
-    abstract suspend fun deleteExecutionConditions(executionId: String, limit: Int): Int
-
-    @Query(
-        """
-        SELECT EXISTS(
-            SELECT 1 FROM classification_condition_evaluations c
-            JOIN classification_rule_evaluations r ON r.id = c.ruleEvaluationId
-            WHERE r.classificationExecutionId = :executionId
-        )
-        """,
-    )
-    abstract suspend fun hasExecutionConditions(executionId: String): Boolean
+    abstract suspend fun deleteExecutionConditions(executionId: String, limit: Int, parentLimit: Int): Int
 
     @Query(
         """
         DELETE FROM classification_rule_evaluations
         WHERE id IN (
             SELECT id FROM classification_rule_evaluations
-            WHERE classificationExecutionId = :executionId LIMIT :limit
+            WHERE classificationExecutionId = :executionId
+              AND NOT EXISTS (
+                  SELECT 1 FROM classification_condition_evaluations c
+                  WHERE c.ruleEvaluationId = classification_rule_evaluations.id
+              )
+            LIMIT :limit
         )
         """,
     )
     abstract suspend fun deleteExecutionRules(executionId: String, limit: Int): Int
 
-    @Query("SELECT EXISTS(SELECT 1 FROM classification_rule_evaluations WHERE classificationExecutionId = :executionId)")
-    abstract suspend fun hasExecutionRules(executionId: String): Boolean
 }
 
 class RoomClassificationTraceMaintenanceStore(
@@ -353,30 +343,53 @@ class RoomClassificationTraceMaintenanceStore(
                 phase = ClassificationTraceMaintenancePhase.STALE_PENDING_EXECUTIONS,
             )
         }
-        if (dao.hasLegacyNonMatchConditions()) {
-            return result(dao.deleteLegacyNonMatchConditions(limit), ClassificationTraceMaintenancePhase.LEGACY_NON_MATCH_CONDITIONS)
+        val legacyNonMatchConditions = dao.deleteLegacyNonMatchConditions(
+            limit = conditionDeleteLimit(limit),
+            parentLimit = parentDeleteLimit(limit),
+        )
+        val legacyNonMatchRules = dao.deleteLegacyNonMatchRules(limit - legacyNonMatchConditions)
+        if (legacyNonMatchConditions + legacyNonMatchRules > 0) {
+            return result(
+                legacyNonMatchConditions + legacyNonMatchRules,
+                if (legacyNonMatchConditions > 0) {
+                    ClassificationTraceMaintenancePhase.LEGACY_NON_MATCH_CONDITIONS
+                } else {
+                    ClassificationTraceMaintenancePhase.LEGACY_NON_MATCH_RULES
+                },
+            )
         }
-        if (dao.hasLegacyNonMatchRules()) {
-            return result(dao.deleteLegacyNonMatchRules(limit), ClassificationTraceMaintenancePhase.LEGACY_NON_MATCH_RULES)
-        }
-        if (dao.hasLegacyNullRunConditions()) {
-            return result(dao.deleteLegacyNullRunConditions(limit), ClassificationTraceMaintenancePhase.LEGACY_NULL_RUN_CONDITIONS)
-        }
-        if (dao.hasLegacyNullRunRules()) {
-            return result(dao.deleteLegacyNullRunRules(limit), ClassificationTraceMaintenancePhase.LEGACY_NULL_RUN_RULES)
+
+        val legacyNullRunConditions = dao.deleteLegacyNullRunConditions(
+            limit = conditionDeleteLimit(limit),
+            parentLimit = parentDeleteLimit(limit),
+        )
+        val legacyNullRunRules = dao.deleteLegacyNullRunRules(limit - legacyNullRunConditions)
+        if (legacyNullRunConditions + legacyNullRunRules > 0) {
+            return result(
+                legacyNullRunConditions + legacyNullRunRules,
+                if (legacyNullRunConditions > 0) {
+                    ClassificationTraceMaintenancePhase.LEGACY_NULL_RUN_CONDITIONS
+                } else {
+                    ClassificationTraceMaintenancePhase.LEGACY_NULL_RUN_RULES
+                },
+            )
         }
 
         dao.findExpiredLegacyRun(retainCount)?.let { candidate ->
-            if (dao.hasLegacyRunConditions(candidate.runId)) {
-                return result(
-                    dao.deleteLegacyRunConditions(candidate.runId, limit),
-                    ClassificationTraceMaintenancePhase.LEGACY_EXPIRED_RUN_CONDITIONS,
-                    candidate.runId,
-                )
-            }
+            val conditions = dao.deleteLegacyRunConditions(
+                runId = candidate.runId,
+                limit = conditionDeleteLimit(limit),
+                parentLimit = parentDeleteLimit(limit),
+            )
+            val rules = dao.deleteLegacyRunRules(candidate.runId, limit - conditions)
+            check(conditions + rules > 0) { "expired legacy run candidate made no cleanup progress" }
             return result(
-                dao.deleteLegacyRunRules(candidate.runId, limit),
-                ClassificationTraceMaintenancePhase.LEGACY_EXPIRED_RUN_RULES,
+                conditions + rules,
+                if (conditions > 0) {
+                    ClassificationTraceMaintenancePhase.LEGACY_EXPIRED_RUN_CONDITIONS
+                } else {
+                    ClassificationTraceMaintenancePhase.LEGACY_EXPIRED_RUN_RULES
+                },
                 candidate.runId,
             )
         }
@@ -404,10 +417,20 @@ class RoomClassificationTraceMaintenanceStore(
         }
 
         if (execution.detailState == ClassificationDetailState.PRUNING_CONDITIONS) {
-            if (dao.hasExecutionConditions(execution.id)) {
+            val conditions = dao.deleteExecutionConditions(
+                executionId = execution.id,
+                limit = conditionDeleteLimit(limit),
+                parentLimit = parentDeleteLimit(limit),
+            )
+            val rules = dao.deleteExecutionRules(execution.id, limit - conditions)
+            if (conditions + rules > 0) {
                 return result(
-                    dao.deleteExecutionConditions(execution.id, limit),
-                    ClassificationTraceMaintenancePhase.EXECUTION_CONDITIONS,
+                    conditions + rules,
+                    if (conditions > 0) {
+                        ClassificationTraceMaintenancePhase.EXECUTION_CONDITIONS
+                    } else {
+                        ClassificationTraceMaintenancePhase.EXECUTION_RULES
+                    },
                     execution.id,
                 )
             }
@@ -415,12 +438,9 @@ class RoomClassificationTraceMaintenanceStore(
             dao.updateExecutionEventStates(execution.id, ClassificationDetailState.PRUNING_RULES)
         }
 
-        if (dao.hasExecutionRules(execution.id)) {
-            return result(
-                dao.deleteExecutionRules(execution.id, limit),
-                ClassificationTraceMaintenancePhase.EXECUTION_RULES,
-                execution.id,
-            )
+        val remainingRules = dao.deleteExecutionRules(execution.id, limit)
+        if (remainingRules > 0) {
+            return result(remainingRules, ClassificationTraceMaintenancePhase.EXECUTION_RULES, execution.id)
         }
         dao.updateExecutionState(execution.id, ClassificationDetailState.SUMMARY_ONLY)
         dao.updateExecutionEventStates(execution.id, ClassificationDetailState.SUMMARY_ONLY)
@@ -474,4 +494,9 @@ class RoomClassificationTraceMaintenanceStore(
         phase = phase,
         executionId = executionId,
     )
+
+    /** Reserves at least one row per normal batch for advancing parent-rule deletion. */
+    private fun conditionDeleteLimit(limit: Int): Int = if (limit == 1) 1 else (limit * 3) / 4
+
+    private fun parentDeleteLimit(limit: Int): Int = maxOf(1, limit / 4)
 }
