@@ -94,13 +94,17 @@ class ClassificationTraceMaintenanceWorkerTest {
 
     @Test
     fun `continuation ceiling covers measured legacy rows but remains finite`() {
+        val minimumRowsPerChain =
+            (ClassificationTraceMaintenanceWorker.maxContinuationsPerChain() + 1L) *
+                ClassificationTraceMaintenanceRunner.ROWS_PER_BATCH
         val maximumRowsPerChain =
             (ClassificationTraceMaintenanceWorker.maxContinuationsPerChain() + 1L) *
                 ClassificationTraceMaintenanceRunner.MAX_BATCHES_PER_WINDOW *
                 ClassificationTraceMaintenanceRunner.ROWS_PER_BATCH
 
-        assertTrue(maximumRowsPerChain >= 15_400_000L)
-        assertEquals(25_700_000L, maximumRowsPerChain)
+        assertTrue(minimumRowsPerChain >= 15_400_000L)
+        assertEquals(20_485_000L, minimumRowsPerChain)
+        assertEquals(409_700_000L, maximumRowsPerChain)
         assertEquals(5, ClassificationTraceMaintenanceWorker.maxRetryAttempts())
         assertEquals(
             "classification-trace:maintenance",

@@ -93,7 +93,8 @@ class ClassificationTraceMaintenanceWorker @AssistedInject constructor(
     companion object {
         private const val UNIQUE_WORK_NAME = "classification-trace:maintenance"
         private const val ALL_TAG = "classification-trace:maintenance"
-        private const val MAX_CONTINUATIONS_PER_CHAIN = 256
+        /** Covers the measured legacy backlog even when every window completes only one batch. */
+        private const val MAX_CONTINUATIONS_PER_CHAIN = 4_096
         private const val MAX_RETRY_ATTEMPTS = 5
 
         internal fun uniqueWorkName(): String = UNIQUE_WORK_NAME
