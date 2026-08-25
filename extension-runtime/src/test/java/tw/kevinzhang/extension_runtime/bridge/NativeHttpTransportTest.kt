@@ -12,6 +12,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.TimeUnit
 
 class NativeHttpTransportTest {
     private lateinit var server: MockWebServer
@@ -128,6 +129,27 @@ class NativeHttpTransportTest {
     }
 
     @Test
+    fun requestTimeoutOverridesInheritedSocketTimeouts() = runBlocking {
+        val sharedClient = OkHttpClient.Builder()
+            .connectTimeout(75, TimeUnit.MILLISECONDS)
+            .readTimeout(75, TimeUnit.MILLISECONDS)
+            .writeTimeout(75, TimeUnit.MILLISECONDS)
+            .build()
+        server.enqueue(
+            MockResponse()
+                .setHeadersDelay(300, TimeUnit.MILLISECONDS)
+                .setBody("ok"),
+        )
+
+        val result = NativeHttpTransport(sharedClient).execute(
+            request("/slow", followRedirects = false, timeoutMs = 1_000),
+        )
+
+        assertEquals(200, result.status)
+        assertEquals("ok", result.body)
+    }
+
+    @Test
     fun malformedJsonKeepsParserCauseWithoutChangingStableError() {
         val error = try {
             HttpRequestJsonParser.parse("{not-json", Gson())
@@ -176,6 +198,7 @@ class NativeHttpTransportTest {
         path: String,
         followRedirects: Boolean,
         responseEncoding: String = "text",
+        timeoutMs: Long = 5_000,
     ) = NativeHttpRequest(
         method = "GET",
         url = server.url(path).toString(),
@@ -184,6 +207,6 @@ class NativeHttpTransportTest {
         bodyEncoding = "utf8",
         responseEncoding = responseEncoding,
         followRedirects = followRedirects,
-        timeoutMs = 5_000,
+        timeoutMs = timeoutMs,
     )
 }

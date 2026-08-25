@@ -182,6 +182,9 @@ internal class NativeHttpTransport(okHttpClient: OkHttpClient) {
         val client = baseClient.newBuilder()
             .followRedirects(request.followRedirects)
             .followSslRedirects(request.followRedirects)
+            .connectTimeout(request.timeoutMs, TimeUnit.MILLISECONDS)
+            .readTimeout(request.timeoutMs, TimeUnit.MILLISECONDS)
+            .writeTimeout(request.timeoutMs, TimeUnit.MILLISECONDS)
             .callTimeout(request.timeoutMs, TimeUnit.MILLISECONDS)
             .build()
         return client.newCall(okRequest).await().use { response -> response.toNative(request.responseEncoding) }
