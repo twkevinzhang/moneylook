@@ -26,6 +26,7 @@ import tw.kevinzhang.core.data.model.SourceDocument
 import tw.kevinzhang.core.data.model.TransferFieldObservation
 import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
 import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
+import tw.kevinzhang.core.data.model.ClassificationExecution
 
 @Database(
     entities = [
@@ -51,8 +52,9 @@ import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
         TransferFieldObservation::class,
         ClassificationRuleEvaluation::class,
         ClassificationConditionEvaluation::class,
+        ClassificationExecution::class,
     ],
-    version = 27,
+    version = 28,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
@@ -71,6 +73,7 @@ abstract class MoneylookDatabase : RoomDatabase() {
     abstract fun tagDao(): TagDao
     abstract fun syncResultDao(): SyncResultDao
     abstract fun syncDiagnosticDao(): SyncDiagnosticDao
+    abstract fun classificationTraceMaintenanceDao(): ClassificationTraceMaintenanceDao
 
     companion object {
         /** Seeds the full public catalog only when Room creates a brand-new database. */

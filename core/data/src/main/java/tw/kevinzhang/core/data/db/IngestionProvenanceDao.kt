@@ -12,6 +12,8 @@ import tw.kevinzhang.core.data.model.SourceDocument
 import tw.kevinzhang.core.data.model.TransferFieldObservation
 import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
 import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
+import tw.kevinzhang.core.data.model.ClassificationExecution
+import tw.kevinzhang.core.data.model.ClassificationExecutionStatus
 
 /**
  * Bounded-list projection for ingestion history.
@@ -76,6 +78,25 @@ data class SourceDocumentSummary(
 
 @Dao
 interface IngestionProvenanceDao {
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertClassificationExecution(execution: ClassificationExecution)
+
+    @Query(
+        """
+        UPDATE classification_executions
+        SET status = :status, completedAt = :completedAt
+        WHERE id = :executionId AND status = 'PENDING'
+        """,
+    )
+    suspend fun finishClassificationExecution(
+        executionId: String,
+        status: ClassificationExecutionStatus,
+        completedAt: Long,
+    ): Int
+
+    @Query("SELECT * FROM classification_executions WHERE id = :executionId LIMIT 1")
+    suspend fun getClassificationExecution(executionId: String): ClassificationExecution?
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertRun(run: IngestionRun)
 

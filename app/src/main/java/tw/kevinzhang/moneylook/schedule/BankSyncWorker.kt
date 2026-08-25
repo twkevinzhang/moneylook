@@ -48,6 +48,7 @@ class BankSyncWorker @AssistedInject constructor(
     private val installedExtensionDao: InstalledExtensionDao,
     private val credentialProfileDao: CredentialProfileDao,
     private val pendingSyncRequestDao: PendingSyncRequestDao,
+    private val classificationTraceMaintenanceScheduler: ClassificationTraceMaintenanceScheduler,
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -147,6 +148,12 @@ class BankSyncWorker @AssistedInject constructor(
                                     System.currentTimeMillis(),
                                 )
                                 pendingSyncRequestDao.deleteByExtensionId(completion.extensionId)
+                                // Trace retention is best-effort maintenance. Its scheduler
+                                // absorbs enqueue failures, so it cannot rewrite this terminal
+                                // bank result or cause another login attempt.
+                                wakeClassificationTraceMaintenanceAfterTerminal(
+                                    classificationTraceMaintenanceScheduler,
+                                )
                             }
                         }
                     }
@@ -297,6 +304,10 @@ class BankSyncWorker @AssistedInject constructor(
         }
     }
 }
+
+internal fun wakeClassificationTraceMaintenanceAfterTerminal(
+    scheduler: ClassificationTraceMaintenanceScheduler,
+): Boolean = enqueueBestEffort(scheduler::wake)
 
 private val SyncRequestTrigger.ingestionTrigger: IngestionTrigger
     get() = when (this) {

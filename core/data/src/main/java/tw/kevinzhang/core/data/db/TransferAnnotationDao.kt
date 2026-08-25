@@ -34,7 +34,43 @@ data class AutomaticClassificationDecision(
     val ruleSetContentSha256: String?,
     val matchScore: Int?,
     val classifierVersion: String?,
+    val classificationExecutionId: String? = null,
 )
+
+/** Permanent aggregate evidence; the four mismatch counters are mutually exclusive. */
+data class ClassificationDecisionSummary(
+    val evaluatedRuleCount: Int,
+    val matchedRuleCount: Int,
+    val retainedRuleCount: Int,
+    val unusableRuleCount: Int,
+    val scopeMismatchCount: Int,
+    val conditionMismatchCount: Int,
+    val categoryIncompatibleCount: Int,
+    val evaluatedConditionCount: Int,
+    val matchedConditionCount: Int,
+    val retainedConditionCount: Int,
+    val detailState: tw.kevinzhang.core.data.model.ClassificationDetailState =
+        tw.kevinzhang.core.data.model.ClassificationDetailState.REDUCED,
+) {
+    init {
+        require(evaluatedRuleCount >= 0 && matchedRuleCount >= 0 && retainedRuleCount >= 0)
+        require(unusableRuleCount >= 0 && scopeMismatchCount >= 0)
+        require(conditionMismatchCount >= 0 && categoryIncompatibleCount >= 0)
+        require(evaluatedConditionCount >= 0 && matchedConditionCount >= 0 && retainedConditionCount >= 0)
+        require(
+            evaluatedRuleCount == matchedRuleCount + unusableRuleCount + scopeMismatchCount +
+                conditionMismatchCount + categoryIncompatibleCount,
+        ) { "classification rule reason counts must be exhaustive and mutually exclusive" }
+        require(matchedRuleCount <= evaluatedRuleCount)
+        require(retainedRuleCount <= evaluatedRuleCount)
+        require(matchedConditionCount <= evaluatedConditionCount)
+        require(retainedConditionCount <= evaluatedConditionCount)
+    }
+
+    companion object {
+        val EMPTY = ClassificationDecisionSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    }
+}
 
 enum class AutomaticClassificationWriteResult { APPLIED, RECORDED_ONLY, PRESERVED_MANUAL }
 
@@ -289,6 +325,7 @@ abstract class TransferAnnotationDao {
     @Transaction
     open suspend fun applyAutomaticDecision(
         decision: AutomaticClassificationDecision,
+        summary: ClassificationDecisionSummary = ClassificationDecisionSummary.EMPTY,
     ): AutomaticClassificationWriteResult {
         val current = getByTransferIds(listOf(decision.transferId)).singleOrNull()
         if (current?.manualOverride == true) {
@@ -299,6 +336,7 @@ abstract class TransferAnnotationDao {
                     tagIds = emptySet(),
                 ),
                 previousCategoryId = current.categoryId,
+                summary = summary,
             )
             return AutomaticClassificationWriteResult.PRESERVED_MANUAL
         }
@@ -321,7 +359,7 @@ abstract class TransferAnnotationDao {
             )
             replaceAutoTags(decision.transferId, decision.tagIds)
         }
-        insertDecisionEvent(decision, current?.categoryId)
+        insertDecisionEvent(decision, current?.categoryId, summary)
         return if (decision.outcome == ClassificationOutcome.AUTO_APPLIED) {
             AutomaticClassificationWriteResult.APPLIED
         } else {
@@ -364,6 +402,7 @@ abstract class TransferAnnotationDao {
     private suspend fun insertDecisionEvent(
         decision: AutomaticClassificationDecision,
         previousCategoryId: String?,
+        summary: ClassificationDecisionSummary = ClassificationDecisionSummary.EMPTY,
     ) {
         insertAnnotationEvent(
             TransferAnnotationEvent(
@@ -382,6 +421,18 @@ abstract class TransferAnnotationDao {
                 ruleSetContentSha256 = decision.ruleSetContentSha256,
                 matchScore = decision.matchScore,
                 classifierVersion = decision.classifierVersion,
+                classificationExecutionId = decision.classificationExecutionId,
+                evaluatedRuleCount = summary.evaluatedRuleCount,
+                matchedRuleCount = summary.matchedRuleCount,
+                retainedRuleCount = summary.retainedRuleCount,
+                unusableRuleCount = summary.unusableRuleCount,
+                scopeMismatchCount = summary.scopeMismatchCount,
+                conditionMismatchCount = summary.conditionMismatchCount,
+                categoryIncompatibleCount = summary.categoryIncompatibleCount,
+                evaluatedConditionCount = summary.evaluatedConditionCount,
+                matchedConditionCount = summary.matchedConditionCount,
+                retainedConditionCount = summary.retainedConditionCount,
+                detailState = summary.detailState,
             ),
         )
     }

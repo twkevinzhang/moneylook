@@ -3,6 +3,7 @@ package tw.kevinzhang.core.data.model
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 /** The way an import was initiated; this is app-private audit metadata. */
 enum class IngestionTrigger {
@@ -45,6 +46,44 @@ enum class ClassificationOutcome {
     MANUAL_TAG_EDIT,
     RESUMED_AUTOMATIC,
 }
+
+/** Lifecycle of one classifier invocation spanning one or more transfer decisions. */
+enum class ClassificationExecutionStatus { PENDING, COMPLETE, FAILED }
+
+/**
+ * Amount of rule-level evidence that remains available for a decision/execution.
+ *
+ * The PRUNING values are durable maintenance cursors. They prevent a cancelled worker from
+ * deleting parent rule rows before all of their condition rows have been removed.
+ */
+enum class ClassificationDetailState {
+    LEGACY_FULL,
+    LEGACY_REDUCED,
+    REDUCED,
+    PRUNING_CONDITIONS,
+    PRUNING_RULES,
+    SUMMARY_ONLY,
+}
+
+/** A bounded classification invocation. Decision summaries remain after its detail is pruned. */
+@Entity(
+    tableName = "classification_executions",
+    indices = [
+        Index(value = ["extensionId", "completedAt"]),
+        Index(value = ["runId"]),
+        Index(value = ["status", "detailState"]),
+    ],
+)
+data class ClassificationExecution(
+    @PrimaryKey val id: String,
+    val extensionId: String,
+    val runId: String?,
+    val trigger: ClassificationTrigger,
+    val startedAt: Long,
+    val completedAt: Long?,
+    val status: ClassificationExecutionStatus,
+    val detailState: ClassificationDetailState,
+)
 
 /**
  * One immutable import attempt. [artifactSha256] identifies the installed code artifact.
@@ -108,7 +147,7 @@ data class TransferIngestionEvent(
 )
 
 /** Immutable category decision evidence; it has no FK to a transfer or rule by design. */
-@Entity(tableName = "transfer_annotation_events", indices = [Index(value = ["transferId", "occurredAt"]), Index(value = ["runId"]), Index(value = ["outcome"])])
+@Entity(tableName = "transfer_annotation_events", indices = [Index(value = ["transferId", "occurredAt"]), Index(value = ["runId"]), Index(value = ["outcome"]), Index(value = ["classificationExecutionId"])])
 data class TransferAnnotationEvent(
     @PrimaryKey val id: String,
     val occurredAt: Long,
@@ -125,6 +164,21 @@ data class TransferAnnotationEvent(
     val ruleSetContentSha256: String?,
     val matchScore: Int?,
     val classifierVersion: String?,
+    /** Null only for manual events and audit rows written before schema v28. */
+    val classificationExecutionId: String? = null,
+    /** Every evaluated rule belongs to exactly one of matched or the four mismatch counters. */
+    @ColumnInfo(defaultValue = "0") val evaluatedRuleCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val matchedRuleCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val retainedRuleCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val unusableRuleCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val scopeMismatchCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val conditionMismatchCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val categoryIncompatibleCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val evaluatedConditionCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val matchedConditionCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val retainedConditionCount: Int = 0,
+    @ColumnInfo(defaultValue = "'LEGACY_FULL'")
+    val detailState: ClassificationDetailState = ClassificationDetailState.SUMMARY_ONLY,
     /** Aggregate-only manual tag delta; tag identifiers and names are never recorded. */
     val tagAddedCount: Int = 0,
     val tagRemovedCount: Int = 0,
@@ -207,6 +261,7 @@ data class TransferFieldObservation(
         Index(value = ["transferId", "evaluatedAt"]),
         Index(value = ["runId"]),
         Index(value = ["ruleId"]),
+        Index(value = ["classificationExecutionId"]),
     ],
 )
 data class ClassificationRuleEvaluation(
@@ -227,6 +282,8 @@ data class ClassificationRuleEvaluation(
     val score: Int?,
     val reasonCode: String,
     val classifierVersion: String,
+    /** Null only for rows written before schema v28. */
+    val classificationExecutionId: String? = null,
 )
 
 /** One immutable clause evaluation belonging to [ClassificationRuleEvaluation]. */

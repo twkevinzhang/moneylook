@@ -73,7 +73,7 @@ class Migration16To17Test {
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(databaseName)
-                .callback(object : SupportSQLiteOpenHelper.Callback(27) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(28) {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(
                         db: SupportSQLiteDatabase,
@@ -99,12 +99,13 @@ class Migration16To17Test {
                 MIGRATION_24_25,
                 MIGRATION_25_26,
                 MIGRATION_26_27,
+                MIGRATION_27_28,
             )
             .allowMainThreadQueries()
             .build()
             .also { database ->
                 val migrated = database.openHelper.writableDatabase
-                assertEquals(27, migrated.version)
+                assertEquals(28, migrated.version)
                 assertTrue(tableExists(migrated, "auto_category_rule_sets"))
                 assertTrue(tableExists(migrated, "auto_category_rule_conditions"))
                 assertTrue(tableExists(migrated, "ingestion_runs"))
@@ -124,6 +125,7 @@ class Migration16To17Test {
      */
     private fun downgradeCurrentSchemaToV16(db: SupportSQLiteDatabase) {
         db.execSQL("PRAGMA foreign_keys = OFF")
+        db.execSQL("DROP TABLE `classification_executions`")
         db.execSQL("DROP TABLE `classification_condition_evaluations`")
         db.execSQL("DROP TABLE `classification_rule_evaluations`")
         db.execSQL("DROP TABLE `transfer_field_observations`")

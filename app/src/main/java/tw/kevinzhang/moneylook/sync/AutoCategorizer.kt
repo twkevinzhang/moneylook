@@ -15,8 +15,10 @@ import tw.kevinzhang.core.data.db.AutoCategoryRuleSetDao
 import tw.kevinzhang.core.data.db.AutomaticClassificationDecision
 import tw.kevinzhang.core.data.db.AutomaticClassificationWriteResult
 import tw.kevinzhang.core.data.db.ClassificationCatalogResetStore
+import tw.kevinzhang.core.data.db.ClassificationDecisionSummary
 import tw.kevinzhang.core.data.db.ClassificationTraceStore
 import tw.kevinzhang.core.data.model.ClassificationOutcome
+import tw.kevinzhang.core.data.model.ClassificationDetailState
 import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.AssignmentSource
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAction
@@ -33,6 +35,7 @@ import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
 import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
 import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleTextV2
+import tw.kevinzhang.moneylook.schedule.ClassificationTraceMaintenanceScheduler
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -48,6 +51,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 fun interface TransferAutoCategorizer {
     suspend fun categorizeTransferIds(transferIds: List<String>)
@@ -92,6 +98,7 @@ class AutoCategorizer @Inject constructor(
     private val classificationCatalogResetStore: ClassificationCatalogResetStore,
     private val ruleSetDao: AutoCategoryRuleSetDao? = null,
     private val gson: Gson = Gson(),
+    private val classificationTraceMaintenanceScheduler: ClassificationTraceMaintenanceScheduler,
 ) : TransferAutoCategorizer {
     private val categorizationMutex = Mutex()
 
@@ -264,67 +271,94 @@ class AutoCategorizer @Inject constructor(
             )
         }
         val enabledRules = ruleDao.getEnabledInPriorityOrder()
-        val rules = enabledRules.filter(::isUsableRule)
         var matchedTransferCount = 0
         var preservedManualOverrideCount = 0
+        var processedTransferCount = 0
 
-        candidates.forEachIndexed { index, candidate ->
-            val transfer = candidate.transfer
-            val isInternalTransfer = transfer.id in internalTransferIds
-            val decision = if (isInternalTransfer) null else rules.classificationDecision(candidate)
-            val match = decision as? ClassificationDecision.AutoApply
-            val outcome = when {
-                decision is ClassificationDecision.Abstain -> ClassificationOutcome.ABSTAINED
-                isInternalTransfer || match != null -> ClassificationOutcome.AUTO_APPLIED
-                else -> ClassificationOutcome.NO_MATCH
-            }
-            val trace = completeEvaluationTrace(
-                transfer = transfer,
-                candidate = candidate,
-                rules = enabledRules,
-                selectedRuleId = match?.evaluation?.ruleWithTags?.rule?.id,
-                ingestionRunId = ingestionRunId,
+        candidates.groupBy { it.transfer.extensionId }.forEach { (extensionId, extensionCandidates) ->
+            val executionId = classificationTraceStore.startExecution(
+                extensionId = extensionId,
                 trigger = trigger,
+                runId = ingestionRunId,
             )
-            val writeResult = classificationTraceStore.apply(
-                AutomaticClassificationDecision(
-                    transferId = transfer.id,
-                    extensionId = transfer.extensionId,
-                    categoryId = if (isInternalTransfer) {
-                        INTERNAL_TRANSFER_CATEGORY_ID
+            try {
+                extensionCandidates.forEach { candidate ->
+                    val transfer = candidate.transfer
+                    val isInternalTransfer = transfer.id in internalTransferIds
+                    val evaluation = if (isInternalTransfer) {
+                        ClassificationEvaluation.empty()
                     } else {
-                        match?.evaluation?.ruleWithTags?.rule?.categoryId
-                    },
-                    tagIds = if (isInternalTransfer || outcome != ClassificationOutcome.AUTO_APPLIED) {
-                        emptySet()
-                    } else {
-                        match?.evaluation?.ruleWithTags?.tags?.mapTo(mutableSetOf()) { it.id }.orEmpty()
-                    },
-                    runId = ingestionRunId,
-                    trigger = trigger,
-                    outcome = outcome,
-                    ruleId = match?.evaluation?.ruleWithTags?.rule?.id,
-                    ruleSetId = match?.evaluation?.ruleWithTags?.rule?.ruleSetId,
-                    ruleContentSha256 = match?.evaluation?.ruleWithTags?.contentSha256(),
-                    ruleSetContentSha256 = match?.evaluation?.ruleWithTags?.rule?.ruleSetId
-                        ?.let(ruleSetContentById::get),
-                    matchScore = match?.evaluation?.score,
-                    classifierVersion = CLASSIFIER_VERSION,
-                ),
-                ruleEvaluations = trace.rules,
-                conditionEvaluations = trace.conditions,
-            )
-            when (writeResult) {
-                AutomaticClassificationWriteResult.APPLIED -> matchedTransferCount += 1
-                AutomaticClassificationWriteResult.PRESERVED_MANUAL ->
-                    preservedManualOverrideCount += 1
-                AutomaticClassificationWriteResult.RECORDED_ONLY -> Unit
-            }
-            val processedTransferCount = index + 1
-            if (processedTransferCount % CLASSIFICATION_PROGRESS_BATCH_SIZE == 0 ||
-                processedTransferCount == candidates.size
-            ) {
-                onProgress?.invoke(processedTransferCount)
+                        enabledRules.evaluateClassification(candidate)
+                    }
+                    val decision = evaluation.decision
+                    val match = decision as? ClassificationDecision.AutoApply
+                    val outcome = when {
+                        decision is ClassificationDecision.Abstain -> ClassificationOutcome.ABSTAINED
+                        isInternalTransfer || match != null -> ClassificationOutcome.AUTO_APPLIED
+                        else -> ClassificationOutcome.NO_MATCH
+                    }
+                    val trace = evaluation.materializeTrace(
+                        transfer = transfer,
+                        selectedRuleId = match?.evaluation?.ruleWithTags?.rule?.id,
+                        ingestionRunId = ingestionRunId,
+                        executionId = executionId,
+                        trigger = trigger,
+                    )
+                    val writeResult = classificationTraceStore.apply(
+                        decision = AutomaticClassificationDecision(
+                            transferId = transfer.id,
+                            extensionId = transfer.extensionId,
+                            categoryId = if (isInternalTransfer) {
+                                INTERNAL_TRANSFER_CATEGORY_ID
+                            } else {
+                                match?.evaluation?.ruleWithTags?.rule?.categoryId
+                            },
+                            tagIds = if (
+                                isInternalTransfer || outcome != ClassificationOutcome.AUTO_APPLIED
+                            ) {
+                                emptySet()
+                            } else {
+                                match?.evaluation?.ruleWithTags?.tags
+                                    ?.mapTo(mutableSetOf()) { it.id }
+                                    .orEmpty()
+                            },
+                            runId = ingestionRunId,
+                            trigger = trigger,
+                            outcome = outcome,
+                            ruleId = match?.evaluation?.ruleWithTags?.rule?.id,
+                            ruleSetId = match?.evaluation?.ruleWithTags?.rule?.ruleSetId,
+                            ruleContentSha256 = match?.evaluation?.ruleWithTags?.contentSha256(),
+                            ruleSetContentSha256 = match?.evaluation?.ruleWithTags?.rule?.ruleSetId
+                                ?.let(ruleSetContentById::get),
+                            matchScore = match?.evaluation?.score,
+                            classifierVersion = CLASSIFIER_VERSION,
+                            classificationExecutionId = executionId,
+                        ),
+                        summary = evaluation.summary(trace),
+                        ruleEvaluations = trace.rules,
+                        conditionEvaluations = trace.conditions,
+                    )
+                    when (writeResult) {
+                        AutomaticClassificationWriteResult.APPLIED -> matchedTransferCount += 1
+                        AutomaticClassificationWriteResult.PRESERVED_MANUAL ->
+                            preservedManualOverrideCount += 1
+                        AutomaticClassificationWriteResult.RECORDED_ONLY -> Unit
+                    }
+                    processedTransferCount += 1
+                    if (processedTransferCount % CLASSIFICATION_PROGRESS_BATCH_SIZE == 0 ||
+                        processedTransferCount == candidates.size
+                    ) {
+                        onProgress?.invoke(processedTransferCount)
+                    }
+                }
+                classificationTraceStore.completeExecution(executionId)
+                wakeTraceMaintenance()
+            } catch (e: CancellationException) {
+                markExecutionFailed(executionId)
+                throw e
+            } catch (e: Exception) {
+                markExecutionFailed(executionId)
+                throw e
             }
         }
         return AutoCategoryApplicationResult(
@@ -334,86 +368,100 @@ class AutoCategorizer @Inject constructor(
         )
     }
 
-    private fun completeEvaluationTrace(
+    private suspend fun markExecutionFailed(executionId: String) {
+        withContext(NonCancellable) {
+            runCatching { classificationTraceStore.failExecution(executionId) }
+            wakeTraceMaintenance()
+        }
+    }
+
+    private fun wakeTraceMaintenance() {
+        runCatching { classificationTraceMaintenanceScheduler.wake() }
+    }
+
+    private fun ClassificationEvaluation.materializeTrace(
         transfer: Transfer,
-        candidate: TransferClassificationCandidate,
-        rules: List<AutoCategoryRuleWithTags>,
         selectedRuleId: String?,
         ingestionRunId: String?,
+        executionId: String,
         trigger: ClassificationTrigger,
     ): EvaluationTrace {
         val evaluatedAt = System.currentTimeMillis()
         val conditionRows = mutableListOf<ClassificationConditionEvaluation>()
-        val ruleRows = rules.map { ruleWithTags ->
-            val evaluationId = UUID.randomUUID().toString()
-            val scopeMatched = ruleWithTags.scopeMatches(candidate)
-            val categoryCompatible = ruleWithTags.categoryIsCompatibleWith(transfer)
-            val conditionMatches = ruleWithTags.conditions.map { condition ->
-                val actualValues = candidate.facts(condition.field)
-                val match = condition.matches(candidate)
-                conditionRows += ClassificationConditionEvaluation(
-                    id = UUID.randomUUID().toString(),
-                    ruleEvaluationId = evaluationId,
+        val ruleRows = rules.asSequence()
+            .filter(EvaluatedRule::matched)
+            .map { evaluatedRule ->
+                val ruleWithTags = evaluatedRule.ruleWithTags
+                val evaluationId = UUID.randomUUID().toString()
+                evaluatedRule.conditionEvaluations.forEach { conditionEvaluation ->
+                    val condition = conditionEvaluation.condition
+                    conditionRows += ClassificationConditionEvaluation(
+                        id = UUID.randomUUID().toString(),
+                        ruleEvaluationId = evaluationId,
+                        transferId = transfer.id,
+                        evaluatedAt = evaluatedAt,
+                        position = condition.position,
+                        conditionGroup = condition.conditionGroup.name,
+                        field = condition.field.name,
+                        matchMode = condition.matchMode.name,
+                        pattern = condition.pattern,
+                        candidateValuesJson = gson.toJson(conditionEvaluation.candidateValues),
+                        matched = conditionEvaluation.match.matched,
+                    )
+                }
+                ClassificationRuleEvaluation(
+                    id = evaluationId,
+                    runId = ingestionRunId,
                     transferId = transfer.id,
+                    extensionId = transfer.extensionId,
                     evaluatedAt = evaluatedAt,
-                    position = condition.position,
-                    conditionGroup = condition.conditionGroup.name,
-                    field = condition.field.name,
-                    matchMode = condition.matchMode.name,
-                    pattern = condition.pattern,
-                    candidateValuesJson = gson.toJson(actualValues),
-                    matched = match.matched,
+                    trigger = trigger,
+                    ruleId = ruleWithTags.rule.id,
+                    ruleSetId = ruleWithTags.rule.ruleSetId,
+                    ruleContentSha256 = ruleWithTags.contentSha256(),
+                    scopeMatched = evaluatedRule.scopeMatched,
+                    conditionsMatched = evaluatedRule.conditionsMatched,
+                    categoryCompatible = evaluatedRule.categoryCompatible,
+                    matched = evaluatedRule.matched,
+                    selected = ruleWithTags.rule.id == selectedRuleId,
+                    score = evaluatedRule.score,
+                    reasonCode = if (ruleWithTags.rule.id == selectedRuleId) {
+                        "SELECTED"
+                    } else {
+                        "MATCHED_NOT_SELECTED"
+                    },
+                    classifierVersion = CLASSIFIER_VERSION,
+                    classificationExecutionId = executionId,
                 )
-                match
             }
-            val legacyMatched = if (ruleWithTags.conditions.isEmpty()) {
-                ruleWithTags.legacyMatchScore(transfer) != null
-            } else {
-                true
-            }
-            val conditionsMatched = if (ruleWithTags.conditions.isEmpty()) {
-                legacyMatched
-            } else {
-                val byGroup = ruleWithTags.conditions.zip(conditionMatches)
-                    .groupBy({ it.first.conditionGroup }, { it.second.matched })
-                byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ALL].orEmpty().all { it } &&
-                    byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ANY].orEmpty()
-                        .let { it.isEmpty() || it.any { matched -> matched } } &&
-                    byGroup[AutoCategoryRuleConditionGroup.EXCLUDE_ANY].orEmpty().none { it }
-            }
-            val evaluation = ruleWithTags.evaluate(candidate)
-            val usable = isUsableRule(ruleWithTags)
-            val matched = usable && scopeMatched && conditionsMatched && categoryCompatible && evaluation != null
-            ClassificationRuleEvaluation(
-                id = evaluationId,
-                runId = ingestionRunId,
-                transferId = transfer.id,
-                extensionId = transfer.extensionId,
-                evaluatedAt = evaluatedAt,
-                trigger = trigger,
-                ruleId = ruleWithTags.rule.id,
-                ruleSetId = ruleWithTags.rule.ruleSetId,
-                ruleContentSha256 = ruleWithTags.contentSha256(),
-                scopeMatched = scopeMatched,
-                conditionsMatched = conditionsMatched,
-                categoryCompatible = categoryCompatible,
-                matched = matched,
-                selected = ruleWithTags.rule.id == selectedRuleId,
-                score = evaluation?.score,
-                reasonCode = when {
-                    !usable -> "UNUSABLE_RULE"
-                    !scopeMatched -> "SCOPE_MISMATCH"
-                    !conditionsMatched -> "CONDITION_MISMATCH"
-                    !categoryCompatible -> "CATEGORY_INCOMPATIBLE"
-                    ruleWithTags.rule.id == selectedRuleId -> "SELECTED"
-                    matched -> "MATCHED_NOT_SELECTED"
-                    else -> "NO_MATCH"
-                },
-                classifierVersion = CLASSIFIER_VERSION,
-            )
-        }
+            .toList()
         return EvaluationTrace(ruleRows, conditionRows)
     }
+
+    private fun ClassificationEvaluation.summary(trace: EvaluationTrace) =
+        ClassificationDecisionSummary(
+            evaluatedRuleCount = rules.size,
+            matchedRuleCount = rules.count(EvaluatedRule::matched),
+            retainedRuleCount = trace.rules.size,
+            unusableRuleCount = rules.count { it.reason == RuleEvaluationReason.UNUSABLE_RULE },
+            scopeMismatchCount = rules.count { it.reason == RuleEvaluationReason.SCOPE_MISMATCH },
+            conditionMismatchCount = rules.count {
+                it.reason == RuleEvaluationReason.CONDITION_MISMATCH
+            },
+            categoryIncompatibleCount = rules.count {
+                it.reason == RuleEvaluationReason.CATEGORY_INCOMPATIBLE
+            },
+            evaluatedConditionCount = rules.sumOf { it.conditionEvaluations.size },
+            matchedConditionCount = rules.sumOf { evaluatedRule ->
+                evaluatedRule.conditionEvaluations.count { it.match.matched }
+            },
+            retainedConditionCount = trace.conditions.size,
+            detailState = if (trace.rules.isEmpty()) {
+                ClassificationDetailState.SUMMARY_ONLY
+            } else {
+                ClassificationDetailState.REDUCED
+            },
+        )
 
     private data class EvaluationTrace(
         val rules: List<ClassificationRuleEvaluation>,
@@ -531,11 +579,137 @@ private const val CLASSIFICATION_PROGRESS_BATCH_SIZE = 25
  */
 internal fun List<AutoCategoryRuleWithTags>.classificationDecision(
     candidate: TransferClassificationCandidate,
-): ClassificationDecision? {
-    val evaluations = asSequence()
-        .mapNotNull { it.evaluate(candidate) }
-        .filter { it.ruleWithTags.categoryIsCompatibleWith(candidate.transfer) }
+): ClassificationDecision? = evaluateClassification(candidate).decision
+
+private data class ClassificationEvaluation(
+    val rules: List<EvaluatedRule>,
+    val decision: ClassificationDecision?,
+) {
+    companion object {
+        fun empty() = ClassificationEvaluation(emptyList(), null)
+    }
+}
+
+private enum class RuleEvaluationReason {
+    MATCHED,
+    UNUSABLE_RULE,
+    SCOPE_MISMATCH,
+    CONDITION_MISMATCH,
+    CATEGORY_INCOMPATIBLE,
+}
+
+private data class EvaluatedCondition(
+    val condition: AutoCategoryRuleCondition,
+    val candidateValues: List<String>,
+    val match: ConditionMatch,
+)
+
+private data class EvaluatedRule(
+    val ruleWithTags: AutoCategoryRuleWithTags,
+    val scopeMatched: Boolean,
+    val conditionsMatched: Boolean,
+    val categoryCompatible: Boolean,
+    val score: Int?,
+    val reason: RuleEvaluationReason,
+    val conditionEvaluations: List<EvaluatedCondition>,
+) {
+    val matched: Boolean = reason == RuleEvaluationReason.MATCHED
+}
+
+/**
+ * Evaluates each rule and condition exactly once. Persistence retains only the aggregate reason
+ * for non-matching rules and materializes details solely for matched candidates.
+ */
+private fun List<AutoCategoryRuleWithTags>.evaluateClassification(
+    candidate: TransferClassificationCandidate,
+): ClassificationEvaluation {
+    val evaluatedRules = map { ruleWithTags -> ruleWithTags.evaluateOnce(candidate) }
+    val matchedEvaluations = evaluatedRules.asSequence()
+        .filter(EvaluatedRule::matched)
+        .map { evaluatedRule ->
+            RuleEvaluation(
+                ruleWithTags = evaluatedRule.ruleWithTags,
+                score = checkNotNull(evaluatedRule.score),
+            )
+        }
         .toList()
+    return ClassificationEvaluation(
+        rules = evaluatedRules,
+        decision = matchedEvaluations.classificationDecision(),
+    )
+}
+
+private fun AutoCategoryRuleWithTags.evaluateOnce(
+    candidate: TransferClassificationCandidate,
+): EvaluatedRule {
+    if (!isUsableRule(this)) {
+        return EvaluatedRule(
+            ruleWithTags = this,
+            scopeMatched = false,
+            conditionsMatched = false,
+            categoryCompatible = false,
+            score = null,
+            reason = RuleEvaluationReason.UNUSABLE_RULE,
+            conditionEvaluations = emptyList(),
+        )
+    }
+    if (!scopeMatches(candidate)) {
+        return EvaluatedRule(
+            ruleWithTags = this,
+            scopeMatched = false,
+            conditionsMatched = false,
+            categoryCompatible = false,
+            score = null,
+            reason = RuleEvaluationReason.SCOPE_MISMATCH,
+            conditionEvaluations = emptyList(),
+        )
+    }
+
+    val conditionEvaluations = conditions.map { condition ->
+        condition.evaluateOnce(candidate)
+    }
+    val conditionScore = if (conditions.isEmpty()) {
+        legacyMatchScore(candidate.transfer)
+    } else {
+        conditionEvaluations.matchScore()
+    }
+    if (conditionScore == null) {
+        return EvaluatedRule(
+            ruleWithTags = this,
+            scopeMatched = true,
+            conditionsMatched = false,
+            categoryCompatible = false,
+            score = null,
+            reason = RuleEvaluationReason.CONDITION_MISMATCH,
+            conditionEvaluations = conditionEvaluations,
+        )
+    }
+
+    val categoryCompatible = categoryIsCompatibleWith(candidate.transfer)
+    if (!categoryCompatible) {
+        return EvaluatedRule(
+            ruleWithTags = this,
+            scopeMatched = true,
+            conditionsMatched = true,
+            categoryCompatible = false,
+            score = null,
+            reason = RuleEvaluationReason.CATEGORY_INCOMPATIBLE,
+            conditionEvaluations = conditionEvaluations,
+        )
+    }
+    return EvaluatedRule(
+        ruleWithTags = this,
+        scopeMatched = true,
+        conditionsMatched = true,
+        categoryCompatible = true,
+        score = conditionScore + rule.scopeScore() + rule.originScore(),
+        reason = RuleEvaluationReason.MATCHED,
+        conditionEvaluations = conditionEvaluations,
+    )
+}
+
+private fun List<RuleEvaluation>.classificationDecision(): ClassificationDecision? {
+    val evaluations = this
     if (evaluations.isEmpty()) return null
     if (evaluations.any { it.ruleWithTags.rule.action == AutoCategoryRuleAction.ABSTAIN }) {
         return ClassificationDecision.Abstain
@@ -560,6 +734,17 @@ internal fun List<AutoCategoryRuleWithTags>.classificationDecision(
     }
 }
 
+private fun AutoCategoryRuleCondition.evaluateOnce(
+    candidate: TransferClassificationCandidate,
+): EvaluatedCondition {
+    val candidateValues = candidate.facts(field)
+    return EvaluatedCondition(
+        condition = this,
+        candidateValues = candidateValues,
+        match = matches(candidateValues),
+    )
+}
+
 internal sealed interface ClassificationDecision {
     data class AutoApply(val evaluation: RuleEvaluation) : ClassificationDecision
     data object Abstain : ClassificationDecision
@@ -573,20 +758,6 @@ internal data class RuleEvaluation(
 private val ruleEvaluationComparator = compareByDescending<RuleEvaluation> { it.score }
     .thenBy { it.ruleWithTags.rule.priority }
     .thenBy { it.ruleWithTags.rule.id }
-
-private fun AutoCategoryRuleWithTags.evaluate(
-    candidate: TransferClassificationCandidate,
-): RuleEvaluation? {
-    val rule = this.rule
-    if (!scopeMatches(candidate)) return null
-    val conditionList = this.conditions
-    val conditionScore = if (conditionList.isEmpty()) {
-        legacyMatchScore(candidate.transfer) ?: return null
-    } else {
-        conditionList.matchScore(candidate) ?: return null
-    }
-    return RuleEvaluation(this, conditionScore + rule.scopeScore() + rule.originScore())
-}
 
 private fun AutoCategoryRuleWithTags.scopeMatches(candidate: TransferClassificationCandidate): Boolean {
     val rule = rule
@@ -617,18 +788,16 @@ private fun AutoCategoryRuleWithTags.categoryIsCompatibleWith(transfer: Transfer
     }
 }
 
-private fun List<AutoCategoryRuleCondition>.matchScore(
-    candidate: TransferClassificationCandidate,
-): Int? {
-    val byGroup = groupBy(AutoCategoryRuleCondition::conditionGroup)
+private fun List<EvaluatedCondition>.matchScore(): Int? {
+    val byGroup = groupBy { it.condition.conditionGroup }
     val includeAll = byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ALL].orEmpty()
     val includeAny = byGroup[AutoCategoryRuleConditionGroup.INCLUDE_ANY].orEmpty()
     val excludeAny = byGroup[AutoCategoryRuleConditionGroup.EXCLUDE_ANY].orEmpty()
-    val allMatches = includeAll.map { condition -> condition.matches(candidate) }
+    val allMatches = includeAll.map(EvaluatedCondition::match)
     if (allMatches.any { !it.matched }) return null
-    val anyMatches = includeAny.map { condition -> condition.matches(candidate) }
+    val anyMatches = includeAny.map(EvaluatedCondition::match)
     if (includeAny.isNotEmpty() && anyMatches.none { it.matched }) return null
-    if (excludeAny.any { it.matches(candidate).matched }) return null
+    if (excludeAny.any { it.match.matched }) return null
 
     val positiveMatches = allMatches + anyMatches.filter(ConditionMatch::matched)
     if (positiveMatches.isEmpty()) return null
@@ -640,7 +809,7 @@ private fun List<AutoCategoryRuleCondition>.matchScore(
 
 private data class ConditionMatch(val matched: Boolean, val score: Int = 0)
 
-private fun AutoCategoryRuleCondition.matches(candidate: TransferClassificationCandidate): ConditionMatch {
+private fun AutoCategoryRuleCondition.matches(candidateValues: List<String>): ConditionMatch {
     val normalize = if (field == AutoCategoryRuleConditionField.LEGACY_ANY_TEXT) {
         ::normalizeLegacyAutoCategoryRuleText
     } else {
@@ -648,7 +817,7 @@ private fun AutoCategoryRuleCondition.matches(candidate: TransferClassificationC
     }
     val expected = normalize(pattern)
     if (expected.isBlank()) return ConditionMatch(false)
-    val matched = candidate.facts(field)
+    val matched = candidateValues
         .asSequence()
         .map(normalize)
         .filter(String::isNotBlank)

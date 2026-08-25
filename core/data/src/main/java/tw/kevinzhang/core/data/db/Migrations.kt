@@ -870,3 +870,49 @@ val MIGRATION_26_27 = object : Migration(26, 27) {
         DefaultClassificationSeeder.upgradePublicCatalogToV7(db)
     }
 }
+
+/**
+ * Adds bounded classification executions and permanent decision aggregates.
+ *
+ * Existing multi-gigabyte trace rows are deliberately left untouched here. A resumable
+ * maintenance worker reduces and prunes them after the database is open, in small transactions.
+ */
+val MIGRATION_27_28 = object : Migration(27, 28) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `classification_executions` (
+                `id` TEXT NOT NULL,
+                `extensionId` TEXT NOT NULL,
+                `runId` TEXT,
+                `trigger` TEXT NOT NULL,
+                `startedAt` INTEGER NOT NULL,
+                `completedAt` INTEGER,
+                `status` TEXT NOT NULL,
+                `detailState` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_executions_extensionId_completedAt` ON `classification_executions` (`extensionId`, `completedAt`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_executions_runId` ON `classification_executions` (`runId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_executions_status_detailState` ON `classification_executions` (`status`, `detailState`)")
+
+        db.execSQL("ALTER TABLE `classification_rule_evaluations` ADD COLUMN `classificationExecutionId` TEXT")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_classification_rule_evaluations_classificationExecutionId` ON `classification_rule_evaluations` (`classificationExecutionId`)")
+
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `classificationExecutionId` TEXT")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `evaluatedRuleCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `matchedRuleCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `retainedRuleCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `unusableRuleCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `scopeMismatchCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `conditionMismatchCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `categoryIncompatibleCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `evaluatedConditionCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `matchedConditionCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `retainedConditionCount` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `transfer_annotation_events` ADD COLUMN `detailState` TEXT NOT NULL DEFAULT 'LEGACY_FULL'")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfer_annotation_events_classificationExecutionId` ON `transfer_annotation_events` (`classificationExecutionId`)")
+    }
+}

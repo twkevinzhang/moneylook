@@ -19,6 +19,8 @@ import tw.kevinzhang.core.data.db.ClassificationTraceStore
 import tw.kevinzhang.core.data.db.RoomClassificationTraceStore
 import tw.kevinzhang.core.data.db.ClassificationCatalogResetStore
 import tw.kevinzhang.core.data.db.RoomClassificationCatalogResetStore
+import tw.kevinzhang.core.data.db.ClassificationTraceMaintenanceStore
+import tw.kevinzhang.core.data.db.RoomClassificationTraceMaintenanceStore
 import tw.kevinzhang.core.data.db.MIGRATION_5_6
 import tw.kevinzhang.core.data.db.MIGRATION_6_7
 import tw.kevinzhang.core.data.db.MIGRATION_7_8
@@ -41,6 +43,7 @@ import tw.kevinzhang.core.data.db.MIGRATION_23_24
 import tw.kevinzhang.core.data.db.MIGRATION_24_25
 import tw.kevinzhang.core.data.db.MIGRATION_25_26
 import tw.kevinzhang.core.data.db.MIGRATION_26_27
+import tw.kevinzhang.core.data.db.MIGRATION_27_28
 import tw.kevinzhang.core.data.db.MoneylookDatabase
 import tw.kevinzhang.core.data.db.TransferSyncStore
 import tw.kevinzhang.core.data.db.TransferDao
@@ -80,6 +83,7 @@ object DataModule {
                 MIGRATION_24_25,
                 MIGRATION_25_26,
                 MIGRATION_26_27,
+                MIGRATION_27_28,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .build()
@@ -127,6 +131,14 @@ object DataModule {
             db.transferAnnotationDao(),
             db.ingestionProvenanceDao(),
         )
+
+    @Provides
+    fun provideClassificationTraceMaintenanceStore(
+        db: MoneylookDatabase,
+    ): ClassificationTraceMaintenanceStore = RoomClassificationTraceMaintenanceStore(
+        db,
+        db.classificationTraceMaintenanceDao(),
+    )
 
     @Provides
     @Singleton

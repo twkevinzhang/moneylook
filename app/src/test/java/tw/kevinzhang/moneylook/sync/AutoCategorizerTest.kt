@@ -34,15 +34,19 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CategoryReportingGroup
 import tw.kevinzhang.core.data.model.ClassificationOutcome
+import tw.kevinzhang.core.data.model.ClassificationDetailState
+import tw.kevinzhang.core.data.model.ClassificationExecutionStatus
 import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.Transfer
 import tw.kevinzhang.core.data.model.TransferAnnotation
+import tw.kevinzhang.moneylook.schedule.ClassificationTraceMaintenanceScheduler
 
 @RunWith(RobolectricTestRunner::class)
 class AutoCategorizerTest {
     private lateinit var database: MoneylookDatabase
     private lateinit var categorizer: AutoCategorizer
+    private lateinit var maintenanceScheduler: RecordingMaintenanceScheduler
 
     @Before
     fun setUp() {
@@ -62,6 +66,7 @@ class AutoCategorizerTest {
                 ),
             )
         }
+        maintenanceScheduler = RecordingMaintenanceScheduler()
         categorizer = AutoCategorizer(
             transferDao = database.transferDao(),
             annotationDao = database.transferAnnotationDao(),
@@ -78,11 +83,12 @@ class AutoCategorizerTest {
                 database.transferAnnotationDao(),
                 database.ingestionProvenanceDao(),
             ),
+            classificationTraceMaintenanceScheduler = maintenanceScheduler,
         )
     }
 
     @Test
-    fun `records every enabled rule and complete condition actual values`() = runBlocking {
+    fun `records only matched rule details and aggregates non-match reasons`() = runBlocking {
         val food = Category("food", "餐飲", "#2E7D32")
         database.categoryDao().upsert(food)
         database.autoCategoryRuleDao().upsertWithDetails(
@@ -104,12 +110,30 @@ class AutoCategorizerTest {
             ),
             tagIds = emptySet(),
         )
-        database.autoCategoryRuleDao().upsertWithTags(
-            AutoCategoryRule(
+        database.autoCategoryRuleDao().upsertWithDetails(
+            rule = AutoCategoryRule(
                 id = "nonmatching-rule",
                 name = "不符合",
-                descriptionContains = "absent",
                 amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
+                categoryId = food.id,
+            ),
+            conditions = listOf(
+                AutoCategoryRuleCondition(
+                    ruleId = "nonmatching-rule",
+                    position = 0,
+                    conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                    field = AutoCategoryRuleConditionField.MERCHANT_NAME,
+                    matchMode = AutoCategoryRuleConditionMatchMode.CONTAINS,
+                    pattern = "absent",
+                ),
+            ),
+            tagIds = emptySet(),
+        )
+        database.autoCategoryRuleDao().upsertWithTags(
+            AutoCategoryRule(
+                id = "scope-mismatch-rule",
+                name = "正數交易",
+                amountSign = AutoCategoryRuleAmountSign.POSITIVE,
                 categoryId = food.id,
             ),
             emptySet(),
@@ -121,15 +145,141 @@ class AutoCategorizerTest {
         categorizer.categorizeTransferIds(listOf(transfer.id), "run-evaluation")
 
         val rules = database.ingestionProvenanceDao().getRuleEvaluations(transfer.id)
-        assertEquals(setOf("merchant-rule", "nonmatching-rule"), rules.map { it.ruleId }.toSet())
-        assertTrue(rules.single { it.ruleId == "merchant-rule" }.selected)
-        assertFalse(rules.single { it.ruleId == "nonmatching-rule" }.matched)
+        assertEquals(listOf("merchant-rule"), rules.map { it.ruleId })
+        assertTrue(rules.single().selected)
+        assertTrue(rules.single().matched)
         database.ingestionProvenanceDao().getConditionEvaluations(transfer.id).single().also {
             assertEquals("MERCHANT_NAME", it.field)
             assertEquals("""["Fictional Merchant"]""", it.candidateValuesJson)
             assertTrue(it.matched)
         }
+        database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id).single().also {
+            assertEquals(3, it.evaluatedRuleCount)
+            assertEquals(1, it.matchedRuleCount)
+            assertEquals(1, it.retainedRuleCount)
+            assertEquals(0, it.unusableRuleCount)
+            assertEquals(1, it.scopeMismatchCount)
+            assertEquals(1, it.conditionMismatchCount)
+            assertEquals(0, it.categoryIncompatibleCount)
+            assertEquals(2, it.evaluatedConditionCount)
+            assertEquals(1, it.matchedConditionCount)
+            assertEquals(1, it.retainedConditionCount)
+            assertEquals(ClassificationDetailState.REDUCED, it.detailState)
+        }
         Unit
+    }
+
+    @Test
+    fun `pure non-match decision is summary-only without trace detail`() = runBlocking {
+        val food = Category("summary-food", "餐飲", "#2E7D32")
+        database.categoryDao().upsert(food)
+        database.autoCategoryRuleDao().upsertWithTags(
+            AutoCategoryRule(
+                id = "summary-miss",
+                name = "不符合",
+                descriptionContains = "absent",
+                categoryId = food.id,
+            ),
+            emptySet(),
+        )
+        val transfer = transfer("summary-only-transfer", "anything", -10.0)
+        database.transferDao().upsertAll(listOf(transfer))
+
+        categorizer.categorizeTransferIds(listOf(transfer.id), "summary-only-run")
+
+        assertTrue(database.ingestionProvenanceDao().getRuleEvaluations(transfer.id).isEmpty())
+        assertTrue(database.ingestionProvenanceDao().getConditionEvaluations(transfer.id).isEmpty())
+        database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id).single().also {
+            assertEquals(ClassificationOutcome.NO_MATCH, it.outcome)
+            assertEquals(1, it.evaluatedRuleCount)
+            assertEquals(0, it.retainedRuleCount)
+            assertEquals(1, it.conditionMismatchCount)
+            assertEquals(ClassificationDetailState.SUMMARY_ONLY, it.detailState)
+        }
+        Unit
+    }
+
+    @Test
+    fun `abstained decision retains every conflicting matched candidate and no non-match`() = runBlocking {
+        val food = Category("abstain-food", "餐飲", "#2E7D32")
+        val transport = Category("abstain-transport", "交通", "#1565C0")
+        database.categoryDao().upsert(food)
+        database.categoryDao().upsert(transport)
+        listOf(
+            "food-rule" to food,
+            "transport-rule" to transport,
+        ).forEach { (ruleId, category) ->
+            database.autoCategoryRuleDao().upsertWithDetails(
+                rule = AutoCategoryRule(
+                    id = ruleId,
+                    name = ruleId,
+                    amountSign = AutoCategoryRuleAmountSign.NEGATIVE,
+                    categoryId = category.id,
+                ),
+                conditions = listOf(
+                    AutoCategoryRuleCondition(
+                        ruleId = ruleId,
+                        position = 0,
+                        conditionGroup = AutoCategoryRuleConditionGroup.INCLUDE_ANY,
+                        field = AutoCategoryRuleConditionField.DESCRIPTION,
+                        matchMode = AutoCategoryRuleConditionMatchMode.EXACT,
+                        pattern = "collision",
+                    ),
+                ),
+                tagIds = emptySet(),
+            )
+        }
+        database.autoCategoryRuleDao().upsertWithTags(
+            AutoCategoryRule(
+                id = "scope-mismatch",
+                name = "scope mismatch",
+                amountSign = AutoCategoryRuleAmountSign.POSITIVE,
+                categoryId = food.id,
+            ),
+            emptySet(),
+        )
+        val transfer = transfer("abstain-trace", "collision", -100.0)
+        database.transferDao().upsertAll(listOf(transfer))
+
+        categorizer.categorizeTransferIds(listOf(transfer.id))
+
+        val rules = database.ingestionProvenanceDao().getRuleEvaluations(transfer.id)
+        assertEquals(setOf("food-rule", "transport-rule"), rules.map { it.ruleId }.toSet())
+        assertTrue(rules.all { it.matched && !it.selected })
+        assertEquals(2, database.ingestionProvenanceDao().getConditionEvaluations(transfer.id).size)
+        database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id).single().also {
+            assertEquals(ClassificationOutcome.ABSTAINED, it.outcome)
+            assertEquals(3, it.evaluatedRuleCount)
+            assertEquals(2, it.matchedRuleCount)
+            assertEquals(2, it.retainedRuleCount)
+            assertEquals(1, it.scopeMismatchCount)
+            assertEquals(2, it.retainedConditionCount)
+        }
+        Unit
+    }
+
+    @Test
+    fun `one terminal classification execution is recorded per extension`() = runBlocking {
+        val first = transfer("execution-first", "first", -1.0, extensionId = "extension-first")
+        val second = transfer("execution-second", "second", -1.0, extensionId = "extension-second")
+        database.transferDao().upsertAll(listOf(first, second))
+
+        categorizer.categorizeTransferIds(listOf(first.id, second.id))
+
+        val firstEvent = database.ingestionProvenanceDao()
+            .getTransferAnnotationEvents(first.id)
+            .single()
+        val secondEvent = database.ingestionProvenanceDao()
+            .getTransferAnnotationEvents(second.id)
+            .single()
+        assertTrue(firstEvent.classificationExecutionId != secondEvent.classificationExecutionId)
+        listOf(firstEvent, secondEvent).forEach { event ->
+            val execution = database.ingestionProvenanceDao()
+                .getClassificationExecution(checkNotNull(event.classificationExecutionId))
+            assertEquals(event.extensionId, execution?.extensionId)
+            assertEquals(ClassificationExecutionStatus.COMPLETE, execution?.status)
+            assertTrue(execution?.completedAt != null)
+        }
     }
 
     @Test
@@ -163,6 +313,7 @@ class AutoCategorizerTest {
         assertTrue(database.transferAnnotationDao().getByTransferIds(listOf(transfer.id)).isEmpty())
         assertTrue(database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id).isEmpty())
         assertTrue(database.ingestionProvenanceDao().getRuleEvaluations(transfer.id).isEmpty())
+        assertEquals(1, maintenanceScheduler.wakeCount)
     }
 
     @After
@@ -1660,4 +1811,14 @@ class AutoCategorizerTest {
         currency: String = "TWD",
         accountKind: AssetKind = AssetKind.DEPOSIT,
     ) = TransferClassificationCandidate(transfer, currency, accountKind)
+
+    private class RecordingMaintenanceScheduler : ClassificationTraceMaintenanceScheduler {
+        var wakeCount: Int = 0
+
+        override fun wake() {
+            wakeCount += 1
+        }
+
+        override fun continueAfter(continuation: Int) = Unit
+    }
 }
