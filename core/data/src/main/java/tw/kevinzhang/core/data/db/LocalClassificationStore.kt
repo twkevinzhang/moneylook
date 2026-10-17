@@ -10,6 +10,8 @@ class LocalClassificationStore @Inject constructor(private val database: Moneylo
     /** A DB snapshot provides consistent learning/rules across pages; cancellation rolls it back. */
     suspend fun <T> snapshot(block: suspend () -> T): T = database.withTransaction { block() }
 
+    suspend fun sourceManifestId(extensionId: String): String? = dao.extension(extensionId)?.manifestId
+
     suspend fun evidence(id: String): ClassificationLocalEvidence? = dao.evidence(id)
 
     suspend fun refreshExamples() {

@@ -23,6 +23,9 @@ import java.util.UUID
  */
 @Dao
 abstract class SyncResultDao : TransferSyncStore {
+    @Query("SELECT manifestId FROM installed_extensions WHERE id=:extensionId")
+    protected abstract suspend fun sourceManifestId(extensionId: String): String?
+
     @Query("SELECT transferId FROM classification_pending WHERE runId=:runId AND transferId IN (:suppliedIds) ORDER BY transferId")
     abstract override suspend fun classificationTargetIds(runId: String, suppliedIds: List<String>): List<String>
     @Query("SELECT EXISTS(SELECT 1 FROM classification_pending WHERE transferId=:id)")
@@ -72,11 +75,12 @@ abstract class SyncResultDao : TransferSyncStore {
             legacyIdentityByAccountId = legacyIdentityByAccountId,
             replaceKinds = replaceKinds,
         )
+        val manifestId = sourceManifestId(extensionId)
         for (transfer in transfers) {
             val previous = previousTransfers[transfer.id]
             if (previous == null ||
-                tw.kevinzhang.core.data.classification.classificationInput(previous.copy(accountId = transfer.accountId)) !=
-                tw.kevinzhang.core.data.classification.classificationInput(transfer) || hasPendingClassification(transfer.id)) {
+                tw.kevinzhang.core.data.classification.classificationInput(previous.copy(accountId = transfer.accountId), manifestId) !=
+                tw.kevinzhang.core.data.classification.classificationInput(transfer, manifestId) || hasPendingClassification(transfer.id)) {
                 putPendingClassification(tw.kevinzhang.core.data.model.ClassificationPending(transfer.id, ingestionContext.runId))
             }
         }

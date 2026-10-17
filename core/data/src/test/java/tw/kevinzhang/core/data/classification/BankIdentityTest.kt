@@ -10,8 +10,36 @@ class BankIdentityTest {
         Transfer("t", "source", "ext", "2026-10-18T12:00:00", "轉帳", -100.0, null, "",
             counterpartyBank = bank, counterpartyAccount = number)
 
+    private fun post(number: String = "0012345678901234") = transfer(bank = null, number = null).copy(
+        description = "網路跨行",
+        sourceFactsJson = """{"branchNumber":{"value":"$number","rawKey":"COS_BRH_NO"}}""",
+    )
+    private val taishin = listOf(OwnedBankAccount("taishin", "812", "12345678901234"))
+
+    @Test fun `post padded full account matches unique logged in account without bank`() {
+        assertTrue(matchesOwnedAccount(post(), taishin, "tw.gov.post.ipost"))
+        assertTrue(matchesOwnedAccount(post().copy(counterpartyAccount = "0012345678901234", sourceFactsJson = null), taishin, "tw.gov.post.ipost"))
+        assertTrue(matchesOwnedAccount(post().copy(counterpartyBank = "812"), taishin, "tw.gov.post.ipost"))
+        assertTrue(matchesOwnedAccount(post(), taishin + taishin.single().copy(accountId = "other-currency"), "tw.gov.post.ipost"))
+    }
+    @Test fun `post fallback rejects ambiguity unknown bank and contradictory bank`() {
+        assertFalse(matchesOwnedAccount(post(), taishin + OwnedBankAccount("other", "013", "12345678901234"), "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post(), taishin + OwnedBankAccount("other", "013", "0012345678901234"), "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post().copy(counterpartyBank = "013"), taishin, "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post().copy(counterpartyBank = "unknown"), taishin, "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post(), emptyList(), "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post().copy(accountId = "taishin"), taishin, "tw.gov.post.ipost"))
+    }
+    @Test fun `post fallback never infers ownership from a suffix mask or untrusted origin`() {
+        for (number in listOf("01234", "***********01234", "9912345678901234")) {
+            assertFalse(matchesOwnedAccount(post(number), taishin, "tw.gov.post.ipost"))
+        }
+        assertFalse(matchesOwnedAccount(post(), taishin, "tw.com.other"))
+        assertFalse(matchesOwnedAccount(post().copy(description = "提款"), taishin, "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post().copy(sourceFactsJson = "invalid"), taishin, "tw.gov.post.ipost"))
+    }
     @Test fun `known mobile and ATM transfer descriptions preserve ownership proof`() {
-        for (description in listOf("行銀跨行轉", "ATM跨行轉")) {
+        for (description in listOf("行銀跨行轉", "ATM跨行轉", "網路跨行")) {
             assertTrue(description, matchesOwnedAccount(transfer().copy(description = description), owned))
         }
     }

@@ -27,8 +27,8 @@ fun featuresOf(transfer: Transfer): LocalClassificationFeatures {
 fun bigrams(value: String): Set<String> = value.windowed(2).toSet()
 
 /** Only classifier-visible bank facts; balances, parser versions and raw documents are excluded. */
-fun classificationInput(t: Transfer): List<Any?> = listOf(
+fun classificationInput(t: Transfer, sourceManifestId: String? = null): List<Any?> = listOf(
     t.accountId, t.extensionId, t.amount, t.description, t.memo, t.type, t.status,
     t.merchantName, t.merchantCategoryCode, t.counterpartyName, t.purpose, t.channel,
-    t.referenceNumber, t.merchantLocation, t.transactionCode, t.counterpartyAccount, t.counterpartyBank,
+    t.referenceNumber, t.merchantLocation, t.transactionCode, ipostPaddedCounterpartyAccount(t, sourceManifestId) ?: t.counterpartyAccount, t.counterpartyBank,
 )

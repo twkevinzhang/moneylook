@@ -1515,6 +1515,24 @@ class AutoCategorizerTest {
         )
     }
 
+    @Test fun `apply all reads legacy post evidence and removed login retracts ownership`() = runBlocking {
+        val source = tw.kevinzhang.core.data.model.InstalledExtension("extension", "tw.gov.post.ipost", "Post", 1, "repo", "script", null)
+        val target = source.copy(id = "target-bank", manifestId = "tw.com.taishinbank")
+        database.installedExtensionDao().insert(source)
+        database.installedExtensionDao().insert(target)
+        database.credentialProfileDao().upsert(tw.kevinzhang.core.data.model.CredentialProfile(target.id, "test", scheduleCron = "0 0 * * *", timezoneId = "Asia/Taipei"))
+        database.accountDao().upsertAll(listOf(account("own-target").copy(extensionId = target.id, accountNo = "12345678901234")))
+        val row = transfer("post-legacy", "網路跨行", -24000.0).copy(
+            sourceFactsJson = """{"branchNumber":{"value":"0012345678901234","rawKey":"COS_BRH_NO"}}""")
+        database.transferDao().upsertAll(listOf(row))
+        assertTrue(database.transferAnnotationDao().getByTransferIds(listOf(row.id)).isEmpty())
+        categorizer.applyToExistingTransactions()
+        assertEquals("transfer-account", database.transferAnnotationDao().getByTransferIds(listOf(row.id)).single().categoryId)
+        database.credentialProfileDao().deleteByExtensionId(target.id)
+        categorizer.applyToExistingTransactions()
+        assertFalse(database.transferAnnotationDao().getByTransferIds(listOf(row.id)).single().categoryId == "transfer-account")
+    }
+
     @Test fun `bank and owned suffix classify without a counterpart and removed login stops matching`() = runBlocking {
         val extension = tw.kevinzhang.core.data.model.InstalledExtension("owned-bank", "tw.com.cathaybk", "Bank", 1, "repo", "script", null)
         database.installedExtensionDao().insert(extension)

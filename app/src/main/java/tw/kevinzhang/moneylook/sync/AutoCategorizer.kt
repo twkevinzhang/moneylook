@@ -145,6 +145,7 @@ class AutoCategorizer @Inject constructor(
         localStore.refreshExamples()
         val fallbacks = localStore.ensureFallbackCategories()
         val owned = localStore.ownedAccounts()
+        val sourceManifests = mutableMapOf<String, String?>()
         val canTransfer = categoryDao.getById(INTERNAL_TRANSFER_CATEGORY_ID)?.reportingGroup == CategoryReportingGroup.EXCLUDED
         val rules = ruleDao.getEnabledInPriorityOrder().filter { it.rule.categoryId != INTERNAL_TRANSFER_CATEGORY_ID }
         val ruleContents = ruleSetDao?.getAll().orEmpty().associate { it.id to it.contentSha256 }
@@ -160,7 +161,10 @@ class AutoCategorizer @Inject constructor(
             val page = if (ids == null) transferDao.classificationPage(after, 250)
                 else transferDao.classificationByIds(ids.subList(offset, minOf(offset + 250, ids.size)))
             if (page.isEmpty() && (ids == null || offset >= ids.size)) break
-            val ownIds = if (canTransfer) page.filter { matchesOwnedAccount(it.transfer, owned) }.mapTo(mutableSetOf()) { it.transfer.id } else emptySet()
+            for (extensionId in page.map { it.transfer.extensionId }.distinct()) {
+                if (extensionId !in sourceManifests) sourceManifests[extensionId] = localStore.sourceManifestId(extensionId)
+            }
+            val ownIds = if (canTransfer) page.filter { matchesOwnedAccount(it.transfer, owned, sourceManifests[it.transfer.extensionId]) }.mapTo(mutableSetOf()) { it.transfer.id } else emptySet()
             val before = processed
             val result = categorize(page, ownIds, runId, trigger, ruleContents, rules, fallbacks) {
                 onProgress(AutoCategoryApplicationProgress(before + it, total))
@@ -215,7 +219,7 @@ class AutoCategorizer @Inject constructor(
                     val match = decision as? ClassificationDecision.AutoApply
                     val learned = if (!isInternalTransfer) localStore.learned(transfer) else null
                     val choice = when {
-                        isInternalTransfer -> LocalCategoryChoice(INTERNAL_TRANSFER_CATEGORY_ID, LocalDecisionSource.OWN_ACCOUNT, "BANK_ACCOUNT_MATCH")
+                        isInternalTransfer -> LocalCategoryChoice(INTERNAL_TRANSFER_CATEGORY_ID, LocalDecisionSource.OWN_ACCOUNT, "OWNED_ACCOUNT_MATCH")
                         learned != null -> learned
                         match?.evaluation?.ruleWithTags?.rule?.categoryId != null -> LocalCategoryChoice(
                             match.evaluation.ruleWithTags.rule.categoryId!!, LocalDecisionSource.RULE, "RULE_MATCH")

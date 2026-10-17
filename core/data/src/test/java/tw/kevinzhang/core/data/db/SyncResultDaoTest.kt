@@ -46,6 +46,23 @@ class SyncResultDaoTest {
         assertEquals(listOf(original.id), database.syncResultDao().classificationTargetIds("changed", listOf(original.id)))
     }
 
+    @Test fun `post parser enrichment preserves old classification until explicit apply all`() = runBlocking {
+        val original = transfer("local-target", "2026-10-18", -100.0)
+        suspend fun ingest(run: String, value: Transfer) {
+            database.syncResultDao().replaceSnapshot("extension", listOf(account("account")), listOf(value),
+                listOf(AccountTransferRefresh("account", null)), ingestionContext = IngestionContext(
+                    run, 1, 2, 1, null, null, IngestionTrigger.USER_SYNC, IngestionStatus.SUCCESS,
+                    sourceFingerprint = "source", fingerprintKeyVersion = 1,
+                    transferFingerprints = mapOf(value.id to TransferFingerprintEvidence("source", "payload"))))
+        }
+        database.installedExtensionDao().insert(tw.kevinzhang.core.data.model.InstalledExtension("extension", "tw.gov.post.ipost", "Post", 1, "repo", "script", null))
+        val old = original.copy(description = "網路跨行", sourceFactsJson = """{"branchNumber":{"value":"0012345678901234","rawKey":"COS_BRH_NO"}}""")
+        ingest("old", old)
+        database.localClassificationDao().clearPending()
+        ingest("enriched", old.copy(counterpartyAccount = "0012345678901234"))
+        assertTrue(database.syncResultDao().classificationTargetIds("enriched", listOf(old.id)).isEmpty())
+    }
+
     private lateinit var database: MoneylookDatabase
 
     @Before

@@ -33,12 +33,37 @@ fun normalizeBankIdentity(value: String?): String? {
 private fun account(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
     .replace(Regex("[\\s-]"), "")
 
-fun matchesOwnedAccount(transfer: Transfer, accounts: List<OwnedBankAccount>): Boolean {
+/** Known iPost inter-bank rows encode a complete account left-padded to 16 digits. */
+fun ipostPaddedCounterpartyAccount(transfer: Transfer, sourceManifestId: String?): String? {
+    if (sourceManifestId != "tw.gov.post.ipost" || transfer.description.trim() != "網路跨行") return null
+    val structured = transfer.counterpartyAccount?.takeIf { it.isNotBlank() }
+    val value = structured ?: runCatching {
+        val facts = com.google.gson.JsonParser.parseString(transfer.sourceFactsJson ?: return null).asJsonObject
+        val field = facts.getAsJsonObject("branchNumber") ?: return null
+        if (field.get("rawKey")?.asString != "COS_BRH_NO") return null
+        field.get("value")?.asString
+    }.getOrNull() ?: return null
+    return account(value).takeIf { it.matches(Regex("[0-9]{16}")) }
+}
+
+fun matchesOwnedAccount(transfer: Transfer, accounts: List<OwnedBankAccount>, sourceManifestId: String? = null): Boolean {
     val semantics = listOfNotNull(transfer.type, transfer.description, transfer.purpose, transfer.transactionCode)
         .joinToString(" ").lowercase()
-    if (!Regex("轉帳|轉入|轉出|跨行轉|匯入|匯出|匯款|transfer|remittance").containsMatchIn(semantics)) return false
-    val bank = normalizeBankIdentity(transfer.counterpartyBank) ?: return false
-    val incoming = account(transfer.counterpartyAccount ?: return false)
+    if (!Regex("轉帳|轉入|轉出|跨行轉|網路跨行|匯入|匯出|匯款|transfer|remittance").containsMatchIn(semantics)) return false
+    val padded = ipostPaddedCounterpartyAccount(transfer, sourceManifestId)
+    val bank = normalizeBankIdentity(transfer.counterpartyBank)
+    if (bank == null) {
+        // An unknown/nonempty bank is not missing evidence and must never use this exception.
+        if (!transfer.counterpartyBank.isNullOrBlank() || padded == null) return false
+        val matches = accounts.filter { target ->
+            val own = account(target.accountNumber)
+            target.accountId != transfer.accountId && normalizeBankIdentity(target.bankId) != null &&
+                own.length in 6..16 && own.all(Char::isDigit) && own.padStart(16, '0') == padded
+        }.map { normalizeBankIdentity(it.bankId) to account(it.accountNumber) }.distinct()
+        // Multiple currency rows of the same bank/account represent one physical account.
+        return matches.size == 1
+    }
+    val incoming = padded ?: account(transfer.counterpartyAccount ?: return false)
     if (!incoming.matches(Regex("[0-9*xX●•]+"))) return false
     val suffix = incoming.takeLast(5).takeIf { it.matches(Regex("[0-9]{5}")) } ?: return false
     return accounts.any { target ->
@@ -47,7 +72,8 @@ fun matchesOwnedAccount(transfer: Transfer, accounts: List<OwnedBankAccount>): B
         if (!own.matches(Regex("[0-9*xX●•]+"))) return@any false
         val incomingComplete = incoming.length > 5 && incoming.all(Char::isDigit)
         val ownComplete = own.length > 5 && own.all(Char::isDigit)
-        if (incomingComplete && ownComplete) incoming == own
-        else own.length >= 5 && own.takeLast(5) == suffix
+        if (incomingComplete && ownComplete) {
+            if (padded != null && own.length <= 16) incoming == own.padStart(16, '0') else incoming == own
+        } else own.length >= 5 && own.takeLast(5) == suffix
     }
 }
