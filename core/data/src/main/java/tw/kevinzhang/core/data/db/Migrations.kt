@@ -925,6 +925,16 @@ val MIGRATION_28_29 = object : Migration(28, 29) {
 }
 val MIGRATION_29_30 = object : Migration(29, 30) {
     override fun migrate(db: SupportSQLiteDatabase) {
+        // An installed legacy v29 database can predate the bankId addition.
+        // Inspect its schema so both v29 variants preserve existing account data.
+        val hasBankId = db.query("PRAGMA table_info(accounts)").use { cursor ->
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "bankId") found = true
+            }
+            found
+        }
+        if (!hasBankId) db.execSQL("ALTER TABLE accounts ADD COLUMN bankId TEXT")
         db.execSQL("CREATE TABLE IF NOT EXISTS classification_learning_examples (transferId TEXT NOT NULL PRIMARY KEY, categoryId TEXT NOT NULL, accountId TEXT NOT NULL, direction INTEGER NOT NULL, identity TEXT NOT NULL, transactionType TEXT NOT NULL, tokenCount INTEGER NOT NULL, correctionSequence INTEGER NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS index_classification_learning_examples_identity_direction_accountId_transactionType ON classification_learning_examples(identity,direction,accountId,transactionType)")
         db.execSQL("CREATE TABLE IF NOT EXISTS classification_learning_tokens (token TEXT NOT NULL, transferId TEXT NOT NULL, PRIMARY KEY(token,transferId))")
