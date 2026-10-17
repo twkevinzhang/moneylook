@@ -916,3 +916,27 @@ val MIGRATION_27_28 = object : Migration(27, 28) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_transfer_annotation_events_classificationExecutionId` ON `transfer_annotation_events` (`classificationExecutionId`)")
     }
 }
+
+
+val MIGRATION_28_29 = object : Migration(28, 29) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE accounts ADD COLUMN bankId TEXT")
+    }
+}
+val MIGRATION_29_30 = object : Migration(29, 30) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS classification_learning_examples (transferId TEXT NOT NULL PRIMARY KEY, categoryId TEXT NOT NULL, accountId TEXT NOT NULL, direction INTEGER NOT NULL, identity TEXT NOT NULL, transactionType TEXT NOT NULL, tokenCount INTEGER NOT NULL, correctionSequence INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_classification_learning_examples_identity_direction_accountId_transactionType ON classification_learning_examples(identity,direction,accountId,transactionType)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS classification_learning_tokens (token TEXT NOT NULL, transferId TEXT NOT NULL, PRIMARY KEY(token,transferId))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_classification_learning_tokens_transferId ON classification_learning_tokens(transferId)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS classification_learning_clock (id INTEGER NOT NULL PRIMARY KEY, sequence INTEGER NOT NULL)")
+    }
+}
+val MIGRATION_30_31 = object : Migration(30, 31) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS classification_fallback_roles (role TEXT NOT NULL PRIMARY KEY, categoryId TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS classification_local_evidence (transferId TEXT NOT NULL PRIMARY KEY, source TEXT NOT NULL, reason TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS classification_pending (transferId TEXT NOT NULL PRIMARY KEY, runId TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_classification_pending_runId ON classification_pending(runId)")
+    }
+}

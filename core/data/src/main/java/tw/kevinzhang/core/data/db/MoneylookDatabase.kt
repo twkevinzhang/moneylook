@@ -31,6 +31,13 @@ import tw.kevinzhang.core.data.model.ClassificationExecution
 @Database(
     entities = [
         Account::class,
+        tw.kevinzhang.core.data.model.ClassificationLearningExample::class,
+        tw.kevinzhang.core.data.model.ClassificationLearningToken::class,
+        tw.kevinzhang.core.data.model.ClassificationLearningClock::class,
+        tw.kevinzhang.core.data.model.ClassificationFallbackRole::class,
+        tw.kevinzhang.core.data.model.ClassificationLocalEvidence::class,
+        tw.kevinzhang.core.data.model.ClassificationPending::class,
+
         AutoCategoryRule::class,
         AutoCategoryRuleTagCrossRef::class,
         AutoCategoryRuleCondition::class,
@@ -54,11 +61,12 @@ import tw.kevinzhang.core.data.model.ClassificationExecution
         ClassificationConditionEvaluation::class,
         ClassificationExecution::class,
     ],
-    version = 28,
+    version = 31,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
 abstract class MoneylookDatabase : RoomDatabase() {
+    abstract fun localClassificationDao(): LocalClassificationDao
     abstract fun accountDao(): AccountDao
     abstract fun autoCategoryRuleDao(): AutoCategoryRuleDao
     abstract fun autoCategoryRuleSetDao(): AutoCategoryRuleSetDao

@@ -24,6 +24,9 @@ class RoomClassificationCatalogResetStore(
                 .groupingBy { it.transferId }
                 .eachCount()
 
+            database.localClassificationDao().clearTokens()
+            database.localClassificationDao().clearExamples()
+            database.localClassificationDao().clearEvidence()
             annotationDao.resetClassificationState()
             DefaultClassificationSeeder.resetToDefaults(database.openHelper.writableDatabase)
 

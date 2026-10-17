@@ -75,6 +75,8 @@ class SyncResultPersister @Inject constructor(
                 currency = data.currency,
                 lastSyncAt = startedAt,
                 accountNo = data.no,
+                bankId = tw.kevinzhang.core.data.classification.normalizeBankIdentity(data.bankId)
+                    ?: tw.kevinzhang.core.data.classification.normalizeBankIdentity(extension.manifestId),
                 sourceAccountKey = data.sourceAccountKey,
                 kind = data.kind,
                 branchName = data.branchName,

@@ -7,6 +7,7 @@ data class AccountData(
     val balance: Double,
     val currency: String,
     val no: String? = null,
+    val bankId: String? = null,
     /** Lowercase 64-character SHA-256 hex identity for cursor matching; legacy extensions may omit it. */
     val sourceAccountKey: String? = null,
     val kind: AssetKind = AssetKind.DEPOSIT,

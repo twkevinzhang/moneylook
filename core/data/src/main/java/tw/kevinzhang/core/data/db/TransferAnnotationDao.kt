@@ -35,6 +35,8 @@ data class AutomaticClassificationDecision(
     val matchScore: Int?,
     val classifierVersion: String?,
     val classificationExecutionId: String? = null,
+    val localSource: String? = null,
+    val localReason: String? = null,
 )
 
 /** Permanent aggregate evidence; the four mismatch counters are mutually exclusive. */
@@ -223,6 +225,8 @@ abstract class TransferAnnotationDao {
         require(tagCrossRefs.all { it.transferId == transferId }) {
             "tag transfer id mismatch"
         }
+        removeLearning(transferId)
+        deleteEvidence(transferId)
         deleteAllTags(transferId)
         if (annotation == null) {
             deleteAnnotation(transferId)
@@ -251,6 +255,8 @@ abstract class TransferAnnotationDao {
         }
         require(annotation.manualOverride) { "manual save requires manualOverride" }
         val previous = getByTransferIds(listOf(annotation.transferId)).singleOrNull()
+        val categoryChanged = previous?.categoryId != annotation.categoryId || previous?.manualOverride != true
+        if (categoryChanged) updateLearning(annotation.transferId, annotation.categoryId)
         val previousManualTagIds = getManualTagCrossRefs(annotation.transferId).mapTo(mutableSetOf()) { it.tagId }
         upsert(annotation)
         deleteAllTags(annotation.transferId)
@@ -328,6 +334,7 @@ abstract class TransferAnnotationDao {
         summary: ClassificationDecisionSummary = ClassificationDecisionSummary.EMPTY,
     ): AutomaticClassificationWriteResult {
         val current = getByTransferIds(listOf(decision.transferId)).singleOrNull()
+        clearPending(decision.transferId)
         if (current?.manualOverride == true) {
             insertDecisionEvent(
                 decision.copy(
@@ -358,6 +365,7 @@ abstract class TransferAnnotationDao {
                 ),
             )
             replaceAutoTags(decision.transferId, decision.tagIds)
+            if (decision.localSource != null) putEvidence(tw.kevinzhang.core.data.model.ClassificationLocalEvidence(decision.transferId, decision.localSource, decision.localReason.orEmpty()))
         }
         insertDecisionEvent(decision, current?.categoryId, summary)
         return if (decision.outcome == ClassificationOutcome.AUTO_APPLIED) {
@@ -370,6 +378,7 @@ abstract class TransferAnnotationDao {
     /** Clears a manual override under the same serialization boundary used by classifier writes. */
     @Transaction
     open suspend fun resumeAutomaticClassification(transferId: String) {
+        removeLearning(transferId)
         val existing = getByTransferIds(listOf(transferId)).singleOrNull() ?: return
         upsert(
             existing.copy(
@@ -494,6 +503,44 @@ abstract class TransferAnnotationDao {
 
     @Query("DELETE FROM transfer_annotations WHERE transferId = :transferId")
     protected abstract suspend fun deleteAnnotation(transferId: String)
+
+    @Query("SELECT * FROM transfers WHERE id=:id")
+    protected abstract suspend fun learningTransfer(id: String): Transfer?
+    @Query("INSERT OR IGNORE INTO classification_learning_clock(id, sequence) VALUES(1,0)")
+    protected abstract suspend fun initClock()
+    @Query("UPDATE classification_learning_clock SET sequence=sequence+1 WHERE id=1")
+    protected abstract suspend fun advanceClock()
+    @Query("SELECT sequence FROM classification_learning_clock WHERE id=1")
+    protected abstract suspend fun clock(): Long
+    @Upsert protected abstract suspend fun putLearning(value: tw.kevinzhang.core.data.model.ClassificationLearningExample)
+    @Upsert protected abstract suspend fun putLearningTokens(value: List<tw.kevinzhang.core.data.model.ClassificationLearningToken>)
+    @Query("DELETE FROM classification_learning_examples WHERE transferId=:id")
+    protected abstract suspend fun deleteLearning(id: String)
+    @Query("DELETE FROM classification_learning_tokens WHERE transferId=:id")
+    protected abstract suspend fun deleteLearningTokens(id: String)
+    @Query("DELETE FROM classification_pending WHERE transferId=:id")
+    protected abstract suspend fun clearPending(id: String)
+    @Upsert protected abstract suspend fun putEvidence(value: tw.kevinzhang.core.data.model.ClassificationLocalEvidence)
+    @Query("DELETE FROM classification_local_evidence WHERE transferId=:id")
+    protected abstract suspend fun deleteEvidence(id: String)
+
+    private suspend fun removeLearning(id: String) {
+        deleteLearningTokens(id)
+        deleteLearning(id)
+    }
+    private suspend fun updateLearning(id: String, category: String?) {
+        removeLearning(id)
+        deleteEvidence(id)
+        if (category == null) return
+        val transfer = learningTransfer(id) ?: return
+        val f = tw.kevinzhang.core.data.classification.featuresOf(transfer)
+        initClock()
+        advanceClock()
+        val tokens = tw.kevinzhang.core.data.classification.bigrams(f.identity)
+        putLearning(tw.kevinzhang.core.data.model.ClassificationLearningExample(id, category, f.accountId,
+            f.direction, f.identity, f.transactionType, tokens.size, clock()))
+        putLearningTokens(tokens.map { tw.kevinzhang.core.data.model.ClassificationLearningToken(it, id) })
+    }
 
     private companion object {
         const val TRANSFER_DETAIL_SELECT = """

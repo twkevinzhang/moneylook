@@ -17,6 +17,7 @@ data class Account(
     val currency: String,
     val lastSyncAt: Long,                 // epoch millis
     val accountNo: String? = null,
+    val bankId: String? = null,
     /**
      * Opaque, extension-defined source identity used to match history cursors.
      * It is a lowercase 64-character SHA-256 hex digest, never an account or card number.

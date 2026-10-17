@@ -9,6 +9,9 @@ import tw.kevinzhang.core.data.model.CategoryReportingGroup
 
 @Dao
 interface CategoryDao {
+    @Query("SELECT name FROM categories")
+    suspend fun allNames(): List<String>
+
     @Query("SELECT * FROM categories ORDER BY name COLLATE NOCASE, id")
     fun observeAll(): Flow<List<Category>>
 
