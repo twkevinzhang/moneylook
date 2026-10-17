@@ -143,7 +143,6 @@ class AutoCategorizer @Inject constructor(
         onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
     ): AutoCategoryApplicationResult = localStore.snapshot {
         localStore.refreshExamples()
-        val fallbacks = localStore.ensureFallbackCategories()
         val owned = localStore.ownedAccounts()
         val sourceManifests = mutableMapOf<String, String?>()
         val canTransfer = categoryDao.getById(INTERNAL_TRANSFER_CATEGORY_ID)?.reportingGroup == CategoryReportingGroup.EXCLUDED
@@ -166,7 +165,7 @@ class AutoCategorizer @Inject constructor(
             }
             val ownIds = if (canTransfer) page.filter { matchesOwnedAccount(it.transfer, owned, sourceManifests[it.transfer.extensionId]) }.mapTo(mutableSetOf()) { it.transfer.id } else emptySet()
             val before = processed
-            val result = categorize(page, ownIds, runId, trigger, ruleContents, rules, fallbacks) {
+            val result = categorize(page, ownIds, runId, trigger, ruleContents, rules) {
                 onProgress(AutoCategoryApplicationProgress(before + it, total))
             }
             processed += result.processedTransferCount
@@ -186,7 +185,6 @@ class AutoCategorizer @Inject constructor(
         trigger: ClassificationTrigger,
         ruleSetContentById: Map<String, String>,
         enabledRules: List<AutoCategoryRuleWithTags>,
-        fallbacks: Map<CategoryReportingGroup, String>,
         onProgress: ((processedTransferCount: Int) -> Unit)? = null,
     ): AutoCategoryApplicationResult {
         if (candidates.isEmpty()) {
@@ -223,17 +221,12 @@ class AutoCategorizer @Inject constructor(
                         learned != null -> learned
                         match?.evaluation?.ruleWithTags?.rule?.categoryId != null -> LocalCategoryChoice(
                             match.evaluation.ruleWithTags.rule.categoryId!!, LocalDecisionSource.RULE, "RULE_MATCH")
-                        else -> localStore.history(transfer) ?: LocalCategoryChoice(
-                            fallbacks.getValue(when {
-                                transfer.amount > 0 -> CategoryReportingGroup.INCOME
-                                transfer.amount < 0 -> CategoryReportingGroup.EXPENSE
-                                else -> CategoryReportingGroup.EXCLUDED
-                            }), LocalDecisionSource.FALLBACK, "UNKNOWN_PURPOSE")
+                        else -> localStore.history(transfer)
                     }
-                    val outcome = ClassificationOutcome.AUTO_APPLIED
+                    val outcome = if (choice != null || match != null) ClassificationOutcome.AUTO_APPLIED else ClassificationOutcome.NO_MATCH
                     val trace = evaluation.materializeTrace(
                         transfer = transfer,
-                        selectedRuleId = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.id,
+                        selectedRuleId = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.id,
                         ingestionRunId = ingestionRunId,
                         executionId = executionId,
                         trigger = trigger,
@@ -242,9 +235,9 @@ class AutoCategorizer @Inject constructor(
                         decision = AutomaticClassificationDecision(
                             transferId = transfer.id,
                             extensionId = transfer.extensionId,
-                            categoryId = choice.categoryId,
-                            localSource = choice.source.name,
-                            localReason = choice.reason,
+                            categoryId = choice?.categoryId,
+                            localSource = choice?.source?.name ?: "UNCLASSIFIED",
+                            localReason = choice?.reason ?: "INSUFFICIENT_EVIDENCE",
                             tagIds = if (
                                 isInternalTransfer || outcome != ClassificationOutcome.AUTO_APPLIED
                             ) {
@@ -257,12 +250,12 @@ class AutoCategorizer @Inject constructor(
                             runId = ingestionRunId,
                             trigger = trigger,
                             outcome = outcome,
-                            ruleId = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.id,
-                            ruleSetId = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.ruleSetId,
-                            ruleContentSha256 = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.contentSha256(),
-                            ruleSetContentSha256 = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.ruleSetId
+                            ruleId = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.id,
+                            ruleSetId = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.ruleSetId,
+                            ruleContentSha256 = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.contentSha256(),
+                            ruleSetContentSha256 = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.ruleSetId
                                 ?.let(ruleSetContentById::get),
-                            matchScore = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.score,
+                            matchScore = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.score,
                             classifierVersion = CLASSIFIER_VERSION,
                             classificationExecutionId = executionId,
                         ),

@@ -87,6 +87,7 @@ object DataModule {
                 tw.kevinzhang.core.data.db.MIGRATION_28_29,
                 tw.kevinzhang.core.data.db.MIGRATION_29_30,
                 tw.kevinzhang.core.data.db.MIGRATION_30_31,
+                tw.kevinzhang.core.data.db.MIGRATION_31_32,
             )
             .addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .build()

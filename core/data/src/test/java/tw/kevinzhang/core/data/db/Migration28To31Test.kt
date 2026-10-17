@@ -46,7 +46,7 @@ class Migration28To31Test {
             db.version = 29
             current.close()
             val migrated = Room.databaseBuilder(context, MoneylookDatabase::class.java, name)
-                .allowMainThreadQueries().addMigrations(MIGRATION_29_30, MIGRATION_30_31).build()
+                .allowMainThreadQueries().addMigrations(MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32).build()
             try {
                 val opened = migrated.openHelper.writableDatabase
                 opened.query("SELECT accountNo,bankId FROM accounts WHERE id='a'").use {

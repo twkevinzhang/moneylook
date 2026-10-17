@@ -53,28 +53,4 @@ class LocalClassificationStore @Inject constructor(private val database: Moneylo
             ?: normalizeBankIdentity(dao.extension(account.extensionId)?.manifestId) ?: return@mapNotNull null
         OwnedBankAccount(account.id, bank, account.accountNo ?: return@mapNotNull null)
     }
-    suspend fun ensureFallbackCategories(): Map<CategoryReportingGroup, String> = database.withTransaction {
-        val roles = dao.roles().associateBy { it.role }
-        CategoryReportingGroup.entries.associateWith { group ->
-            val current = roles[group.name]?.let { database.categoryDao().getById(it.categoryId) }
-            val label = when (group) {
-                CategoryReportingGroup.INCOME -> "收入"
-                CategoryReportingGroup.EXPENSE -> "支出"
-                CategoryReportingGroup.EXCLUDED -> "零額"
-            }
-            val existingNames = database.categoryDao().allNames().toSet()
-            val base = "其他／用途不明（$label）"
-            if (current != null && current.reportingGroup == group &&
-                (current.name == base || current.name.matches(Regex("${Regex.escape(base)} (?:[2-9]|[1-9][0-9]+)")))) {
-                return@associateWith current.id
-            }
-            var name = base
-            var suffix = 2
-            while (name in existingNames) { name = "$base ${suffix++}" }
-            val id = "local-fallback-${group.name.lowercase()}-${java.util.UUID.randomUUID()}"
-            database.categoryDao().upsert(Category(id, name, "#78909C", reportingGroup = group))
-            dao.putRole(ClassificationFallbackRole(group.name, id))
-            id
-        }
-    }
 }

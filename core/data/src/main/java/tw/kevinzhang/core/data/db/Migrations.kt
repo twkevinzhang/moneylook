@@ -950,3 +950,29 @@ val MIGRATION_30_31 = object : Migration(30, 31) {
         db.execSQL("CREATE INDEX IF NOT EXISTS index_classification_pending_runId ON classification_pending(runId)")
     }
 }
+
+/** Retires generated unknown-purpose categories without reclassifying other history. */
+val MIGRATION_31_32 = object : Migration(31, 32) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        val retired = mutableListOf<String>()
+        db.query("SELECT id,name,kind FROM categories WHERE id LIKE 'local-fallback-%'").use { cursor ->
+            while (cursor.moveToNext()) {
+                val id = cursor.getString(0)
+                val name = cursor.getString(1)
+                val group = cursor.getString(2)
+                val label = when (group) { "INCOME" -> "收入"; "EXPENSE" -> "支出"; "EXCLUDED" -> "零額"; else -> continue }
+                val base = "其他／用途不明（$label）"
+                if (id.startsWith("local-fallback-${group.lowercase()}-") &&
+                    (name == base || name.matches(Regex("${Regex.escape(base)} (?:[2-9]|[1-9][0-9]+)")))) retired += id
+            }
+        }
+        for (id in retired) {
+            db.execSQL("DELETE FROM classification_local_evidence WHERE transferId IN (SELECT transferId FROM transfer_annotations WHERE categoryId=?)", arrayOf(id))
+            db.execSQL("DELETE FROM classification_learning_tokens WHERE transferId IN (SELECT transferId FROM classification_learning_examples WHERE categoryId=?)", arrayOf(id))
+            db.execSQL("DELETE FROM classification_learning_examples WHERE categoryId=?", arrayOf(id))
+            db.execSQL("UPDATE transfer_annotations SET categoryId=NULL,autoRuleId=NULL,autoRuleSetId=NULL,autoMatchScore=NULL WHERE categoryId=?", arrayOf(id))
+            db.execSQL("DELETE FROM categories WHERE id=?", arrayOf(id))
+        }
+        db.execSQL("DELETE FROM classification_fallback_roles")
+    }
+}

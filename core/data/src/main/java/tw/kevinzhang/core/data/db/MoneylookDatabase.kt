@@ -61,7 +61,7 @@ import tw.kevinzhang.core.data.model.ClassificationExecution
         ClassificationConditionEvaluation::class,
         ClassificationExecution::class,
     ],
-    version = 31,
+    version = 32,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)

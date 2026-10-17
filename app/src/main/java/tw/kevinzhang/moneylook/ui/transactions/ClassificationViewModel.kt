@@ -246,7 +246,7 @@ class ClassificationViewModel @Inject constructor(
                 "LEARNED" -> "本機學習"
                 "RULE" -> "自動分類規則"
                 "HISTORY" -> "本機歷史推測"
-                else -> "用途不明"
+                else -> "尚未分類"
             }
             listOf("目前自動分類來源：$source · ${it.reason}")
         }.orEmpty()

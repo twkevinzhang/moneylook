@@ -1,6 +1,6 @@
 package tw.kevinzhang.core.data.classification
 
-enum class LocalDecisionSource { OWN_ACCOUNT, LEARNED, RULE, HISTORY, FALLBACK }
+enum class LocalDecisionSource { OWN_ACCOUNT, LEARNED, RULE, HISTORY }
 data class LocalCategoryChoice(val categoryId: String, val source: LocalDecisionSource, val reason: String)
 data class LearningSample(val transferId: String, val categoryId: String, val features: LocalClassificationFeatures, val correctionSequence: Long) {
     override fun toString() = "LearningSample([REDACTED])"
