@@ -17,6 +17,13 @@ data class TransferClassificationCandidate(
 
 @Dao
 interface TransferDao : TransferCursorStore {
+    @Query("SELECT t.*, a.currency AS currency, a.kind AS accountKind FROM transfers t INNER JOIN accounts a ON a.id=t.accountId WHERE t.id>:after ORDER BY t.id LIMIT :limit")
+    suspend fun classificationPage(after: String, limit: Int): List<TransferClassificationCandidate>
+    @Query("SELECT t.*, a.currency AS currency, a.kind AS accountKind FROM transfers t INNER JOIN accounts a ON a.id=t.accountId WHERE t.id IN (:ids) ORDER BY t.id")
+    suspend fun classificationByIds(ids: List<String>): List<TransferClassificationCandidate>
+    @Query("SELECT COUNT(*) FROM transfers t INNER JOIN accounts a ON a.id=t.accountId")
+    suspend fun classificationCount(): Int
+
     @Query("SELECT * FROM transfers WHERE accountId = :accountId ORDER BY txnDateTime DESC")
     fun observeByAccount(accountId: String): Flow<List<Transfer>>
 

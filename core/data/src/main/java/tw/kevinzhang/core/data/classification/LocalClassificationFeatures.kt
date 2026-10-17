@@ -11,10 +11,16 @@ data class LocalClassificationFeatures(val accountId: String, val direction: Int
 private fun normalize(value: String) = Normalizer.normalize(value, Normalizer.Form.NFKC)
     .lowercase(Locale.ROOT).trim().replace(Regex("\\s+"), " ")
 private val generic = setOf("轉帳", "消費", "存款", "提款", "匯款", "轉入", "轉出", "transfer", "payment", "交易", "支出", "收入")
+// Channel/action-only descriptions carry no merchant or purpose identity.
+private val genericWords = Regex("網路|網銀|行銀|跨行|自行|銀行|自動|線上|電子|atm|轉帳|轉入|轉出|匯入|匯出|匯款|消費|存款|提款|交易|支出|收入|扣款|付款|入帳|轉|transfer|payment")
+private fun informative(value: String): Boolean {
+    val remainder = genericWords.replace(value, "").filter { it.isLetter() }
+    return value.length >= 2 && value !in generic && remainder.isNotEmpty()
+}
 fun featuresOf(transfer: Transfer): LocalClassificationFeatures {
     val identity = sequenceOf(transfer.merchantName, transfer.counterpartyName, transfer.description)
         .filterNotNull().map(::normalize)
-        .firstOrNull { it.length >= 2 && it !in generic && !it.all { ch -> ch.isDigit() || ch.isWhitespace() } }.orEmpty()
+        .firstOrNull { informative(it) }.orEmpty()
     return LocalClassificationFeatures(transfer.accountId, transfer.amount.compareTo(0.0), identity, normalize(transfer.type.orEmpty()))
 }
 

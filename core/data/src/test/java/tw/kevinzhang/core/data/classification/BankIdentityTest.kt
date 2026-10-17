@@ -10,6 +10,11 @@ class BankIdentityTest {
         Transfer("t", "source", "ext", "2026-10-18T12:00:00", "轉帳", -100.0, null, "",
             counterpartyBank = bank, counterpartyAccount = number)
 
+    @Test fun `known mobile and ATM transfer descriptions preserve ownership proof`() {
+        for (description in listOf("行銀跨行轉", "ATM跨行轉")) {
+            assertTrue(description, matchesOwnedAccount(transfer().copy(description = description), owned))
+        }
+    }
     @Test fun `full and masked accounts match without a paired transaction`() {
         assertTrue(matchesOwnedAccount(transfer(), owned))
         assertTrue(matchesOwnedAccount(transfer(number = "***67890"), owned))

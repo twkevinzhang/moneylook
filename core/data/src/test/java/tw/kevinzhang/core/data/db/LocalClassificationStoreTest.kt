@@ -47,6 +47,20 @@ class LocalClassificationStoreTest {
         store.refreshExamples()
         assertNull(store.history(transfer))
     }
+    @Test fun `editing only a note on an automatic category does not teach that category`() = runBlocking {
+        db.transferAnnotationDao().upsert(TransferAnnotation("t", "e", "food"))
+        save("food", "只是加備註")
+        store.refreshExamples()
+        assertNull(store.learned(transfer))
+        assertNull(store.history(transfer))
+    }
+    @Test fun `renamed fallback is preserved and replaced`() = runBlocking {
+        val oldId = store.ensureFallbackCategories().getValue(CategoryReportingGroup.EXPENSE)
+        val old = db.categoryDao().getById(oldId)!!
+        db.categoryDao().upsert(old.copy(name = "使用者改名的餐飲"))
+        assertNotEquals(oldId, store.ensureFallbackCategories().getValue(CategoryReportingGroup.EXPENSE))
+        assertEquals("使用者改名的餐飲", db.categoryDao().getById(oldId)!!.name)
+    }
     @Test fun `fallback keeps reporting direction and does not overwrite edited categories`() = runBlocking {
         val ids = store.ensureFallbackCategories()
         assertEquals(CategoryReportingGroup.INCOME, db.categoryDao().getById(ids.getValue(CategoryReportingGroup.INCOME))!!.reportingGroup)
@@ -56,5 +70,18 @@ class LocalClassificationStoreTest {
         val replacement = store.ensureFallbackCategories().getValue(CategoryReportingGroup.EXPENSE)
         assertNotEquals(old.id, replacement)
         assertEquals(CategoryReportingGroup.EXCLUDED, db.categoryDao().getById(old.id)!!.reportingGroup)
+    }
+    @Test fun `removing extension metadata removes its persistent learning`() = runBlocking {
+        save("food")
+        db.transferAnnotationDao().clearForExtension("e")
+        assertNull(db.localClassificationDao().example("t"))
+    }
+    @Test fun `blank credentials do not identify a logged in owned account`() = runBlocking {
+        db.installedExtensionDao().insert(InstalledExtension("e", "tw.com.cathaybk", "Bank", 1, "repo", "script", null))
+        db.accountDao().upsertAll(listOf(Account("a", "e", "bank", "account", 0.0, "TWD", 0, accountNo = "001234567890")))
+        db.credentialProfileDao().upsert(CredentialProfile("e", "", scheduleCron = "0 0 * * *", timezoneId = "Asia/Taipei"))
+        assertTrue(store.ownedAccounts().isEmpty())
+        db.credentialProfileDao().upsert(CredentialProfile("e", "test", scheduleCron = "0 0 * * *", timezoneId = "Asia/Taipei"))
+        assertEquals("013", store.ownedAccounts().single().bankId)
     }
 }

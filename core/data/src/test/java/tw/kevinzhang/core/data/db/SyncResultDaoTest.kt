@@ -26,6 +26,26 @@ import tw.kevinzhang.core.data.model.TransferFieldObservation
 
 @RunWith(RobolectricTestRunner::class)
 class SyncResultDaoTest {
+    @Test fun `only changed classifier inputs or pending retries become classification targets`() = runBlocking {
+        val original = transfer("local-target", "2026-10-18", -100.0)
+        suspend fun ingest(run: String, value: Transfer) {
+            database.syncResultDao().replaceSnapshot("extension", listOf(account("account")), listOf(value),
+                listOf(AccountTransferRefresh("account", null)), ingestionContext = IngestionContext(
+                    run, 1, 2, 1, null, null, IngestionTrigger.USER_SYNC, IngestionStatus.SUCCESS,
+                    sourceFingerprint = "source", fingerprintKeyVersion = 1,
+                    transferFingerprints = mapOf(value.id to TransferFingerprintEvidence("source", "payload"))))
+        }
+        ingest("one", original)
+        assertEquals(listOf(original.id), database.syncResultDao().classificationTargetIds("one", listOf(original.id)))
+        ingest("retry", original)
+        assertEquals(listOf(original.id), database.syncResultDao().classificationTargetIds("retry", listOf(original.id)))
+        database.localClassificationDao().clearPending()
+        ingest("unchanged", original.copy(balance = 200.0, parserVersion = "2"))
+        assertTrue(database.syncResultDao().classificationTargetIds("unchanged", listOf(original.id)).isEmpty())
+        ingest("changed", original.copy(counterpartyBank = "013", counterpartyAccount = "12345"))
+        assertEquals(listOf(original.id), database.syncResultDao().classificationTargetIds("changed", listOf(original.id)))
+    }
+
     private lateinit var database: MoneylookDatabase
 
     @Before

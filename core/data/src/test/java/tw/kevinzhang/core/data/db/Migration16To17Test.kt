@@ -73,7 +73,7 @@ class Migration16To17Test {
         val helper = FrameworkSQLiteOpenHelperFactory().create(
             SupportSQLiteOpenHelper.Configuration.builder(context)
                 .name(databaseName)
-                .callback(object : SupportSQLiteOpenHelper.Callback(28) {
+                .callback(object : SupportSQLiteOpenHelper.Callback(31) {
                     override fun onCreate(db: SupportSQLiteDatabase) = Unit
                     override fun onUpgrade(
                         db: SupportSQLiteDatabase,
@@ -100,12 +100,15 @@ class Migration16To17Test {
                 MIGRATION_25_26,
                 MIGRATION_26_27,
                 MIGRATION_27_28,
+                MIGRATION_28_29,
+                MIGRATION_29_30,
+                MIGRATION_30_31,
             )
             .allowMainThreadQueries()
             .build()
             .also { database ->
                 val migrated = database.openHelper.writableDatabase
-                assertEquals(28, migrated.version)
+                assertEquals(31, migrated.version)
                 assertTrue(tableExists(migrated, "auto_category_rule_sets"))
                 assertTrue(tableExists(migrated, "auto_category_rule_conditions"))
                 assertTrue(tableExists(migrated, "ingestion_runs"))
@@ -125,6 +128,18 @@ class Migration16To17Test {
      */
     private fun downgradeCurrentSchemaToV16(db: SupportSQLiteDatabase) {
         db.execSQL("PRAGMA foreign_keys = OFF")
+        listOf("classification_learning_examples", "classification_learning_tokens", "classification_learning_clock",
+            "classification_fallback_roles", "classification_local_evidence", "classification_pending").forEach {
+            db.execSQL("DROP TABLE `$it`")
+        }
+        val accountSql = db.query("SELECT sql FROM sqlite_master WHERE type='table' AND name='accounts'").use {
+            check(it.moveToFirst()); it.getString(0)
+        }
+        db.execSQL(accountSql.replace("`accounts`", "`accounts_legacy`").replace("`bankId` TEXT, ", ""))
+        db.execSQL("DROP TABLE accounts")
+        db.execSQL("ALTER TABLE accounts_legacy RENAME TO accounts")
+        db.execSQL("CREATE INDEX index_accounts_extensionId_sourceAccountKey_kind_currency ON accounts(extensionId,sourceAccountKey,kind,currency)")
+
         db.execSQL("DROP TABLE `classification_executions`")
         db.execSQL("DROP TABLE `classification_condition_evaluations`")
         db.execSQL("DROP TABLE `classification_rule_evaluations`")

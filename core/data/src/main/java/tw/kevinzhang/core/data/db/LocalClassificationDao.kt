@@ -28,7 +28,7 @@ abstract class LocalClassificationDao {
     @Query("""SELECT e.* FROM classification_learning_examples e
         INNER JOIN classification_learning_tokens tok ON tok.transferId=e.transferId
         WHERE tok.token IN (:tokens) AND e.direction=:direction
-        AND e.categoryId != 'transfer-account' AND e.categoryId NOT LIKE 'local-fallback-%'
+        AND e.correctionSequence >= 0 AND e.categoryId != 'transfer-account' AND e.categoryId NOT LIKE 'local-fallback-%'
         GROUP BY e.transferId
         HAVING COUNT(*) * 1.0 / (:tokenCount + e.tokenCount - COUNT(*)) >= 0.6
         ORDER BY COUNT(*) * 1.0 / (:tokenCount + e.tokenCount - COUNT(*)) DESC,
@@ -36,9 +36,11 @@ abstract class LocalClassificationDao {
     abstract suspend fun similar(tokens: List<String>, tokenCount: Int, direction: Int): List<ClassificationLearningExample>
     @Query("SELECT * FROM classification_fallback_roles") abstract suspend fun roles(): List<ClassificationFallbackRole>
     @Upsert abstract suspend fun putRole(role: ClassificationFallbackRole)
-    @Query("SELECT * FROM accounts WHERE kind='DEPOSIT' AND extensionId IN (SELECT extensionId FROM credential_profiles)")
+    @Query("SELECT * FROM accounts WHERE kind='DEPOSIT' AND extensionId IN (SELECT extensionId FROM credential_profiles WHERE trim(credential) != '')")
     abstract suspend fun ownedAccounts(): List<Account>
     @Query("SELECT * FROM installed_extensions WHERE id=:id") abstract suspend fun extension(id: String): InstalledExtension?
+    @Query("SELECT * FROM classification_local_evidence WHERE transferId=:id")
+    abstract suspend fun evidence(id: String): ClassificationLocalEvidence?
     @Query("DELETE FROM classification_local_evidence") abstract suspend fun clearEvidence()
     @Query("DELETE FROM classification_pending") abstract suspend fun clearPending()
 }

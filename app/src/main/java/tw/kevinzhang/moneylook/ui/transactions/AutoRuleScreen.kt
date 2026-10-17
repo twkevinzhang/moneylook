@@ -308,7 +308,7 @@ private fun ApplyAllRulesDialog(
             title = { Text("套用所有規則？") },
             text = {
                 Text(
-                    "會依匹配條件與同分時優先，將所有已啟用規則套用到全部交易明細。" +
+                    "會將帳戶移轉辨識、學習結果與已啟用規則套用到全部交易；無法判定時依歷史推測或歸入其他／用途不明。" +
                         "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
                 )
             },
@@ -395,7 +395,7 @@ private fun ClassificationResetDialog(
             title = { Text("清除並回到預設規則？") },
             text = {
                 Text(
-                    "這會永久清除所有自動分類規則、分類與標籤，並移除所有交易的手動分類與標籤指派。" +
+                    "這會永久清除所有學習資料、自動分類規則、分類與標籤，並移除所有交易的手動分類與標籤指派。" +
                         "交易與備註會保留，接著會重新分類所有交易。此操作無法復原。",
                 )
             },
@@ -863,7 +863,7 @@ fun AutoRuleEditorDialog(
                     tags.forEach { tag -> FilterChip(tag.id in draft.tagIds, { draft = draft.copy(tagIds = if (tag.id in draft.tagIds) draft.tagIds - tag.id else draft.tagIds + tag.id) }, { Text(tag.name) }, leadingIcon = { ColorDot(tag.color) }) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("啟用規則", modifier = Modifier.weight(1f)); Switch(draft.enabled, { draft = draft.copy(enabled = it) }) }
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("儲存後套用到既有交易", modifier = Modifier.weight(1f)); Switch(draft.applyExisting, { draft = draft.copy(applyExisting = it) }) }
+                Text("儲存後用於新交易；補分類請使用選單中的「套用所有規則」。")
                 OutlinedTextField(draft.priority.toString(), { draft = draft.copy(priority = it.toIntOrNull()?.coerceAtLeast(0) ?: draft.priority) }, label = { Text("同分時優先（數字愈小愈優先）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
             }
         },

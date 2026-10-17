@@ -23,6 +23,12 @@ import java.util.UUID
  */
 @Dao
 abstract class SyncResultDao : TransferSyncStore {
+    @Query("SELECT transferId FROM classification_pending WHERE runId=:runId AND transferId IN (:suppliedIds) ORDER BY transferId")
+    abstract override suspend fun classificationTargetIds(runId: String, suppliedIds: List<String>): List<String>
+    @Query("SELECT EXISTS(SELECT 1 FROM classification_pending WHERE transferId=:id)")
+    protected abstract suspend fun hasPendingClassification(id: String): Boolean
+    @Upsert protected abstract suspend fun putPendingClassification(value: tw.kevinzhang.core.data.model.ClassificationPending)
+
     /** Snapshot mutation and its append-only import evidence share the Room transaction. */
     @Transaction
     override suspend fun replaceSnapshot(
@@ -66,6 +72,14 @@ abstract class SyncResultDao : TransferSyncStore {
             legacyIdentityByAccountId = legacyIdentityByAccountId,
             replaceKinds = replaceKinds,
         )
+        for (transfer in transfers) {
+            val previous = previousTransfers[transfer.id]
+            if (previous == null ||
+                tw.kevinzhang.core.data.classification.classificationInput(previous.copy(accountId = transfer.accountId)) !=
+                tw.kevinzhang.core.data.classification.classificationInput(transfer) || hasPendingClassification(transfer.id)) {
+                putPendingClassification(tw.kevinzhang.core.data.model.ClassificationPending(transfer.id, ingestionContext.runId))
+            }
+        }
         insertIngestionRun(
             IngestionRun(
                 id = ingestionContext.runId,

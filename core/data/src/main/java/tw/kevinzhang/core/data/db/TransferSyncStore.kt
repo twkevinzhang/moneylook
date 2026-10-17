@@ -69,6 +69,9 @@ data class LegacyAccountIdentity(
 }
 
 interface TransferSyncStore {
+    /** Non-Room implementations retain their supplied IDs; Room derives targets atomically. */
+    suspend fun classificationTargetIds(runId: String, suppliedIds: List<String>): List<String> = suppliedIds
+
     suspend fun replaceSnapshot(
         extensionId: String,
         accounts: List<Account>,

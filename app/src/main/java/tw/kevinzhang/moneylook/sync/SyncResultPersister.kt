@@ -332,7 +332,7 @@ class SyncResultPersister @Inject constructor(
             )
         snapshotCommitted = true
         try {
-            autoCategorizer.categorizeTransferIds(transfers.map(Transfer::id), runId)
+            autoCategorizer.categorizeTransferIds(transferSyncStore.classificationTargetIds(runId, transfers.map(Transfer::id)), runId)
             transferSyncStore.updateClassificationStatus(
                 runId,
                 tw.kevinzhang.core.data.model.IngestionClassificationStatus.COMPLETE,

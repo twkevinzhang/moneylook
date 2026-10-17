@@ -36,7 +36,7 @@ private fun account(value: String): String = Normalizer.normalize(value, Normali
 fun matchesOwnedAccount(transfer: Transfer, accounts: List<OwnedBankAccount>): Boolean {
     val semantics = listOfNotNull(transfer.type, transfer.description, transfer.purpose, transfer.transactionCode)
         .joinToString(" ").lowercase()
-    if (!Regex("轉帳|轉入|轉出|匯入|匯出|匯款|transfer|remittance").containsMatchIn(semantics)) return false
+    if (!Regex("轉帳|轉入|轉出|跨行轉|匯入|匯出|匯款|transfer|remittance").containsMatchIn(semantics)) return false
     val bank = normalizeBankIdentity(transfer.counterpartyBank) ?: return false
     val incoming = account(transfer.counterpartyAccount ?: return false)
     if (!incoming.matches(Regex("[0-9*xX●•]+"))) return false

@@ -256,7 +256,7 @@ abstract class TransferAnnotationDao {
         require(annotation.manualOverride) { "manual save requires manualOverride" }
         val previous = getByTransferIds(listOf(annotation.transferId)).singleOrNull()
         val categoryChanged = previous?.categoryId != annotation.categoryId || previous?.manualOverride != true
-        if (categoryChanged) updateLearning(annotation.transferId, annotation.categoryId)
+        if (categoryChanged) updateLearning(annotation.transferId, annotation.categoryId, previous?.categoryId != annotation.categoryId)
         val previousManualTagIds = getManualTagCrossRefs(annotation.transferId).mapTo(mutableSetOf()) { it.tagId }
         upsert(annotation)
         deleteAllTags(annotation.transferId)
@@ -484,6 +484,9 @@ abstract class TransferAnnotationDao {
      */
     @Transaction
     open suspend fun clearForExtension(extensionId: String) {
+        deleteLearningTokensForExtension(extensionId)
+        deleteLearningForExtension(extensionId)
+        deleteEvidenceForExtension(extensionId)
         deleteTagsForExtension(extensionId)
         deleteAnnotationsForExtension(extensionId)
     }
@@ -497,6 +500,13 @@ abstract class TransferAnnotationDao {
         """,
     )
     protected abstract suspend fun deleteTagsForExtension(extensionId: String)
+
+    @Query("DELETE FROM classification_learning_tokens WHERE transferId IN (SELECT transferId FROM transfer_annotations WHERE extensionId=:extensionId)")
+    protected abstract suspend fun deleteLearningTokensForExtension(extensionId: String)
+    @Query("DELETE FROM classification_learning_examples WHERE transferId IN (SELECT transferId FROM transfer_annotations WHERE extensionId=:extensionId)")
+    protected abstract suspend fun deleteLearningForExtension(extensionId: String)
+    @Query("DELETE FROM classification_local_evidence WHERE transferId IN (SELECT transferId FROM transfer_annotations WHERE extensionId=:extensionId)")
+    protected abstract suspend fun deleteEvidenceForExtension(extensionId: String)
 
     @Query("DELETE FROM transfer_annotations WHERE extensionId = :extensionId")
     protected abstract suspend fun deleteAnnotationsForExtension(extensionId: String)
@@ -528,7 +538,7 @@ abstract class TransferAnnotationDao {
         deleteLearningTokens(id)
         deleteLearning(id)
     }
-    private suspend fun updateLearning(id: String, category: String?) {
+    private suspend fun updateLearning(id: String, category: String?, explicitChange: Boolean) {
         removeLearning(id)
         deleteEvidence(id)
         if (category == null) return
@@ -538,7 +548,7 @@ abstract class TransferAnnotationDao {
         advanceClock()
         val tokens = tw.kevinzhang.core.data.classification.bigrams(f.identity)
         putLearning(tw.kevinzhang.core.data.model.ClassificationLearningExample(id, category, f.accountId,
-            f.direction, f.identity, f.transactionType, tokens.size, clock()))
+            f.direction, f.identity, f.transactionType, tokens.size, if (explicitChange) clock() else -1))
         putLearningTokens(tokens.map { tw.kevinzhang.core.data.model.ClassificationLearningToken(it, id) })
     }
 

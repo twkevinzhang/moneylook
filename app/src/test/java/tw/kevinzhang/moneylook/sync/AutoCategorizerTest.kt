@@ -44,6 +44,49 @@ import tw.kevinzhang.moneylook.schedule.ClassificationTraceMaintenanceScheduler
 
 @RunWith(RobolectricTestRunner::class)
 class AutoCategorizerTest {
+    @Test fun `cancelled bulk snapshot rolls back and rerun completes without duplicate annotations`() = runBlocking {
+        val rows = (1..260).map { transfer("cancel-$it", "陌生交易", -it.toDouble()) }
+        database.transferDao().upsertAll(rows)
+        var cancelled = false
+        try {
+            categorizer.applyToExistingTransactions { if (it.processedTransferCount >= 25) throw kotlinx.coroutines.CancellationException("test cancellation") }
+        } catch (_: kotlinx.coroutines.CancellationException) { cancelled = true }
+        assertTrue(cancelled)
+        assertTrue(database.transferAnnotationDao().getAll().isEmpty())
+        assertEquals(260, categorizer.applyToExistingTransactions().processedTransferCount)
+        assertEquals(260, database.transferAnnotationDao().getAll().size)
+    }
+    @Test fun `bulk classification pages all unknown rows while retaining intentional manual clear`() = runBlocking {
+        val rows = (1..511).map { transfer("page-$it", "陌生交易", -it.toDouble()) }
+        database.transferDao().upsertAll(rows)
+        database.transferAnnotationDao().saveManualAnnotation(
+            TransferAnnotation(rows.first().id, rows.first().extensionId, categoryAssignment = AssignmentSource.MANUAL), emptySet())
+        val result = categorizer.applyToExistingTransactions()
+        assertEquals(511, result.processedTransferCount)
+        assertEquals(1, result.preservedManualOverrideCount)
+        assertEquals(510, result.matchedTransferCount)
+        assertNull(database.transferAnnotationDao().getByTransferIds(listOf(rows.first().id)).single().categoryId)
+    }
+
+    @Test fun `unknown new transaction receives expense fallback`() = runBlocking {
+        val incoming = transfer("unknown-local", "沒有可識別用途", -59.0)
+        database.transferDao().upsertAll(listOf(incoming))
+        categorizer.categorizeTransferIds(listOf(incoming.id))
+        val annotation = database.transferAnnotationDao().getByTransferIds(listOf(incoming.id)).single()
+        assertEquals("其他／用途不明（支出）", database.categoryDao().getById(annotation.categoryId!!)!!.name)
+    }
+
+    @Test fun `manual correction teaches future matching merchant without changing old automatic rows`() = runBlocking {
+        database.categoryDao().upsert(Category("local-food", "本機餐飲", "#000000"))
+        val first = transfer("learn-source", "晨光咖啡", -59.0).copy(merchantName = "晨光咖啡")
+        val future = first.copy(id = "learn-future", amount = -75.0)
+        database.transferDao().upsertAll(listOf(first, future))
+        database.transferAnnotationDao().saveManualAnnotation(
+            TransferAnnotation(first.id, first.extensionId, "local-food", categoryAssignment = AssignmentSource.MANUAL), emptySet())
+        categorizer.categorizeTransferIds(listOf(future.id))
+        assertEquals("local-food", database.transferAnnotationDao().getByTransferIds(listOf(future.id)).single().categoryId)
+    }
+
     private lateinit var database: MoneylookDatabase
     private lateinit var categorizer: AutoCategorizer
     private lateinit var maintenanceScheduler: RecordingMaintenanceScheduler
@@ -68,6 +111,7 @@ class AutoCategorizerTest {
         }
         maintenanceScheduler = RecordingMaintenanceScheduler()
         categorizer = AutoCategorizer(
+            localStore = tw.kevinzhang.core.data.db.LocalClassificationStore(database),
             transferDao = database.transferDao(),
             annotationDao = database.transferAnnotationDao(),
             ruleDao = database.autoCategoryRuleDao(),
@@ -190,7 +234,7 @@ class AutoCategorizerTest {
         assertTrue(database.ingestionProvenanceDao().getRuleEvaluations(transfer.id).isEmpty())
         assertTrue(database.ingestionProvenanceDao().getConditionEvaluations(transfer.id).isEmpty())
         database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id).single().also {
-            assertEquals(ClassificationOutcome.NO_MATCH, it.outcome)
+            assertEquals(ClassificationOutcome.AUTO_APPLIED, it.outcome)
             assertEquals(1, it.evaluatedRuleCount)
             assertEquals(0, it.retainedRuleCount)
             assertEquals(1, it.conditionMismatchCount)
@@ -248,7 +292,7 @@ class AutoCategorizerTest {
         assertTrue(rules.all { it.matched && !it.selected })
         assertEquals(2, database.ingestionProvenanceDao().getConditionEvaluations(transfer.id).size)
         database.ingestionProvenanceDao().getTransferAnnotationEvents(transfer.id).single().also {
-            assertEquals(ClassificationOutcome.ABSTAINED, it.outcome)
+            assertEquals(ClassificationOutcome.AUTO_APPLIED, it.outcome)
             assertEquals(3, it.evaluatedRuleCount)
             assertEquals(2, it.matchedRuleCount)
             assertEquals(2, it.retainedRuleCount)
@@ -363,7 +407,7 @@ class AutoCategorizerTest {
             assertEquals(AssignmentSource.AUTO, detail.annotation?.categoryAssignment)
             assertEquals("coffee", detail.annotation?.autoRuleId)
             assertEquals(55, detail.annotation?.autoMatchScore)
-            assertEquals("rules-v2", detail.annotation?.classifierVersion)
+            assertEquals("local-adaptive-v1", detail.annotation?.classifierVersion)
             assertEquals(listOf(work.id), detail.tags.map(Tag::id))
         }
 
@@ -460,7 +504,7 @@ class AutoCategorizerTest {
         categorizer.categorizeTransferIds(listOf(transfer.id))
 
         database.transferAnnotationDao().observeDetail(transfer.id).first()!!.annotation!!.also { annotation ->
-            assertNull(annotation.categoryId)
+            assertTrue(annotation.categoryId!!.startsWith("local-fallback-expense-"))
             assertEquals("保留", annotation.note)
             assertEquals(AssignmentSource.AUTO, annotation.categoryAssignment)
         }
@@ -506,7 +550,7 @@ class AutoCategorizerTest {
         val result = categorizer.applyToExistingTransactions(onProgress = progress::add)
 
         assertEquals(3, result.processedTransferCount)
-        assertEquals(1, result.matchedTransferCount)
+        assertEquals(2, result.matchedTransferCount)
         assertEquals(1, result.preservedManualOverrideCount)
         assertEquals(
             listOf(
@@ -522,7 +566,7 @@ class AutoCategorizerTest {
             progress,
         )
         database.transferAnnotationDao().observeDetail(automatic.id).first()!!.also { detail ->
-            assertEquals(category.id, detail.annotation?.categoryId)
+            assertEquals(manualCategory.id, detail.annotation?.categoryId)
             assertEquals(listOf(automaticTag.id), detail.tags.map(Tag::id))
         }
         database.transferAnnotationDao().observeDetail(manual.id).first()!!.also { detail ->
@@ -535,7 +579,7 @@ class AutoCategorizerTest {
             .getTransferAnnotationEvents(manual.id)
         assertTrue(manualAudit.any { it.trigger == ClassificationTrigger.MANUAL_EDIT })
         assertTrue(manualAudit.any { it.trigger == ClassificationTrigger.BULK_REAPPLY })
-        assertNull(database.transferAnnotationDao().observeDetail(unmatched.id).first()!!.annotation)
+        assertTrue(database.transferAnnotationDao().observeDetail(unmatched.id).first()!!.annotation!!.categoryId!!.startsWith("local-fallback-expense-"))
         Unit
     }
 
@@ -638,7 +682,7 @@ class AutoCategorizerTest {
             )
             assertEquals(
                 DefaultClassificationCatalog.categories.map { it.id }.toSet(),
-                database.categoryDao().observeAll().first().map { it.id }.toSet(),
+                database.categoryDao().observeAll().first().map { it.id }.filterNot { it.startsWith("local-fallback-") }.toSet(),
             )
             assertTrue(database.tagDao().observeAll().first().isEmpty())
             assertFalse(
@@ -1369,7 +1413,7 @@ class AutoCategorizerTest {
             description = "信用卡商戶消費",
             amount = -100.0,
             accountId = "credit-card",
-            merchantName = "ＭＧ- ＳＵＫＩＹＡ　南京三民店",
+            merchantName = "獨立人工商戶",
             merchantCategoryCode = null,
         )
         database.transferDao().upsertAll(transfers + manuallyClassified)
@@ -1389,11 +1433,9 @@ class AutoCategorizerTest {
 
         assertEquals(1, result.preservedManualOverrideCount)
         fixtures.forEach { fixture ->
-            assertEquals(
-                "${fixture.id} should use the seeded default catalog without an MCC",
-                fixture.expectedCategoryId,
-                database.transferAnnotationDao().observeDetail(fixture.id).first()?.annotation?.categoryId,
-            )
+            val actual = database.transferAnnotationDao().observeDetail(fixture.id).first()?.annotation?.categoryId
+            if (fixture.expectedCategoryId == null) assertTrue("${fixture.id} uses fallback", actual?.startsWith("local-fallback-expense-") == true)
+            else assertEquals("${fixture.id} uses seeded catalog", fixture.expectedCategoryId, actual)
         }
         database.transferAnnotationDao().observeDetail(manuallyClassified.id).first()!!.annotation!!.also {
             assertEquals("expense-shopping", it.categoryId)
@@ -1473,262 +1515,52 @@ class AutoCategorizerTest {
         )
     }
 
-    @Test
-    fun `mutually unique opposite transactions take priority over ordinary automatic rules`() = runBlocking {
-        database.accountDao().upsertAll(listOf(account("incoming-account")))
-        val ordinary = Category("ordinary", "一般分類", "#1565C0")
-        database.categoryDao().upsert(ordinary)
-        database.autoCategoryRuleDao().upsertWithTags(
-            AutoCategoryRule(
-                id = "ordinary-rule",
-                name = "一般規則",
-                descriptionContains = "自有移轉",
-                categoryId = ordinary.id,
-            ),
-            emptySet(),
-        )
-        val outgoing = transfer(
-            id = "outgoing",
-            description = "自有移轉",
-            amount = -500.0,
-            txnDateTime = "2026-07-22T12:00:00",
-        )
-        val incoming = transfer(
-            id = "incoming",
-            description = "自有移轉",
-            amount = 500.0,
-            txnDateTime = "2026-07-22T12:00:30",
-            accountId = "incoming-account",
-        )
-        database.transferDao().upsertAll(listOf(outgoing, incoming))
-
-        val result = categorizer.applyToExistingTransactions()
-
-        assertEquals(2, result.matchedTransferCount)
-        assertEquals(
-            "transfer-account",
-            database.transferAnnotationDao().observeDetail(outgoing.id).first()!!.annotation?.categoryId,
-        )
-        assertEquals(
-            "transfer-account",
-            database.transferAnnotationDao().observeDetail(incoming.id).first()!!.annotation?.categoryId,
-        )
-    }
-
-    @Test
-    fun `one-to-many ambiguity leaves every possible transfer pair unclassified`() = runBlocking {
-        database.accountDao().upsertAll(
-            listOf(account("expense-a"), account("expense-b"), account("income")),
-        )
-        val transfers = listOf(
-            transfer("expense-a", "移轉", -100.0, "2026-07-22T08:00:00", "expense-a"),
-            transfer("expense-b", "移轉", -100.0, "2026-07-22T08:00:10", "expense-b"),
-            transfer("income", "移轉", 100.0, "2026-07-22T08:00:05", "income"),
-        )
-        database.transferDao().upsertAll(transfers)
-
+    @Test fun `bank and owned suffix classify without a counterpart and removed login stops matching`() = runBlocking {
+        val extension = tw.kevinzhang.core.data.model.InstalledExtension("owned-bank", "tw.com.cathaybk", "Bank", 1, "repo", "script", null)
+        database.installedExtensionDao().insert(extension)
+        database.credentialProfileDao().upsert(tw.kevinzhang.core.data.model.CredentialProfile(extension.id, "test", scheduleCron = "0 0 * * *", timezoneId = "Asia/Taipei"))
+        database.accountDao().upsertAll(listOf(account("own-target").copy(extensionId = extension.id, accountNo = "001234567890", bankId = "013")))
+        val row = transfer("bank-match", "轉帳", -500.0).copy(counterpartyBank = "013", counterpartyAccount = "***67890")
+        database.transferDao().upsertAll(listOf(row))
+        categorizer.categorizeTransferIds(listOf(row.id))
+        assertEquals("transfer-account", database.transferAnnotationDao().getByTransferIds(listOf(row.id)).single().categoryId)
+        database.credentialProfileDao().deleteByExtensionId(extension.id)
         categorizer.applyToExistingTransactions()
-
-        transfers.forEach { item ->
-            assertNull(database.transferAnnotationDao().observeDetail(item.id).first()!!.annotation)
-        }
+        val category = database.transferAnnotationDao().getByTransferIds(listOf(row.id)).single().categoryId!!
+        assertEquals(CategoryReportingGroup.EXPENSE, database.categoryDao().getById(category)!!.reportingGroup)
     }
 
-    @Test
-    fun `sync finds an existing counterpart and clears a stale automatic transfer when it disappears`() = runBlocking {
+    @Test fun `same amount and time never exclude cash flow without bank account evidence`() = runBlocking {
         database.accountDao().upsertAll(listOf(account("incoming-account")))
-        val outgoing = transfer(
-            id = "outgoing",
-            description = "移轉",
-            amount = -800.0,
-            txnDateTime = "2026-07-22T09:30:00",
-        )
-        val incoming = transfer(
-            id = "incoming",
-            description = "移轉",
-            amount = 800.0,
-            txnDateTime = "2026-07-22T09:30:20",
-            accountId = "incoming-account",
-        )
+        val outgoing = transfer("out", "轉帳", -100.0, "2026-07-22T12:00:00")
+        val incoming = transfer("in", "轉帳", 100.0, "2026-07-22T12:00:10", "incoming-account")
         database.transferDao().upsertAll(listOf(outgoing, incoming))
+        categorizer.applyToExistingTransactions()
+        val outCategory = database.transferAnnotationDao().getByTransferIds(listOf(outgoing.id)).single().categoryId!!
+        val inCategory = database.transferAnnotationDao().getByTransferIds(listOf(incoming.id)).single().categoryId!!
+        assertEquals(CategoryReportingGroup.EXPENSE, database.categoryDao().getById(outCategory)!!.reportingGroup)
+        assertEquals(CategoryReportingGroup.INCOME, database.categoryDao().getById(inCategory)!!.reportingGroup)
+    }
 
-        categorizer.categorizeTransferIds(listOf(incoming.id))
-
-        assertEquals(
-            "transfer-account",
-            database.transferAnnotationDao().observeDetail(outgoing.id).first()!!.annotation?.categoryId,
-        )
-        assertEquals(
-            "transfer-account",
-            database.transferAnnotationDao().observeDetail(incoming.id).first()!!.annotation?.categoryId,
-        )
-
-        database.openHelper.writableDatabase.execSQL(
-            "DELETE FROM transfers WHERE id = ?",
-            arrayOf(incoming.id),
-        )
+    @Test fun `new ingestion does not revisit historical automatic transfers`() = runBlocking {
+        val old = transfer("old-transfer", "轉帳", -100.0)
+        val fresh = transfer("fresh-transfer", "轉帳", 100.0)
+        database.transferDao().upsertAll(listOf(old, fresh))
+        database.transferAnnotationDao().upsert(TransferAnnotation(old.id, old.extensionId, "transfer-account"))
+        categorizer.categorizeTransferIds(listOf(fresh.id))
+        assertEquals("transfer-account", database.transferAnnotationDao().getByTransferIds(listOf(old.id)).single().categoryId)
         categorizer.categorizeTransferIds(emptyList())
-
-        assertNull(
-            database.transferAnnotationDao().observeDetail(outgoing.id).first()!!.annotation?.categoryId,
-        )
+        assertEquals("transfer-account", database.transferAnnotationDao().getByTransferIds(listOf(old.id)).single().categoryId)
+        categorizer.applyToExistingTransactions()
+        assertTrue(database.transferAnnotationDao().getByTransferIds(listOf(old.id)).single().categoryId!!.startsWith("local-fallback-"))
     }
 
-    @Test
-    fun `upgrade backfill classifies existing pairs without applying unrelated ordinary rules`() = runBlocking {
-        database.accountDao().upsertAll(listOf(account("incoming-account")))
-        val ordinary = Category("ordinary", "一般分類", "#1565C0")
-        database.categoryDao().upsert(ordinary)
-        database.autoCategoryRuleDao().upsertWithTags(
-            AutoCategoryRule(
-                id = "ordinary-rule",
-                name = "一般規則",
-                descriptionContains = "一般支出",
-                categoryId = ordinary.id,
-            ),
-            emptySet(),
-        )
-        val outgoing = transfer(
-            id = "existing-outgoing",
-            description = "自有移轉",
-            amount = -600.0,
-            txnDateTime = "2026-07-22T11:00:00",
-        )
-        val incoming = transfer(
-            id = "existing-incoming",
-            description = "自有移轉",
-            amount = 600.0,
-            txnDateTime = "2026-07-22T11:00:20",
-            accountId = "incoming-account",
-        )
-        val unrelated = transfer(
-            id = "ordinary-expense",
-            description = "一般支出",
-            amount = -50.0,
-            txnDateTime = "2026-07-22T12:00:00",
-        )
-        database.transferDao().upsertAll(listOf(outgoing, incoming, unrelated))
-
-        assertTrue(categorizer.applyInternalTransferBackfill())
-
-        assertEquals(
-            "transfer-account",
-            database.transferAnnotationDao().observeDetail(outgoing.id).first()!!.annotation?.categoryId,
-        )
-        assertEquals(
-            "transfer-account",
-            database.transferAnnotationDao().observeDetail(incoming.id).first()!!.annotation?.categoryId,
-        )
-        assertNull(database.transferAnnotationDao().observeDetail(unrelated.id).first()!!.annotation)
-    }
-
-    @Test
-    fun `upgrade backfill remains retryable when transfer category is unavailable`() = runBlocking {
-        database.categoryDao().deleteById("transfer-account")
-
-        assertFalse(categorizer.applyInternalTransferBackfill())
-    }
-
-    @Test
-    fun `manual category remains authoritative while the automatic counterpart is classified`() = runBlocking {
-        database.accountDao().upsertAll(listOf(account("incoming-account")))
-        val manualCategory = Category("manual-category", "手動分類", "#1565C0")
-        database.categoryDao().upsert(manualCategory)
-        val outgoing = transfer(
-            id = "manual-outgoing",
-            description = "移轉",
-            amount = -300.0,
-            txnDateTime = "2026-07-22T10:00:00",
-        )
-        val incoming = transfer(
-            id = "automatic-incoming",
-            description = "移轉",
-            amount = 300.0,
-            txnDateTime = "2026-07-22T10:00:10",
-            accountId = "incoming-account",
-        )
-        database.transferDao().upsertAll(listOf(outgoing, incoming))
-        database.transferAnnotationDao().saveManualAnnotation(
-            TransferAnnotation(
-                transferId = outgoing.id,
-                extensionId = outgoing.extensionId,
-                categoryId = manualCategory.id,
-                categoryAssignment = AssignmentSource.MANUAL,
-            ),
-            emptySet(),
-        )
-
-        categorizer.categorizeTransferIds(listOf(incoming.id))
-
-        database.transferAnnotationDao().observeDetail(outgoing.id).first()!!.annotation!!.also {
-            assertEquals(manualCategory.id, it.categoryId)
-            assertEquals(AssignmentSource.MANUAL, it.categoryAssignment)
-        }
-        assertEquals(
-            "transfer-account",
-            database.transferAnnotationDao().observeDetail(incoming.id).first()!!.annotation?.categoryId,
-        )
-    }
-
-    @Test
-    fun `pair detector rejects incomplete mismatched ambiguous and non ISO candidates`() {
-        val baselineExpense = classificationCandidate(
-            transfer("expense", "移轉", -100.0, "2026-07-22T12:00:00", "expense-account"),
-        )
-        fun pair(
-            incoming: Transfer,
-            incomingCurrency: String = "TWD",
-        ) = internalTransferCounterparts(
-            listOf(baselineExpense, classificationCandidate(incoming, incomingCurrency)),
-        )
-
-        assertTrue(
-            pair(
-                transfer("valid", "移轉", 100.0, "2026-07-22T12:00:30", "income-account"),
-                incomingCurrency = " twd ",
-            ).isNotEmpty(),
-        )
-        assertTrue(
-            pair(transfer("late", "移轉", 100.0, "2026-07-22T12:00:31", "income-account")).isEmpty(),
-        )
-        assertTrue(
-            pair(transfer("same-account", "移轉", 100.0, "2026-07-22T12:00:20", "expense-account")).isEmpty(),
-        )
-        assertTrue(
-            pair(
-                transfer("currency", "移轉", 100.0, "2026-07-22T12:00:20", "income-account"),
-                incomingCurrency = "USD",
-            ).isEmpty(),
-        )
-        assertTrue(
-            pair(transfer("amount", "移轉", 100.01, "2026-07-22T12:00:20", "income-account")).isEmpty(),
-        )
-        assertTrue(
-            pair(transfer("sign", "移轉", -100.0, "2026-07-22T12:00:20", "income-account")).isEmpty(),
-        )
-        assertTrue(
-            pair(transfer("zero", "移轉", 0.0, "2026-07-22T12:00:20", "income-account")).isEmpty(),
-        )
-        assertTrue(
-            pair(
-                transfer(
-                    "non-finite",
-                    "移轉",
-                    Double.POSITIVE_INFINITY,
-                    "2026-07-22T12:00:20",
-                    "income-account",
-                ),
-            ).isEmpty(),
-        )
-        assertTrue(
-            pair(transfer("date-only", "移轉", 100.0, "2026-07-22", "income-account")).isEmpty(),
-        )
-        assertTrue(
-            pair(transfer("next-day", "移轉", 100.0, "2026-07-23T00:00:00", "income-account")).isEmpty(),
-        )
-        assertTrue(
-            internalTransferCounterparts(listOf(baselineExpense)).isEmpty(),
-        )
+    @Test fun `ordinary rule cannot bypass account evidence to exclude a transfer`() = runBlocking {
+        database.autoCategoryRuleDao().upsertWithTags(AutoCategoryRule("unsafe-transfer", "移轉", descriptionContains = "轉帳", categoryId = "transfer-account"), emptySet())
+        val row = transfer("ordinary-transfer", "轉帳", -100.0)
+        database.transferDao().upsertAll(listOf(row))
+        categorizer.categorizeTransferIds(listOf(row.id))
+        assertTrue(database.transferAnnotationDao().getByTransferIds(listOf(row.id)).single().categoryId!!.startsWith("local-fallback-"))
     }
 
     private fun ruleWithTags(rule: AutoCategoryRule, category: Category? = null) = AutoCategoryRuleWithTags(rule, category, emptyList())

@@ -1,6 +1,10 @@
 package tw.kevinzhang.moneylook.sync
 
 import com.google.gson.Gson
+import tw.kevinzhang.core.data.classification.*
+import tw.kevinzhang.core.data.db.LocalClassificationStore
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -36,11 +40,6 @@ import tw.kevinzhang.core.data.model.ClassificationRuleEvaluation
 import tw.kevinzhang.core.data.model.ClassificationConditionEvaluation
 import tw.kevinzhang.core.data.model.normalizeAutoCategoryRuleTextV2
 import tw.kevinzhang.moneylook.schedule.ClassificationTraceMaintenanceScheduler
-import java.time.Duration
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
-import java.time.format.DateTimeParseException
 import java.text.Normalizer
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -90,6 +89,7 @@ data class ClassificationResetProgress(
 /** Evaluates enabled rules conservatively while preserving every explicit user transaction edit. */
 @Singleton
 class AutoCategorizer @Inject constructor(
+    private val localStore: LocalClassificationStore,
     private val transferDao: TransferDao,
     private val annotationDao: TransferAnnotationDao,
     private val ruleDao: AutoCategoryRuleDao,
@@ -108,151 +108,71 @@ class AutoCategorizer @Inject constructor(
     override suspend fun categorizeTransferIds(transferIds: List<String>, ingestionRunId: String) =
         categorizeTransferIdsInternal(transferIds, ingestionRunId)
 
-    private suspend fun categorizeTransferIdsInternal(
-        transferIds: List<String>,
-        ingestionRunId: String?,
-    ) {
+    private suspend fun categorizeTransferIdsInternal(transferIds: List<String>, ingestionRunId: String?) {
+        if (transferIds.isEmpty()) return
         categorizationMutex.withLock {
-            val context = loadClassificationContext()
-            val automaticTransferIds = context.automaticInternalTransferIds()
-            val existingIds = context.candidates.mapTo(mutableSetOf()) { it.transfer.id }
-            val seedIds = (transferIds.toSet() + automaticTransferIds).intersect(existingIds)
-            val targetIds = seedIds.toMutableSet().apply {
-                seedIds.mapNotNullTo(this) { context.internalTransferCounterparts[it] }
-            }
-            categorize(
-                candidates = context.candidates.filter { it.transfer.id in targetIds },
-                internalTransferIds = context.internalTransferCounterparts.keys,
-                ingestionRunId = ingestionRunId,
-                trigger = ClassificationTrigger.INGESTION,
-                ruleSetContentById = context.ruleSetContentById,
-            )
+            runClassification(transferIds.distinct(), ingestionRunId, ClassificationTrigger.INGESTION)
         }
-    }
-
-    /**
-     * Re-evaluates only the built-in cross-account rule for an app upgrade. Ordinary automatic
-     * rules remain scoped to their existing sync/manual-apply entry points.
-     *
-     * Returns false when the user-owned transfer category is unavailable so callers can retry
-     * after the catalog is restored instead of permanently recording a skipped backfill.
-     */
-    suspend fun applyInternalTransferBackfill(): Boolean = categorizationMutex.withLock {
-        val context = loadClassificationContext()
-        if (!context.internalTransferCategoryAvailable) return@withLock false
-        val targetIds = context.internalTransferCounterparts.keys + context.automaticInternalTransferIds()
-        categorize(
-            candidates = context.candidates.filter { it.transfer.id in targetIds },
-            internalTransferIds = context.internalTransferCounterparts.keys,
-            ingestionRunId = null,
-            trigger = ClassificationTrigger.INTERNAL_BACKFILL,
-            ruleSetContentById = context.ruleSetContentById,
-        )
-        true
     }
 
     suspend fun applyToExistingTransactions(
         trigger: ClassificationTrigger = ClassificationTrigger.BULK_REAPPLY,
         onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
-    ): AutoCategoryApplicationResult =
-        categorizationMutex.withLock {
-            val context = loadClassificationContext()
-            onProgress(
-                AutoCategoryApplicationProgress(
-                    processedTransferCount = 0,
-                    totalTransferCount = context.candidates.size,
-                ),
-            )
-            categorize(
-                candidates = context.candidates,
-                internalTransferIds = context.internalTransferCounterparts.keys,
-                ingestionRunId = null,
-                trigger = trigger,
-                ruleSetContentById = context.ruleSetContentById,
-                onProgress = { processedTransferCount ->
-                    onProgress(
-                        AutoCategoryApplicationProgress(
-                            processedTransferCount = processedTransferCount,
-                            totalTransferCount = context.candidates.size,
-                        ),
-                    )
-                },
-            )
-        }
+    ): AutoCategoryApplicationResult = categorizationMutex.withLock {
+        runClassification(null, null, trigger, onProgress)
+    }
 
-    /**
-     * Serializes the destructive catalog reset with every automatic classification run, then
-     * re-evaluates all current transactions against the freshly restored bundled catalog.
-     *
-     * The catalog reset is atomic. If classification fails afterwards, invoking this method again
-     * safely resets the same catalog and retries the complete transfer set.
-     */
-    suspend fun resetClassificationSystem(
-        onProgress: (ClassificationResetProgress) -> Unit = {},
-    ): AutoCategoryApplicationResult =
+    suspend fun resetClassificationSystem(onProgress: (ClassificationResetProgress) -> Unit = {}): AutoCategoryApplicationResult =
         categorizationMutex.withLock {
             onProgress(ClassificationResetProgress(ClassificationResetStage.RESETTING_CATALOG))
             classificationCatalogResetStore.resetToDefaults()
-            val context = loadClassificationContext()
-            onProgress(
-                ClassificationResetProgress(
-                    stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
-                    totalTransferCount = context.candidates.size,
-                ),
-            )
-            categorize(
-                candidates = context.candidates,
-                internalTransferIds = context.internalTransferCounterparts.keys,
-                ingestionRunId = null,
-                trigger = ClassificationTrigger.CATALOG_RESET,
-                ruleSetContentById = context.ruleSetContentById,
-                onProgress = { processedTransferCount ->
-                    onProgress(
-                        ClassificationResetProgress(
-                            stage = ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
-                            processedTransferCount = processedTransferCount,
-                            totalTransferCount = context.candidates.size,
-                        ),
-                    )
-                },
-            )
+            runClassification(null, null, ClassificationTrigger.CATALOG_RESET) {
+                onProgress(ClassificationResetProgress(ClassificationResetStage.RECLASSIFYING_TRANSACTIONS,
+                    it.processedTransferCount, it.totalTransferCount))
+            }
         }
 
-    suspend fun resumeAutomaticCategorization(transferId: String) {
-        categorizationMutex.withLock {
-            annotationDao.resumeAutomaticClassification(transferId)
-            val context = loadClassificationContext()
-            categorize(
-                candidates = context.candidates.filter { it.transfer.id == transferId },
-                internalTransferIds = context.internalTransferCounterparts.keys,
-                ingestionRunId = null,
-                trigger = ClassificationTrigger.RESUME,
-                ruleSetContentById = context.ruleSetContentById,
-            )
-        }
+    suspend fun resumeAutomaticCategorization(transferId: String) = categorizationMutex.withLock {
+        annotationDao.resumeAutomaticClassification(transferId)
+        runClassification(listOf(transferId), null, ClassificationTrigger.RESUME)
+        Unit
     }
 
-    private suspend fun loadClassificationContext(): ClassificationContext {
-        val candidates = transferDao.getAllClassificationCandidates()
-        val annotations = annotationDao.getByTransferIds(candidates.map { it.transfer.id })
-            .associateBy(TransferAnnotation::transferId)
-        val internalTransferCategory = categoryDao.getById(INTERNAL_TRANSFER_CATEGORY_ID)
-        val categoryAvailable = internalTransferCategory?.reportingGroup == CategoryReportingGroup.EXCLUDED
-        val counterparts = if (categoryAvailable) {
-            internalTransferCounterparts(candidates)
-        } else {
-            emptyMap()
+    private suspend fun runClassification(
+        ids: List<String>?, runId: String?, trigger: ClassificationTrigger,
+        onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
+    ): AutoCategoryApplicationResult = localStore.snapshot {
+        localStore.refreshExamples()
+        val fallbacks = localStore.ensureFallbackCategories()
+        val owned = localStore.ownedAccounts()
+        val canTransfer = categoryDao.getById(INTERNAL_TRANSFER_CATEGORY_ID)?.reportingGroup == CategoryReportingGroup.EXCLUDED
+        val rules = ruleDao.getEnabledInPriorityOrder().filter { it.rule.categoryId != INTERNAL_TRANSFER_CATEGORY_ID }
+        val ruleContents = ruleSetDao?.getAll().orEmpty().associate { it.id to it.contentSha256 }
+        val total = ids?.size ?: transferDao.classificationCount()
+        var processed = 0
+        var matched = 0
+        var preserved = 0
+        var after = ""
+        var offset = 0
+        onProgress(AutoCategoryApplicationProgress(0, total))
+        while (true) {
+            coroutineContext.ensureActive()
+            val page = if (ids == null) transferDao.classificationPage(after, 250)
+                else transferDao.classificationByIds(ids.subList(offset, minOf(offset + 250, ids.size)))
+            if (page.isEmpty() && (ids == null || offset >= ids.size)) break
+            val ownIds = if (canTransfer) page.filter { matchesOwnedAccount(it.transfer, owned) }.mapTo(mutableSetOf()) { it.transfer.id } else emptySet()
+            val before = processed
+            val result = categorize(page, ownIds, runId, trigger, ruleContents, rules, fallbacks) {
+                onProgress(AutoCategoryApplicationProgress(before + it, total))
+            }
+            processed += result.processedTransferCount
+            matched += result.matchedTransferCount
+            preserved += result.preservedManualOverrideCount
+            if (page.isNotEmpty()) after = page.last().transfer.id
+            offset += 250
+            if (ids != null && offset >= ids.size) break
         }
-        val ruleSetContentById = ruleSetDao?.getAll()
-            .orEmpty()
-            .associate { it.id to it.contentSha256 }
-        return ClassificationContext(
-            candidates,
-            annotations,
-            counterparts,
-            categoryAvailable,
-            ruleSetContentById,
-        )
+        AutoCategoryApplicationResult(processed, matched, preserved)
     }
 
     private suspend fun categorize(
@@ -261,6 +181,8 @@ class AutoCategorizer @Inject constructor(
         ingestionRunId: String?,
         trigger: ClassificationTrigger,
         ruleSetContentById: Map<String, String>,
+        enabledRules: List<AutoCategoryRuleWithTags>,
+        fallbacks: Map<CategoryReportingGroup, String>,
         onProgress: ((processedTransferCount: Int) -> Unit)? = null,
     ): AutoCategoryApplicationResult {
         if (candidates.isEmpty()) {
@@ -270,7 +192,6 @@ class AutoCategorizer @Inject constructor(
                 preservedManualOverrideCount = 0,
             )
         }
-        val enabledRules = ruleDao.getEnabledInPriorityOrder()
         var matchedTransferCount = 0
         var preservedManualOverrideCount = 0
         var processedTransferCount = 0
@@ -292,14 +213,23 @@ class AutoCategorizer @Inject constructor(
                     }
                     val decision = evaluation.decision
                     val match = decision as? ClassificationDecision.AutoApply
-                    val outcome = when {
-                        decision is ClassificationDecision.Abstain -> ClassificationOutcome.ABSTAINED
-                        isInternalTransfer || match != null -> ClassificationOutcome.AUTO_APPLIED
-                        else -> ClassificationOutcome.NO_MATCH
+                    val learned = if (!isInternalTransfer) localStore.learned(transfer) else null
+                    val choice = when {
+                        isInternalTransfer -> LocalCategoryChoice(INTERNAL_TRANSFER_CATEGORY_ID, LocalDecisionSource.OWN_ACCOUNT, "BANK_ACCOUNT_MATCH")
+                        learned != null -> learned
+                        match?.evaluation?.ruleWithTags?.rule?.categoryId != null -> LocalCategoryChoice(
+                            match.evaluation.ruleWithTags.rule.categoryId!!, LocalDecisionSource.RULE, "RULE_MATCH")
+                        else -> localStore.history(transfer) ?: LocalCategoryChoice(
+                            fallbacks.getValue(when {
+                                transfer.amount > 0 -> CategoryReportingGroup.INCOME
+                                transfer.amount < 0 -> CategoryReportingGroup.EXPENSE
+                                else -> CategoryReportingGroup.EXCLUDED
+                            }), LocalDecisionSource.FALLBACK, "UNKNOWN_PURPOSE")
                     }
+                    val outcome = ClassificationOutcome.AUTO_APPLIED
                     val trace = evaluation.materializeTrace(
                         transfer = transfer,
-                        selectedRuleId = match?.evaluation?.ruleWithTags?.rule?.id,
+                        selectedRuleId = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.id,
                         ingestionRunId = ingestionRunId,
                         executionId = executionId,
                         trigger = trigger,
@@ -308,11 +238,9 @@ class AutoCategorizer @Inject constructor(
                         decision = AutomaticClassificationDecision(
                             transferId = transfer.id,
                             extensionId = transfer.extensionId,
-                            categoryId = if (isInternalTransfer) {
-                                INTERNAL_TRANSFER_CATEGORY_ID
-                            } else {
-                                match?.evaluation?.ruleWithTags?.rule?.categoryId
-                            },
+                            categoryId = choice.categoryId,
+                            localSource = choice.source.name,
+                            localReason = choice.reason,
                             tagIds = if (
                                 isInternalTransfer || outcome != ClassificationOutcome.AUTO_APPLIED
                             ) {
@@ -325,12 +253,12 @@ class AutoCategorizer @Inject constructor(
                             runId = ingestionRunId,
                             trigger = trigger,
                             outcome = outcome,
-                            ruleId = match?.evaluation?.ruleWithTags?.rule?.id,
-                            ruleSetId = match?.evaluation?.ruleWithTags?.rule?.ruleSetId,
-                            ruleContentSha256 = match?.evaluation?.ruleWithTags?.contentSha256(),
-                            ruleSetContentSha256 = match?.evaluation?.ruleWithTags?.rule?.ruleSetId
+                            ruleId = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.id,
+                            ruleSetId = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.ruleSetId,
+                            ruleContentSha256 = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.contentSha256(),
+                            ruleSetContentSha256 = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.ruleSetId
                                 ?.let(ruleSetContentById::get),
-                            matchScore = match?.evaluation?.score,
+                            matchScore = match?.takeIf { choice.source == LocalDecisionSource.RULE }?.evaluation?.score,
                             classifierVersion = CLASSIFIER_VERSION,
                             classificationExecutionId = executionId,
                         ),
@@ -468,22 +396,7 @@ class AutoCategorizer @Inject constructor(
         val conditions: List<ClassificationConditionEvaluation>,
     )
 
-    private data class ClassificationContext(
-        val candidates: List<TransferClassificationCandidate>,
-        val annotations: Map<String, TransferAnnotation>,
-        val internalTransferCounterparts: Map<String, String>,
-        val internalTransferCategoryAvailable: Boolean,
-        val ruleSetContentById: Map<String, String>,
-    )
 
-    private fun ClassificationContext.automaticInternalTransferIds(): Set<String> =
-        annotations.values.asSequence()
-            .filter { annotation ->
-                annotation.categoryAssignment == AssignmentSource.AUTO &&
-                    annotation.categoryId == INTERNAL_TRANSFER_CATEGORY_ID
-            }
-            .map(TransferAnnotation::transferId)
-            .toSet()
 }
 
 /**
@@ -493,84 +406,7 @@ class AutoCategorizer @Inject constructor(
  * rule intentionally leaves every one-to-many or many-to-many group unclassified instead of using
  * ordering or a greedy tie-breaker that could turn an ordinary payment into an account transfer.
  */
-internal fun internalTransferCounterparts(
-    candidates: List<TransferClassificationCandidate>,
-): Map<String, String> {
-    val timedCandidates = candidates.mapNotNull { candidate ->
-        val transfer = candidate.transfer
-        val normalizedCurrency = candidate.currency.trim().uppercase(Locale.ROOT)
-        val postedAt = transfer.txnDateTime.parseIsoLocalDateTimeOrNull()
-        if (
-            normalizedCurrency.isBlank() ||
-            !transfer.amount.isFinite() ||
-            transfer.amount == 0.0 ||
-            postedAt == null
-        ) {
-            null
-        } else {
-            TimedTransferCandidate(candidate, normalizedCurrency, postedAt)
-        }
-    }
-    val neighbours = mutableMapOf<String, MutableSet<String>>()
-    timedCandidates.groupBy { candidate ->
-        InternalTransferBucket(
-            currency = candidate.normalizedCurrency,
-            absoluteAmount = abs(candidate.candidate.transfer.amount),
-            date = candidate.postedAt.toLocalDate(),
-        )
-    }.values.forEach { bucket ->
-        val income = bucket.filter { it.candidate.transfer.amount > 0.0 }
-        val expense = bucket.filter { it.candidate.transfer.amount < 0.0 }
-        income.forEach { incoming ->
-            expense.forEach { outgoing ->
-                val incomingTransfer = incoming.candidate.transfer
-                val outgoingTransfer = outgoing.candidate.transfer
-                if (
-                    incomingTransfer.accountId != outgoingTransfer.accountId &&
-                    Duration.between(incoming.postedAt, outgoing.postedAt).abs() <= INTERNAL_TRANSFER_WINDOW
-                ) {
-                    neighbours.getOrPut(incomingTransfer.id, ::mutableSetOf).add(outgoingTransfer.id)
-                    neighbours.getOrPut(outgoingTransfer.id, ::mutableSetOf).add(incomingTransfer.id)
-                }
-            }
-        }
-    }
-    return buildMap {
-        neighbours.forEach { (transferId, possibleCounterparts) ->
-            val counterpart = possibleCounterparts.singleOrNull() ?: return@forEach
-            if (neighbours[counterpart]?.singleOrNull() == transferId) {
-                put(transferId, counterpart)
-            }
-        }
-    }
-}
-
-private data class TimedTransferCandidate(
-    val candidate: TransferClassificationCandidate,
-    val normalizedCurrency: String,
-    val postedAt: LocalDateTime,
-)
-
-private data class InternalTransferBucket(
-    val currency: String,
-    val absoluteAmount: Double,
-    val date: LocalDate,
-)
-
-private fun String.parseIsoLocalDateTimeOrNull(): LocalDateTime? {
-    val value = trim()
-    return parseDateTimeOrNull { LocalDateTime.parse(value) }
-        ?: parseDateTimeOrNull { OffsetDateTime.parse(value).toLocalDateTime() }
-}
-
-private inline fun parseDateTimeOrNull(parse: () -> LocalDateTime): LocalDateTime? = try {
-    parse()
-} catch (_: DateTimeParseException) {
-    null
-}
-
 private const val INTERNAL_TRANSFER_CATEGORY_ID = "transfer-account"
-private val INTERNAL_TRANSFER_WINDOW: Duration = Duration.ofSeconds(30)
 private const val CLASSIFICATION_PROGRESS_BATCH_SIZE = 25
 
 /**
@@ -1015,7 +851,7 @@ private fun AutoCategoryRuleWithTags.contentSha256(): String {
 
 private const val MIN_CATEGORY_MARGIN = 20
 private const val MAX_INCLUDE_ALL_BONUS = 15
-private const val CLASSIFIER_VERSION = "rules-v2"
+private const val CLASSIFIER_VERSION = "local-adaptive-v1"
 
 @Module
 @InstallIn(SingletonComponent::class)

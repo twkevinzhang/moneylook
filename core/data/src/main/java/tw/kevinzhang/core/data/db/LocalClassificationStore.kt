@@ -10,6 +10,8 @@ class LocalClassificationStore @Inject constructor(private val database: Moneylo
     /** A DB snapshot provides consistent learning/rules across pages; cancellation rolls it back. */
     suspend fun <T> snapshot(block: suspend () -> T): T = database.withTransaction { block() }
 
+    suspend fun evidence(id: String): ClassificationLocalEvidence? = dao.evidence(id)
+
     suspend fun refreshExamples() {
         dao.pruneExamples()
         dao.pruneTokens()
@@ -53,7 +55,6 @@ class LocalClassificationStore @Inject constructor(private val database: Moneylo
         val roles = dao.roles().associateBy { it.role }
         CategoryReportingGroup.entries.associateWith { group ->
             val current = roles[group.name]?.let { database.categoryDao().getById(it.categoryId) }
-            if (current != null && current.reportingGroup == group) return@associateWith current.id
             val label = when (group) {
                 CategoryReportingGroup.INCOME -> "收入"
                 CategoryReportingGroup.EXPENSE -> "支出"
@@ -61,6 +62,10 @@ class LocalClassificationStore @Inject constructor(private val database: Moneylo
             }
             val existingNames = database.categoryDao().allNames().toSet()
             val base = "其他／用途不明（$label）"
+            if (current != null && current.reportingGroup == group &&
+                (current.name == base || current.name.matches(Regex("${Regex.escape(base)} (?:[2-9]|[1-9][0-9]+)")))) {
+                return@associateWith current.id
+            }
             var name = base
             var suffix = 2
             while (name in existingNames) { name = "$base ${suffix++}" }

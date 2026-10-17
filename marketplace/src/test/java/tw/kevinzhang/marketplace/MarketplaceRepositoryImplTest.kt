@@ -112,7 +112,7 @@ class MarketplaceRepositoryImplTest {
         val artifact = immutableRepo.downloadSyncTriggerScript(
             "https://github.com/owner/repo",
             "tw.test",
-            "tw.test::https://github.com/owner/repo",
+            "tw.test-local-artifact",
         )
 
         assertEquals(1, requests.count { it.contains("/git/ref/heads/main") })
@@ -122,7 +122,7 @@ class MarketplaceRepositoryImplTest {
             "4a5e08cd191c02e833a3db3e95ad5783978454f5780990f080572b838bc93af3",
             artifact.sha256,
         )
-        assertTrue(artifact.path.endsWith("/artifacts/${artifact.sha256}.js"))
+        assertTrue(File(artifact.path).parentFile.name == "artifacts" && File(artifact.path).name == "${artifact.sha256}.js")
         assertEquals(scriptBody, File(artifact.path).readText())
         val originalContent = scriptBody
 
@@ -130,10 +130,10 @@ class MarketplaceRepositoryImplTest {
         val updated = immutableRepo.downloadSyncTriggerScript(
             "https://github.com/owner/repo",
             "tw.test",
-            "tw.test::https://github.com/owner/repo",
+            "tw.test-local-artifact",
         )
         assertEquals(scriptBody, File(updated.path).readText())
-        assertTrue(updated.path.endsWith("/artifacts/${updated.sha256}.js"))
+        assertTrue(File(updated.path).parentFile.name == "artifacts" && File(updated.path).name == "${updated.sha256}.js")
         assertTrue(artifact.path != updated.path)
         assertEquals(originalContent, File(artifact.path).readText())
         assertEquals(

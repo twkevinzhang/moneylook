@@ -125,6 +125,7 @@ class ClassificationViewModel @Inject constructor(
     private val transactionDetailDraftStore: TransactionDetailDraftStore,
     private val autoCategorizer: AutoCategorizer,
     private val ingestionProvenanceDao: IngestionProvenanceDao,
+    private val localClassificationStore: tw.kevinzhang.core.data.db.LocalClassificationStore,
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
     private val _applyAllRulesUiState = MutableStateFlow<ApplyAllRulesUiState>(ApplyAllRulesUiState.Idle)
@@ -239,6 +240,16 @@ class ClassificationViewModel @Inject constructor(
                 "${it.startedAt} · run ${it.id} · ${it.trigger} · ${it.status} · " +
                     "${it.extensionId} v${it.extensionVersion}"
             }
+        val localEvidence = localClassificationStore.evidence(transferId)?.let {
+            val source = when (it.source) {
+                "OWN_ACCOUNT" -> "本人帳戶移轉"
+                "LEARNED" -> "本機學習"
+                "RULE" -> "自動分類規則"
+                "HISTORY" -> "本機歷史推測"
+                else -> "用途不明"
+            }
+            listOf("目前自動分類來源：$source · ${it.reason}")
+        }.orEmpty()
         val annotations = ingestionProvenanceDao.getTransferAnnotationEvents(transferId)
             .map {
                 "${it.occurredAt} · 分類 ${it.outcome} · run ${it.runId ?: "無"} · " +
@@ -263,7 +274,7 @@ class ClassificationViewModel @Inject constructor(
         auditState.value = TransactionAuditUi(
             fields = fields,
             documents = documents,
-            timeline = (runs + ingestion + annotations + rules + conditions).sortedDescending(),
+            timeline = localEvidence + (runs + ingestion + annotations + rules + conditions).sortedDescending(),
         )
     }
 
@@ -300,9 +311,6 @@ class ClassificationViewModel @Inject constructor(
                     ),
                 )
                 if (draft.resumeAutomatic) autoCategorizer.resumeAutomaticCategorization(transferId)
-                if (draft.matchingRule?.applyExisting == true) {
-                    autoCategorizer.applyToExistingTransactions(ClassificationTrigger.RULE_SAVE)
-                }
                 onSaved()
             } finally {
                 isDetailSaving.value = false
@@ -367,9 +375,6 @@ class ClassificationViewModel @Inject constructor(
                 conditions = normalized.conditions,
                 tagIds = normalized.tagIds,
             )
-            if (draft.applyExisting) {
-                autoCategorizer.applyToExistingTransactions(ClassificationTrigger.RULE_SAVE)
-            }
         }
     }
 

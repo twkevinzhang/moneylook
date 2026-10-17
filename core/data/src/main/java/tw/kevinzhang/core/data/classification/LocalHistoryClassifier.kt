@@ -6,7 +6,7 @@ data class LearningSample(val transferId: String, val categoryId: String, val fe
     override fun toString() = "LearningSample([REDACTED])"
 }
 
-private fun usable(sample: LearningSample) = sample.categoryId != "transfer-account" && !sample.categoryId.startsWith("local-fallback-")
+private fun usable(sample: LearningSample) = sample.correctionSequence >= 0 && sample.categoryId != "transfer-account" && !sample.categoryId.startsWith("local-fallback-")
 fun chooseLearned(features: LocalClassificationFeatures, examples: List<LearningSample>): LocalCategoryChoice? =
     examples.asSequence().filter { usable(it) && features.identity.isNotEmpty() && it.features == features && it.correctionSequence > 0 }
         .maxByOrNull { it.correctionSequence }?.let { LocalCategoryChoice(it.categoryId, LocalDecisionSource.LEARNED, "EXACT_MANUAL_PATTERN") }

@@ -237,7 +237,7 @@ class TransactionDetailCategoryCreationInteractionTest {
         composeRule.onNodeWithTag("category-tile-food").performClick()
         composeRule.onNodeWithText("儲存").performClick()
 
-        composeRule.onNodeWithText("套用到過去及未來的交易？").assertExists()
+        composeRule.onNodeWithText("儲存自動分類規則？").assertExists()
         composeRule.runOnIdle { assertEquals(null, savedDraft) }
         composeRule.onNodeWithText("返回編輯").performClick()
         composeRule.runOnIdle { assertEquals(null, savedDraft) }
@@ -273,7 +273,7 @@ class TransactionDetailCategoryCreationInteractionTest {
         composeRule.onNodeWithTag("category-tile-food").performClick()
         composeRule.onNodeWithText("儲存").performClick()
 
-        composeRule.onNodeWithText("套用到過去及未來的交易？").assertDoesNotExist()
+        composeRule.onNodeWithText("儲存自動分類規則？").assertDoesNotExist()
         composeRule.runOnIdle {
             assertEquals("food", savedDraft?.categoryId)
             assertEquals(null, savedDraft?.matchingRule)

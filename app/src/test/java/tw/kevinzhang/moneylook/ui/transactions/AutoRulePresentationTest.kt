@@ -78,7 +78,7 @@ class AutoRulePresentationTest {
         assertEquals(AutoCategoryRuleOrigin.USER_CONFIRMED, rule.origin)
         assertEquals(AutoCategoryRuleAction.AUTO_APPLY, rule.action)
         assertTrue(rule.createExactDescriptionCondition)
-        assertTrue(rule.applyExisting)
+        assertFalse(rule.applyExisting)
         assertTrue(rule.matches(candidate))
         assertFalse(rule.matches(candidate.copy(description = "全聯福利中心 台北店")))
         assertFalse(rule.matches(candidate.copy(description = "一般扣款", memo = "全聯福利中心")))

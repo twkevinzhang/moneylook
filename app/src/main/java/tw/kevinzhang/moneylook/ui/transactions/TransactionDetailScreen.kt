@@ -173,9 +173,9 @@ fun TransactionDetailContent(
     if (showRuleSaveConfirmation) {
         AlertDialog(
             onDismissRequest = { showRuleSaveConfirmation = false },
-            title = { Text("套用到過去及未來的交易？") },
+            title = { Text("儲存自動分類規則？") },
             text = {
-                Text("儲存後，符合這項規則的過去交易將重新分類，未來符合的交易也會自動套用。")
+                Text("儲存後，未來符合的交易會自動套用。過去交易請從自動分類規則選單執行「套用所有規則」。")
             },
             confirmButton = {
                 TextButton(
@@ -725,7 +725,7 @@ internal fun defaultExactDescriptionRule(
     action = AutoCategoryRuleAction.AUTO_APPLY,
     createExactDescriptionCondition = true,
     categoryId = categoryId,
-    applyExisting = true,
+    applyExisting = false,
 )
 
 private fun Double.toAutoRuleAmountSign(): AutoCategoryRuleAmountSign = when {
