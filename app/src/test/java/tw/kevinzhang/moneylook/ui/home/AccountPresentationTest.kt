@@ -8,6 +8,27 @@ import org.junit.Test
 import tw.kevinzhang.core.data.model.AssetKind
 
 class AccountPresentationTest {
+    @Test fun depositNumbersPreserveLeadingZerosAndBankMasking() {
+        for (kind in listOf(AssetKind.DEPOSIT, AssetKind.TIME_DEPOSIT)) {
+            for (number in listOf("001234567890", "***12345", "001-234-567890")) {
+                val presentation = accountRowPresentation(kind, 100.0, "TWD", null, number)
+                assertEquals("帳號 $number", presentation.accountNumberText)
+            }
+        }
+    }
+
+    @Test fun missingDepositNumbersAreExplicitWithoutInventingAnIdentifier() {
+        for (number in listOf(null, "", "   ")) {
+            assertEquals("尚未取得帳號", accountRowPresentation(AssetKind.DEPOSIT, 0.0, "TWD", null, number).accountNumberText)
+        }
+    }
+
+    @Test fun cardAndLoanPresentationDoNotExposeAccountNumbers() {
+        for (kind in listOf(AssetKind.CREDIT_CARD, AssetKind.LOAN)) {
+            assertNull(accountRowPresentation(kind, 100.0, "TWD", null, "001234567890").accountNumberText)
+        }
+    }
+
     @Test
     fun depositShowsItsBalanceAsAnAsset() {
         val presentation = accountRowPresentation(

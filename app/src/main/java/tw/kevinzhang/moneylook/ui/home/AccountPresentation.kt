@@ -4,14 +4,12 @@ import tw.kevinzhang.core.data.model.AssetKind
 import java.util.Locale
 import kotlin.math.abs
 
-/**
- * UI-ready values for an account row. The account number is deliberately not
- * represented here, so it cannot accidentally be rendered on the Home screen.
- */
+/** UI-ready account values; only deposit accounts expose their supplied account number. */
 data class AccountRowPresentation(
     val primaryAmount: String,
     val supportingText: String?,
     val isLiability: Boolean,
+    val accountNumberText: String?,
 )
 
 fun accountRowPresentation(
@@ -19,6 +17,7 @@ fun accountRowPresentation(
     balance: Double,
     currency: String,
     availableCredit: Double?,
+    accountNo: String? = null,
 ): AccountRowPresentation {
     val isLiability = kind == AssetKind.CREDIT_CARD || kind == AssetKind.LOAN
     val primaryAmount = if (isLiability && balance > 0) {
@@ -35,6 +34,9 @@ fun accountRowPresentation(
         primaryAmount = primaryAmount,
         supportingText = supportingText,
         isLiability = isLiability,
+        accountNumberText = if (kind == AssetKind.DEPOSIT || kind == AssetKind.TIME_DEPOSIT) {
+            accountNo?.trim()?.takeIf(String::isNotEmpty)?.let { "帳號 $it" } ?: "尚未取得帳號"
+        } else null,
     )
 }
 

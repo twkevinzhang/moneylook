@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -69,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -799,7 +801,7 @@ private fun ExtensionIcon(extension: InstalledExtension) {
 }
 
 @Composable
-private fun AccountRow(
+internal fun AccountRow(
     account: Account,
     creditCardCount: Int,
     onClick: () -> Unit,
@@ -809,10 +811,12 @@ private fun AccountRow(
         balance = account.balance,
         currency = account.currency,
         availableCredit = account.availableCredit,
+        accountNo = account.accountNo,
     )
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .testTag("home-account-${account.id}")
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -822,49 +826,66 @@ private fun AccountRow(
             contentDescription = accountAssetIconDescription(account.kind),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 12.dp),
-        ) {
-            Text(
-                text = account.accountName,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            if (account.kind == AssetKind.CREDIT_CARD) {
-                creditCardCountLabel(creditCardCount)?.let { label ->
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        BoxWithConstraints(Modifier.weight(1f).padding(start = 12.dp)) {
+            // Leave deposit identifiers the full width on narrow windows or with larger text.
+            val stackAmounts = presentation.accountNumberText != null &&
+                maxWidth < 300.dp * LocalDensity.current.fontScale
+            if (stackAmounts) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    AccountIdentity(account, presentation, creditCardCount)
+                    AccountAmounts(account, presentation, Modifier.align(Alignment.End))
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AccountIdentity(account, presentation, creditCardCount, Modifier.weight(1f).padding(end = 12.dp))
+                    AccountAmounts(account, presentation)
                 }
             }
-            presentation.supportingText?.let { supportingText ->
-                Text(
-                    text = supportingText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        }
+    }
+}
+
+@Composable
+private fun AccountIdentity(
+    account: Account,
+    presentation: AccountRowPresentation,
+    creditCardCount: Int,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Text(account.accountName, style = MaterialTheme.typography.bodyMedium)
+        presentation.accountNumberText?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (account.kind == AssetKind.CREDIT_CARD) {
+            creditCardCountLabel(creditCardCount)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = presentation.primaryAmount,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = if (presentation.isLiability) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-            )
-            Text(
-                text = formatRelativeTime(account.lastSyncAt),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        presentation.supportingText?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun AccountAmounts(
+    account: Account,
+    presentation: AccountRowPresentation,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, horizontalAlignment = Alignment.End) {
+        Text(
+            text = presentation.primaryAmount,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = if (presentation.isLiability) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = formatRelativeTime(account.lastSyncAt),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
