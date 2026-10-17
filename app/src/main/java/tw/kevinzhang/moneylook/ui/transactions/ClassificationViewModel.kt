@@ -129,6 +129,8 @@ class ClassificationViewModel @Inject constructor(
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
     private val _applyAllRulesUiState = MutableStateFlow<ApplyAllRulesUiState>(ApplyAllRulesUiState.Idle)
+    private var applyJob: kotlinx.coroutines.Job? = null
+    val applyScopeText = MutableStateFlow("只補分類尚未分類的交易；保留手動設定的分類、標籤與備註。")
     private val _classificationResetUiState = MutableStateFlow<ClassificationResetUiState>(ClassificationResetUiState.Idle)
     private val auditState = MutableStateFlow(TransactionAuditUi())
 
@@ -385,7 +387,22 @@ class ClassificationViewModel @Inject constructor(
             _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
             _classificationResetUiState.value != ClassificationResetUiState.Idle
         ) return
-        _applyAllRulesUiState.value = ApplyAllRulesUiState.Confirming
+        _applyAllRulesUiState.value = ApplyAllRulesUiState.Preparing
+        applyJob = viewModelScope.launch {
+            try {
+                val (count, first) = autoCategorizer.previewAutoClassification()
+                applyScopeText.value = (if (first) "本次首次套用包含過去由預設規則分類及尚未分類的交易。" else "本次只補分類尚未分類的交易。") +
+                    "共 $count 筆；每次最多 100 次 AI 請求或 10 分鐘，未完成可接續。手動設定的分類、標籤與備註會保留。"
+                _applyAllRulesUiState.value = ApplyAllRulesUiState.Confirming
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("無法載入待分類交易，請重試") }
+        }
+    }
+
+    fun stopApplyAllRules() {
+        applyJob?.cancel()
+        if (_applyAllRulesUiState.value is ApplyAllRulesUiState.Applying || _applyAllRulesUiState.value == ApplyAllRulesUiState.Preparing)
+            _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("已停止並保存已完成的分類，稍後可接續。")
     }
 
     fun cancelApplyAllRules() {
@@ -421,7 +438,7 @@ class ClassificationViewModel @Inject constructor(
 
     private fun runApplyAllRules() {
         _applyAllRulesUiState.value = ApplyAllRulesUiState.Preparing
-        viewModelScope.launch {
+        applyJob = viewModelScope.launch {
             var latestProgress: AutoCategoryApplicationProgress? = null
             try {
                 val result = withContext(Dispatchers.Default) {
@@ -433,7 +450,11 @@ class ClassificationViewModel @Inject constructor(
                         )
                     }
                 }
-                _applyAllRulesUiState.value = ApplyAllRulesUiState.Success(
+                _applyAllRulesUiState.value = if (result.pendingTransferCount > 0 || result.stopReason != null) ApplyAllRulesUiState.Error(
+                    message = (result.stopReason ?: "部分交易尚未取得有效分類") + "。已保存結果，尚有 ${result.pendingTransferCount} 筆待處理，可接續。",
+                    processedTransferCount = result.processedTransferCount,
+                    totalTransferCount = latestProgress?.totalTransferCount ?: 0,
+                ) else ApplyAllRulesUiState.Success(
                     processedTransferCount = result.processedTransferCount,
                     matchedTransferCount = result.matchedTransferCount,
                     preservedManualOverrideCount = result.preservedManualOverrideCount,
@@ -549,9 +570,6 @@ class ClassificationViewModel @Inject constructor(
             return
         }
         for (category in DefaultClassificationCatalog.categories) categoryDao.upsert(category)
-        for (rule in DefaultClassificationCatalog.publicAutoCategoryRules) {
-            autoCategoryRuleDao.insertIfAbsent(rule)
-        }
         preferences.edit().putBoolean(DEFAULT_CATEGORIES_SEEDED, true).apply()
     }
 

@@ -44,7 +44,7 @@ import tw.kevinzhang.moneylook.schedule.ClassificationTraceMaintenanceScheduler
 
 @RunWith(RobolectricTestRunner::class)
 class AutoCategorizerTest {
-    @Test fun `cancelled bulk snapshot rolls back and rerun completes without duplicate annotations`() = runBlocking {
+    @Test fun `cancelled bulk preserves completed writes and rerun has no duplicate annotations`() = runBlocking {
         database.categoryDao().upsert(Category("cancel-category", "取消測試", "#000000"))
         database.autoCategoryRuleDao().upsertWithTags(AutoCategoryRule("cancel-rule", "取消測試", descriptionContains = "陌生交易", categoryId = "cancel-category"), emptySet())
         val rows = (1..260).map { transfer("cancel-$it", "陌生交易", -it.toDouble()) }
@@ -54,7 +54,7 @@ class AutoCategorizerTest {
             categorizer.applyToExistingTransactions { if (it.processedTransferCount >= 25) throw kotlinx.coroutines.CancellationException("test cancellation") }
         } catch (_: kotlinx.coroutines.CancellationException) { cancelled = true }
         assertTrue(cancelled)
-        assertTrue(database.transferAnnotationDao().getAll().isEmpty())
+        assertEquals(25, database.transferAnnotationDao().getAll().size)
         assertEquals(260, categorizer.applyToExistingTransactions().processedTransferCount)
         assertEquals(260, database.transferAnnotationDao().getAll().size)
     }
@@ -666,7 +666,7 @@ class AutoCategorizerTest {
             val result = categorizer.resetClassificationSystem(progress::add)
 
             assertEquals(1, result.processedTransferCount)
-            assertEquals(1, result.matchedTransferCount)
+            assertEquals(0, result.matchedTransferCount)
             assertEquals(0, result.preservedManualOverrideCount)
             assertEquals(
                 listOf(
@@ -693,7 +693,7 @@ class AutoCategorizerTest {
                     .any { it.rule.id == customRule.id },
             )
             database.transferAnnotationDao().observeDetail(transfer.id).first()!!.also { detail ->
-                assertEquals("income-salary", detail.annotation?.categoryId)
+                assertNull(detail.annotation?.categoryId)
                 assertEquals("這段備註必須保留", detail.annotation?.note)
                 assertEquals(AssignmentSource.AUTO, detail.annotation?.categoryAssignment)
                 assertFalse(detail.annotation?.manualOverride == true)
@@ -1290,7 +1290,7 @@ class AutoCategorizerTest {
     }
 
     @Test
-    fun `bundled merchant rules classify ASUS credit card fixtures without MCC and preserve manual choices`() = runBlocking {
+    fun `removed merchant defaults leave fixtures for AI while preserving manual choices`() = runBlocking {
         // Exercise the catalog through the same reset/seeding path as the app.  Do not rebuild a
         // test-only rule list here: these fixtures must fail whenever the shipped catalog drifts.
         categorizer.resetClassificationSystem()
@@ -1437,8 +1437,7 @@ class AutoCategorizerTest {
         assertEquals(1, result.preservedManualOverrideCount)
         fixtures.forEach { fixture ->
             val actual = database.transferAnnotationDao().observeDetail(fixture.id).first()?.annotation?.categoryId
-            if (fixture.expectedCategoryId == null) assertNull("${fixture.id} remains uncategorized", actual)
-            else assertEquals("${fixture.id} uses seeded catalog", fixture.expectedCategoryId, actual)
+            assertNull("${fixture.id} awaits AI rather than a removed default", actual)
         }
         database.transferAnnotationDao().observeDetail(manuallyClassified.id).first()!!.annotation!!.also {
             assertEquals("expense-shopping", it.categoryId)
@@ -1518,7 +1517,7 @@ class AutoCategorizerTest {
         )
     }
 
-    @Test fun `apply all reads legacy post evidence and removed login retracts ownership`() = runBlocking {
+    @Test fun `post evidence without counterpart bank is not an ownership exception`() = runBlocking {
         val source = tw.kevinzhang.core.data.model.InstalledExtension("extension", "tw.gov.post.ipost", "Post", 1, "repo", "script", null)
         val target = source.copy(id = "target-bank", manifestId = "tw.com.taishinbank")
         database.installedExtensionDao().insert(source)
@@ -1530,7 +1529,7 @@ class AutoCategorizerTest {
         database.transferDao().upsertAll(listOf(row))
         assertTrue(database.transferAnnotationDao().getByTransferIds(listOf(row.id)).isEmpty())
         categorizer.applyToExistingTransactions()
-        assertEquals("transfer-account", database.transferAnnotationDao().getByTransferIds(listOf(row.id)).single().categoryId)
+        assertNull(database.transferAnnotationDao().getByTransferIds(listOf(row.id)).singleOrNull()?.categoryId)
         database.credentialProfileDao().deleteByExtensionId(target.id)
         categorizer.applyToExistingTransactions()
         assertFalse(database.transferAnnotationDao().getByTransferIds(listOf(row.id)).singleOrNull()?.categoryId == "transfer-account")
@@ -1540,13 +1539,13 @@ class AutoCategorizerTest {
         val extension = tw.kevinzhang.core.data.model.InstalledExtension("owned-bank", "tw.com.cathaybk", "Bank", 1, "repo", "script", null)
         database.installedExtensionDao().insert(extension)
         database.credentialProfileDao().upsert(tw.kevinzhang.core.data.model.CredentialProfile(extension.id, "test", scheduleCron = "0 0 * * *", timezoneId = "Asia/Taipei"))
-        database.accountDao().upsertAll(listOf(account("own-target").copy(extensionId = extension.id, accountNo = "001234567890", bankId = "013")))
+        database.accountDao().upsertAll(listOf(account("account").copy(extensionId=extension.id,accountNo="999999999999",bankId="700"), account("own-target").copy(extensionId = extension.id, accountNo = "001234567890", bankId = "013")))
         val row = transfer("bank-match", "轉帳", -500.0).copy(counterpartyBank = "013", counterpartyAccount = "***67890")
         database.transferDao().upsertAll(listOf(row))
         categorizer.categorizeTransferIds(listOf(row.id))
         assertEquals("transfer-account", database.transferAnnotationDao().getByTransferIds(listOf(row.id)).single().categoryId)
         database.credentialProfileDao().deleteByExtensionId(extension.id)
-        categorizer.applyToExistingTransactions()
+        categorizer.categorizeTransferIds(listOf(row.id))
         assertNull(database.transferAnnotationDao().getByTransferIds(listOf(row.id)).singleOrNull()?.categoryId)
     }
 

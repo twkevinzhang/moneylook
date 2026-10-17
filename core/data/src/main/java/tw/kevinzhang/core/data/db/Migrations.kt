@@ -976,3 +976,23 @@ val MIGRATION_31_32 = object : Migration(31, 32) {
         db.execSQL("DELETE FROM classification_fallback_roles")
     }
 }
+
+/** Capture sources before deleting defaults; do not alter their existing annotations yet. */
+val MIGRATION_32_33 = object : androidx.room.migration.Migration(32, 33) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS ai_classification_state (id INTEGER NOT NULL PRIMARY KEY, started INTEGER NOT NULL, complete INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS ai_classification_work (transferId TEXT NOT NULL PRIMARY KEY, categoryId TEXT, ruleId TEXT, ruleSetId TEXT, completed INTEGER NOT NULL)")
+        db.execSQL("INSERT OR IGNORE INTO ai_classification_state VALUES(1,0,0)")
+        preserveEditedDefaults(db)
+        captureRetiredDefaults(db)
+        val defaults = "SELECT id FROM auto_category_rules WHERE origin='PUBLIC_DEFAULT' OR (isDefault=1 AND origin='LEGACY')"
+        db.execSQL("""INSERT OR IGNORE INTO ai_classification_work
+            SELECT transferId,categoryId,autoRuleId,autoRuleSetId,0 FROM transfer_annotations
+            WHERE manualOverride=0 AND categoryId IS NOT NULL AND (autoRuleId IN ($defaults)
+            OR (categoryId='transfer-account' AND transferId IN (SELECT transferId FROM classification_local_evidence WHERE source='OWN_ACCOUNT'))
+            OR (autoRuleSetId IN (SELECT id FROM auto_category_rule_sets WHERE origin='PUBLIC_DEFAULT')
+                AND NOT EXISTS(SELECT 1 FROM auto_category_rules r WHERE r.id=transfer_annotations.autoRuleId AND r.id NOT IN ($defaults))))""")
+        db.execSQL("DELETE FROM auto_category_rules WHERE id IN ($defaults)")
+        db.execSQL("DELETE FROM auto_category_rule_sets WHERE origin='PUBLIC_DEFAULT' AND id NOT IN (SELECT ruleSetId FROM auto_category_rules WHERE ruleSetId IS NOT NULL)")
+    }
+}

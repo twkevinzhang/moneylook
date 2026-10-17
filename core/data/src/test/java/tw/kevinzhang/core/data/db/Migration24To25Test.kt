@@ -28,7 +28,7 @@ class Migration24To25Test {
             MoneylookDatabase::class.java,
         ).addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .allowMainThreadQueries()
-            .build()
+            .build().also(::seedLegacyRules)
     }
 
     @After

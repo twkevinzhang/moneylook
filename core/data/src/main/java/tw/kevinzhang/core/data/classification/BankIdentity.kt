@@ -47,28 +47,21 @@ fun ipostPaddedCounterpartyAccount(transfer: Transfer, sourceManifestId: String?
 }
 
 fun matchesOwnedAccount(transfer: Transfer, accounts: List<OwnedBankAccount>, sourceManifestId: String? = null): Boolean {
+    val source = accounts.firstOrNull { it.accountId == transfer.accountId } ?: return false
+    val sourceIdentity = normalizeBankIdentity(source.bankId) to account(source.accountNumber)
+    if (accounts.map { normalizeBankIdentity(it.bankId) to account(it.accountNumber) }.distinct().size < 2) return false
     val semantics = listOfNotNull(transfer.type, transfer.description, transfer.purpose, transfer.transactionCode)
         .joinToString(" ").lowercase()
     if (!Regex("轉帳|轉入|轉出|跨行轉|網路跨行|匯入|匯出|匯款|transfer|remittance").containsMatchIn(semantics)) return false
     val padded = ipostPaddedCounterpartyAccount(transfer, sourceManifestId)
-    val bank = normalizeBankIdentity(transfer.counterpartyBank)
-    if (bank == null) {
-        // An unknown/nonempty bank is not missing evidence and must never use this exception.
-        if (!transfer.counterpartyBank.isNullOrBlank() || padded == null) return false
-        val matches = accounts.filter { target ->
-            val own = account(target.accountNumber)
-            target.accountId != transfer.accountId && normalizeBankIdentity(target.bankId) != null &&
-                own.length in 6..16 && own.all(Char::isDigit) && own.padStart(16, '0') == padded
-        }.map { normalizeBankIdentity(it.bankId) to account(it.accountNumber) }.distinct()
-        // Multiple currency rows of the same bank/account represent one physical account.
-        return matches.size == 1
-    }
+    val bank = normalizeBankIdentity(transfer.counterpartyBank) ?: return false
     val incoming = padded ?: account(transfer.counterpartyAccount ?: return false)
     if (!incoming.matches(Regex("[0-9*xX●•]+"))) return false
     val suffix = incoming.takeLast(5).takeIf { it.matches(Regex("[0-9]{5}")) } ?: return false
     return accounts.any { target ->
         if (target.accountId == transfer.accountId || normalizeBankIdentity(target.bankId) != bank) return@any false
         val own = account(target.accountNumber)
+        if ((normalizeBankIdentity(target.bankId) to own) == sourceIdentity) return@any false
         if (!own.matches(Regex("[0-9*xX●•]+"))) return@any false
         val incomingComplete = incoming.length > 5 && incoming.all(Char::isDigit)
         val ownComplete = own.length > 5 && own.all(Char::isDigit)

@@ -1,6 +1,11 @@
 package tw.kevinzhang.moneylook.sync
 
 import com.google.gson.Gson
+import tw.kevinzhang.moneylook.ai.*
+import tw.kevinzhang.core.data.db.AiClassificationStore
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import tw.kevinzhang.core.data.classification.*
 import tw.kevinzhang.core.data.db.LocalClassificationStore
 import kotlinx.coroutines.ensureActive
@@ -68,6 +73,8 @@ data class AutoCategoryApplicationResult(
     val processedTransferCount: Int,
     val matchedTransferCount: Int,
     val preservedManualOverrideCount: Int,
+    val pendingTransferCount: Int = 0,
+    val stopReason: String? = null,
 )
 
 data class AutoCategoryApplicationProgress(
@@ -99,6 +106,8 @@ class AutoCategorizer @Inject constructor(
     private val ruleSetDao: AutoCategoryRuleSetDao? = null,
     private val gson: Gson = Gson(),
     private val classificationTraceMaintenanceScheduler: ClassificationTraceMaintenanceScheduler,
+    private val aiClassifier: AiClassifier? = null,
+    private val aiStore: AiClassificationStore? = null,
 ) : TransferAutoCategorizer {
     private val categorizationMutex = Mutex()
 
@@ -111,7 +120,8 @@ class AutoCategorizer @Inject constructor(
     private suspend fun categorizeTransferIdsInternal(transferIds: List<String>, ingestionRunId: String?) {
         if (transferIds.isEmpty()) return
         categorizationMutex.withLock {
-            runClassification(transferIds.distinct(), ingestionRunId, ClassificationTrigger.INGESTION)
+            val result = runClassification(transferIds.distinct(), ingestionRunId, ClassificationTrigger.INGESTION)
+            if (result.stopReason != null) throw IllegalStateException(result.stopReason)
         }
     }
 
@@ -119,8 +129,14 @@ class AutoCategorizer @Inject constructor(
         trigger: ClassificationTrigger = ClassificationTrigger.BULK_REAPPLY,
         onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
     ): AutoCategoryApplicationResult = categorizationMutex.withLock {
-        runClassification(null, null, trigger, onProgress)
+        aiStore?.begin()
+        val result = runClassification(aiStore?.pendingIds(), null, trigger, onProgress)
+        aiStore?.finish()
+        result.copy(pendingTransferCount = aiStore?.pendingIds()?.size ?: result.pendingTransferCount)
     }
+
+    suspend fun previewAutoClassification(): Pair<Int, Boolean> =
+        (aiStore?.pendingIds()?.size ?: transferDao.classificationCount()) to (aiStore?.isFirst() == true)
 
     suspend fun resetClassificationSystem(onProgress: (ClassificationResetProgress) -> Unit = {}): AutoCategoryApplicationResult =
         categorizationMutex.withLock {
@@ -141,12 +157,15 @@ class AutoCategorizer @Inject constructor(
     private suspend fun runClassification(
         ids: List<String>?, runId: String?, trigger: ClassificationTrigger,
         onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
-    ): AutoCategoryApplicationResult = localStore.snapshot {
-        localStore.refreshExamples()
+    ): AutoCategoryApplicationResult = run {
+        localStore.snapshot { localStore.refreshExamples() }
+        val budget = ClassificationBudget()
         val owned = localStore.ownedAccounts()
         val sourceManifests = mutableMapOf<String, String?>()
         val canTransfer = categoryDao.getById(INTERNAL_TRANSFER_CATEGORY_ID)?.reportingGroup == CategoryReportingGroup.EXCLUDED
-        val rules = ruleDao.getEnabledInPriorityOrder().filter { it.rule.categoryId != INTERNAL_TRANSFER_CATEGORY_ID }
+        val rules = ruleDao.getEnabledInPriorityOrder().filter {
+            it.rule.categoryId != INTERNAL_TRANSFER_CATEGORY_ID && !it.rule.isDefault && it.rule.origin != AutoCategoryRuleOrigin.PUBLIC_DEFAULT
+        }
         val ruleContents = ruleSetDao?.getAll().orEmpty().associate { it.id to it.contentSha256 }
         val total = ids?.size ?: transferDao.classificationCount()
         var processed = 0
@@ -160,22 +179,27 @@ class AutoCategorizer @Inject constructor(
             val page = if (ids == null) transferDao.classificationPage(after, 250)
                 else transferDao.classificationByIds(ids.subList(offset, minOf(offset + 250, ids.size)))
             if (page.isEmpty() && (ids == null || offset >= ids.size)) break
+            if (ids != null) {
+                val present = page.mapTo(mutableSetOf()) { it.transfer.id }
+                ids.subList(offset, minOf(offset + 250, ids.size)).filterNot { it in present }.forEach { aiStore?.skip(it) }
+            }
             for (extensionId in page.map { it.transfer.extensionId }.distinct()) {
                 if (extensionId !in sourceManifests) sourceManifests[extensionId] = localStore.sourceManifestId(extensionId)
             }
             val ownIds = if (canTransfer) page.filter { matchesOwnedAccount(it.transfer, owned, sourceManifests[it.transfer.extensionId]) }.mapTo(mutableSetOf()) { it.transfer.id } else emptySet()
             val before = processed
-            val result = categorize(page, ownIds, runId, trigger, ruleContents, rules) {
+            val result = categorize(page, ownIds, runId, trigger, ruleContents, rules, budget) {
                 onProgress(AutoCategoryApplicationProgress(before + it, total))
             }
             processed += result.processedTransferCount
             matched += result.matchedTransferCount
             preserved += result.preservedManualOverrideCount
+            if (budget.stopReason != null) break
             if (page.isNotEmpty()) after = page.last().transfer.id
             offset += 250
             if (ids != null && offset >= ids.size) break
         }
-        AutoCategoryApplicationResult(processed, matched, preserved)
+        AutoCategoryApplicationResult(processed, matched, preserved, stopReason = budget.stopReason ?: if (budget.failed > 0) "${budget.failed} 筆 AI 回應無效，仍待分類" else null)
     }
 
     private suspend fun categorize(
@@ -185,6 +209,7 @@ class AutoCategorizer @Inject constructor(
         trigger: ClassificationTrigger,
         ruleSetContentById: Map<String, String>,
         enabledRules: List<AutoCategoryRuleWithTags>,
+        budget: ClassificationBudget,
         onProgress: ((processedTransferCount: Int) -> Unit)? = null,
     ): AutoCategoryApplicationResult {
         if (candidates.isEmpty()) {
@@ -198,32 +223,65 @@ class AutoCategorizer @Inject constructor(
         var preservedManualOverrideCount = 0
         var processedTransferCount = 0
 
-        candidates.groupBy { it.transfer.extensionId }.forEach { (extensionId, extensionCandidates) ->
+        for ((extensionId, extensionCandidates) in candidates.groupBy { it.transfer.extensionId }) {
+            if (budget.stopReason != null) break
             val executionId = classificationTraceStore.startExecution(
                 extensionId = extensionId,
                 trigger = trigger,
                 runId = ingestionRunId,
             )
             try {
-                extensionCandidates.forEach { candidate ->
+                for (candidate in extensionCandidates) {
                     val transfer = candidate.transfer
+                    val expected = annotationDao.getByTransferIds(listOf(transfer.id)).singleOrNull()
+                    val legacy = aiStore?.legacy(transfer.id)
+                    if (legacy != null && trigger == ClassificationTrigger.INGESTION) continue
+                    if (legacy != null && (expected?.manualOverride == true || expected?.categoryId != legacy.categoryId ||
+                            expected?.autoRuleId != legacy.ruleId || expected?.autoRuleSetId != legacy.ruleSetId)) {
+                        aiStore?.skip(transfer.id)
+                        processedTransferCount++
+                        continue
+                    }
+                    val forceAi = legacy != null
                     val isInternalTransfer = transfer.id in internalTransferIds
-                    val evaluation = if (isInternalTransfer) {
+                    val evaluation = if (isInternalTransfer || forceAi) {
                         ClassificationEvaluation.empty()
                     } else {
                         enabledRules.evaluateClassification(candidate)
                     }
                     val decision = evaluation.decision
                     val match = decision as? ClassificationDecision.AutoApply
-                    val learned = if (!isInternalTransfer) localStore.learned(transfer) else null
+                    val learned = if (!isInternalTransfer && !forceAi) localStore.learned(transfer) else null
                     val choice = when {
                         isInternalTransfer -> LocalCategoryChoice(INTERNAL_TRANSFER_CATEGORY_ID, LocalDecisionSource.OWN_ACCOUNT, "OWNED_ACCOUNT_MATCH")
                         learned != null -> learned
                         match?.evaluation?.ruleWithTags?.rule?.categoryId != null -> LocalCategoryChoice(
                             match.evaluation.ruleWithTags.rule.categoryId!!, LocalDecisionSource.RULE, "RULE_MATCH")
-                        else -> localStore.history(transfer)
+                        else -> if (forceAi) null else localStore.history(transfer)
                     }
-                    val outcome = if (choice != null || match != null) ClassificationOutcome.AUTO_APPLIED else ClassificationOutcome.NO_MATCH
+                    var proposal: tw.kevinzhang.core.data.model.AiCategoryProposal? = null
+                    if (choice == null && expected?.manualOverride != true && aiClassifier != null) {
+                        if (!budget.canRequest()) break
+                        try {
+                            budget.requests++
+                            proposal = withTimeout(budget.remainingMillis().coerceAtMost(60_000L)) {
+                                aiClassifier.classify(aiInput(candidate, categoryDao.observeAll().first()))
+                            }
+                        } catch (_: TimeoutCancellationException) {
+                            budget.stopReason = "AI 連線逾時，已保存進度，可再次接續"
+                            break
+                        } catch (e: AiClassificationException) {
+                            if (e.code != AiFailureCode.INVALID_RESPONSE) {
+                                budget.stopReason = e.message
+                                break
+                            }
+                            processedTransferCount++
+                            budget.failed++
+                            onProgress?.invoke(processedTransferCount)
+                            continue
+                        }
+                    }
+                    val outcome = if (choice != null || match != null || proposal != null) ClassificationOutcome.AUTO_APPLIED else ClassificationOutcome.NO_MATCH
                     val trace = evaluation.materializeTrace(
                         transfer = transfer,
                         selectedRuleId = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.ruleWithTags?.rule?.id,
@@ -231,8 +289,7 @@ class AutoCategorizer @Inject constructor(
                         executionId = executionId,
                         trigger = trigger,
                     )
-                    val writeResult = classificationTraceStore.apply(
-                        decision = AutomaticClassificationDecision(
+                    val automaticDecision = AutomaticClassificationDecision(
                             transferId = transfer.id,
                             extensionId = transfer.extensionId,
                             categoryId = choice?.categoryId,
@@ -258,11 +315,28 @@ class AutoCategorizer @Inject constructor(
                             matchScore = match?.takeIf { choice?.source == LocalDecisionSource.RULE }?.evaluation?.score,
                             classifierVersion = CLASSIFIER_VERSION,
                             classificationExecutionId = executionId,
-                        ),
+                        )
+                    suspend fun write(decision: AutomaticClassificationDecision) = classificationTraceStore.apply(
+                        decision = decision,
                         summary = evaluation.summary(trace),
                         ruleEvaluations = trace.rules,
                         conditionEvaluations = trace.conditions,
                     )
+                    val writeResult = try { if (aiStore != null) aiStore.guarded(transfer, expected) {
+                        val ai = proposal
+                        if (ai != null) {
+                            val categoryId = try { aiStore.resolve(ai) } catch (_: IllegalArgumentException) {
+                                throw AiClassificationException(AiFailureCode.INVALID_RESPONSE)
+                            }
+                            write(automaticDecision.copy(categoryId = categoryId, localSource = "AI", localReason = listOfNotNull(ai.provider, ai.model, ai.reason).joinToString(" / "), classifierVersion = "ai-v1"))
+                        } else write(automaticDecision)
+                    } else write(automaticDecision) } catch (e: AiClassificationException) {
+                        if (e.code != AiFailureCode.INVALID_RESPONSE) throw e
+                        budget.failed++
+                        processedTransferCount++
+                        onProgress?.invoke(processedTransferCount)
+                        continue
+                    }
                     when (writeResult) {
                         AutomaticClassificationWriteResult.APPLIED -> matchedTransferCount += 1
                         AutomaticClassificationWriteResult.PRESERVED_MANUAL ->
@@ -287,7 +361,7 @@ class AutoCategorizer @Inject constructor(
             }
         }
         return AutoCategoryApplicationResult(
-            processedTransferCount = candidates.size,
+            processedTransferCount = processedTransferCount,
             matchedTransferCount = matchedTransferCount,
             preservedManualOverrideCount = preservedManualOverrideCount,
         )

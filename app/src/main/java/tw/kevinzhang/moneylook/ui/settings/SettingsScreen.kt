@@ -31,6 +31,7 @@ fun SettingsScreen(
     onNavigateToTags: () -> Unit = {},
     onNavigateToRules: () -> Unit = {},
     onNavigateToDataTransfer: () -> Unit = {},
+    onNavigateToAiSettings: () -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -50,6 +51,8 @@ fun SettingsScreen(
             SettingsRow("標籤管理", "建立可套用至多筆交易的標籤", onNavigateToTags)
             HorizontalDivider()
             SettingsRow("自動分類規則", "依交易文字、收支、金額及帳戶自動套用", onNavigateToRules)
+            HorizontalDivider()
+            SettingsRow("AI分類設定", "設定 AI 服務、模型與 API Token", onNavigateToAiSettings)
             HorizontalDivider()
             SettingsRow(
                 title = "資料匯入與匯出",

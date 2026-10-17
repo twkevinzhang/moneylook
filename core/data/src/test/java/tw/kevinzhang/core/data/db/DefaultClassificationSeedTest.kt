@@ -29,7 +29,7 @@ class DefaultClassificationSeedTest {
             MoneylookDatabase::class.java,
         ).addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .allowMainThreadQueries()
-            .build()
+            .build().also(::seedLegacyRules)
     }
 
     @After
@@ -38,7 +38,7 @@ class DefaultClassificationSeedTest {
     }
 
     @Test
-    fun `fresh database seeds the catalog and user rules run before defaults`() = runBlocking {
+    fun `historical bundled catalog keeps user rules before defaults`() = runBlocking {
         val categories = database.categoryDao().getByReportingGroup(
             tw.kevinzhang.core.data.model.CategoryReportingGroup.EXPENSE,
         )

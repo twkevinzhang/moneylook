@@ -42,13 +42,12 @@ class AutoRuleInteractionTest {
             onStartApply = { startCount += 1 },
         )
 
-        composeRule.onNodeWithContentDescription("套用所有規則到所有交易明細").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("套用自動分類規則到所有交易明細").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("更多選項").performClick()
-        composeRule.onNodeWithText("套用所有規則").performClick()
-        composeRule.onNodeWithText("套用所有規則？").assertExists()
+        composeRule.onNodeWithText("套用自動分類規則").performClick()
+        composeRule.onNodeWithText("套用自動分類規則？").assertExists()
         composeRule.onNodeWithText(
-            "會依匹配條件與同分時優先，將所有已啟用規則套用到全部交易明細。" +
-                "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
+            "只補分類尚未分類的交易；保留手動設定的分類、標籤與備註。",
         ).assertExists()
         composeRule.onNodeWithText("取消").performClick()
 
@@ -70,7 +69,7 @@ class AutoRuleInteractionTest {
         )
 
         composeRule.onNodeWithContentDescription("更多選項").performClick()
-        composeRule.onNodeWithText("套用所有規則").performClick()
+        composeRule.onNodeWithText("套用自動分類規則").performClick()
         composeRule.onNodeWithText("套用").performClick()
 
         composeRule.runOnIdle { assertEquals(1, startCount) }
@@ -87,7 +86,7 @@ class AutoRuleInteractionTest {
         setAutoRuleContent(rules = listOf(enabledRule().copy(enabled = false)))
 
         composeRule.onNodeWithContentDescription("更多選項").performClick()
-        composeRule.onNodeWithText("套用所有規則").assertExists().assertIsNotEnabled()
+        composeRule.onNodeWithText("套用自動分類規則").assertExists().assertIsNotEnabled()
         composeRule.onNodeWithText("清除並回到預設規則").assertExists()
     }
 
@@ -101,7 +100,7 @@ class AutoRuleInteractionTest {
             applyState = { applyState },
         )
 
-        composeRule.onNodeWithText("正在套用所有規則").assertExists()
+        composeRule.onNodeWithText("正在套用自動分類規則").assertExists()
         composeRule.onNodeWithText("已處理 0 / 0 筆交易").assertExists()
         composeRule.onNodeWithContentDescription("套用規則進度").assertExists()
 
@@ -136,7 +135,7 @@ class AutoRuleInteractionTest {
         )
 
         composeRule.onNodeWithText("已處理 100 筆交易").assertExists()
-        composeRule.onNodeWithText("符合 73 筆規則").assertExists()
+        composeRule.onNodeWithText("已分類 73 筆交易").assertExists()
         composeRule.onNodeWithText("保留 12 筆手動調整").assertExists()
         composeRule.onNodeWithText("完成").performClick()
         composeRule.runOnIdle { assertEquals(1, finishCount) }
@@ -237,7 +236,7 @@ class AutoRuleInteractionTest {
             },
         )
 
-        composeRule.onNodeWithText("已重新分類 12 筆交易，符合 9 筆規則。").assertExists()
+        composeRule.onNodeWithText("已處理 12 筆交易，已分類 9 筆交易。").assertExists()
         composeRule.onNodeWithText("完成").performClick()
         composeRule.runOnIdle { assertEquals(1, finishCount) }
 

@@ -152,50 +152,9 @@ class ClassificationCatalogResetStoreTest {
 
         store.resetToDefaults()
 
-        val expectedRuleDetails = buildMap {
-            DefaultClassificationCatalog.publicAutoCategoryRules.forEach { put(it.id, emptyList()) }
-            listOf(
-                DefaultClassificationCatalog.publicMccRules,
-                DefaultClassificationCatalog.publicStructuralRules,
-                DefaultClassificationCatalog.publicGenericRules,
-            ).flatten().forEach { publicRule -> put(publicRule.rule.id, publicRule.conditions) }
-        }
-        val expectedRules = buildList {
-            addAll(DefaultClassificationCatalog.publicAutoCategoryRules)
-            addAll(DefaultClassificationCatalog.publicMccRules.map { it.rule })
-            addAll(DefaultClassificationCatalog.publicStructuralRules.map { it.rule })
-            addAll(DefaultClassificationCatalog.publicGenericRules.map { it.rule })
-        }.associateBy { it.id }
-        val actualRules = database.autoCategoryRuleDao().observeAll().first()
-        val actualRuleIds = actualRules.map { it.rule.id }.toSet()
-        val expectedRuleSetIds = setOf(
-            DefaultClassificationCatalog.publicMccRuleSet.id,
-            DefaultClassificationCatalog.publicStructuralRuleSet.id,
-            DefaultClassificationCatalog.publicGenericRuleSet.id,
-        )
-
         assertEquals(DefaultClassificationCatalog.categories.toSet(), database.categoryDao().observeAll().first().toSet())
-        assertEquals(expectedRuleDetails.keys, actualRuleIds)
-        assertEquals(expectedRules, actualRules.associate { it.rule.id to it.rule })
-        assertEquals(expectedRuleDetails.size, actualRules.size)
-        actualRules.forEach { actual ->
-            assertEquals(
-                expectedRuleDetails.getValue(actual.rule.id).sortedBy { it.position },
-                actual.conditions.sortedBy { it.position },
-            )
-        }
-        assertEquals(
-            expectedRuleSetIds,
-            database.autoCategoryRuleSetDao().getAll().mapTo(mutableSetOf()) { it.id },
-        )
-        assertEquals(
-            setOf(
-                DefaultClassificationCatalog.publicMccRuleSet,
-                DefaultClassificationCatalog.publicStructuralRuleSet,
-                DefaultClassificationCatalog.publicGenericRuleSet,
-            ),
-            database.autoCategoryRuleSetDao().getAll().toSet(),
-        )
+        assertTrue(database.autoCategoryRuleDao().observeAll().first().isEmpty())
+        assertTrue(database.autoCategoryRuleSetDao().getAll().isEmpty())
         assertTrue(database.tagDao().observeAll().first().isEmpty())
         assertTrue(database.transferAnnotationDao().getTagCrossRefs("transfer").isEmpty())
 

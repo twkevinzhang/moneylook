@@ -179,10 +179,14 @@ fun AppNavHost(navController: NavHostController) {
                 onNavigateToTags = { navController.navigate(Screen.Tags.route) },
                 onNavigateToRules = { navController.navigate(Screen.AutoRules.route) },
                 onNavigateToDataTransfer = { navController.navigate(Screen.DataTransfer.route) },
+                onNavigateToAiSettings = { navController.navigate(Screen.AiSettings.route) },
             )
         }
         composable(Screen.DataTransfer.route) {
             DataTransferRoute(onNavigateUp = { navController.popBackStack() })
+        }
+        composable(Screen.AiSettings.route) {
+            tw.kevinzhang.moneylook.ui.settings.AiSettingsRoute(onNavigateUp = { navController.popBackStack() })
         }
         composable(Screen.ManageRepos.route) {
             ManageReposScreen(onNavigateUp = { navController.popBackStack() })

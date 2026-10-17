@@ -51,6 +51,8 @@ fun AutoRuleScreen(
     onNavigateUp: () -> Unit,
     viewModel: ClassificationViewModel = hiltViewModel(),
 ) {
+    androidx.compose.runtime.DisposableEffect(viewModel) { onDispose { viewModel.stopApplyAllRules() } }
+    val scopeText = viewModel.applyScopeText.collectAsStateWithLifecycle().value
     val rules = viewModel.rules.collectAsStateWithLifecycle().value
     val categories = viewModel.categories.collectAsStateWithLifecycle().value
     val tags = viewModel.tags.collectAsStateWithLifecycle().value
@@ -77,5 +79,7 @@ fun AutoRuleScreen(
         onStartClassificationReset = viewModel::startClassificationReset,
         onRetryClassificationReset = viewModel::retryClassificationReset,
         onDismissClassificationReset = viewModel::dismissClassificationReset,
+        applyScopeText = scopeText,
+        onStopApplyAllRules = viewModel::stopApplyAllRules,
     )
 }

@@ -109,6 +109,8 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(libs.robolectric)
     testImplementation(libs.room.runtime)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)

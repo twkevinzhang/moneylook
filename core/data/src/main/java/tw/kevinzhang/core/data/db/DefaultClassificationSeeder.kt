@@ -11,8 +11,8 @@ import tw.kevinzhang.core.data.model.Category
 /** Writes only absent public rows; the one-time completely empty catalog repair is documented below. */
 object DefaultClassificationSeeder {
     fun seedFreshDatabase(db: SupportSQLiteDatabase) {
-        seedFullPublicCatalogIfEmpty(db)
-        seedRulesV3ForExistingCategories(db)
+        seedCategories(db, DefaultClassificationCatalog.categories)
+        db.execSQL("INSERT OR IGNORE INTO ai_classification_state(id,started,complete) VALUES(1,0,1)")
     }
 
     /**

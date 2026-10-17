@@ -109,6 +109,8 @@ fun AutoRuleListContent(
     onStartClassificationReset: () -> Unit,
     onRetryClassificationReset: () -> Unit,
     onDismissClassificationReset: () -> Unit,
+    applyScopeText: String = "只補分類尚未分類的交易；保留手動設定的分類、標籤與備註。",
+    onStopApplyAllRules: () -> Unit = {},
 ) {
     var editing by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
@@ -167,6 +169,8 @@ fun AutoRuleListContent(
         onStart = onStartApplyAllRules,
         onRetry = onRetryApplyAllRules,
         onDismiss = onDismissApplyAllRules,
+        scopeText = applyScopeText,
+        onStop = onStopApplyAllRules,
     )
     ClassificationResetDialog(
         state = classificationResetUiState,
@@ -192,7 +196,7 @@ fun AutoRuleListContent(
                         onDismissRequest = { moreMenuExpanded = false },
                     ) {
                         DropdownMenuItem(
-                            text = { Text("套用所有規則") },
+                            text = { Text("套用自動分類規則") },
                             onClick = {
                                 moreMenuExpanded = false
                                 onShowApplyAllRulesConfirmation()
@@ -298,6 +302,8 @@ private fun ApplyAllRulesDialog(
     onStart: () -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
+    scopeText: String,
+    onStop: () -> Unit,
 ) {
     var applyStartRequested by remember(state) { mutableStateOf(false) }
     when (state) {
@@ -305,11 +311,10 @@ private fun ApplyAllRulesDialog(
         ApplyAllRulesUiState.Confirming -> AlertDialog(
             onDismissRequest = onCancel,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("套用所有規則？") },
+            title = { Text("套用自動分類規則？") },
             text = {
                 Text(
-                    "會將帳戶移轉辨識、學習結果與已啟用規則套用到全部交易；無法判定時依歷史推測或保留尚未分類。" +
-                        "手動設定的分類、標籤與備註會保留，不會被覆蓋。",
+                    scopeText,
                 )
             },
             confirmButton = {
@@ -326,25 +331,27 @@ private fun ApplyAllRulesDialog(
         ApplyAllRulesUiState.Preparing -> ClassificationOperationRunningDialog(
             title = "正在準備交易資料",
             message = "正在載入交易與規則，請勿關閉此視窗。",
+            onCancel = onStop,
         )
         is ApplyAllRulesUiState.Applying -> {
             val total = state.totalTransferCount.coerceAtLeast(0)
             val processed = state.processedTransferCount.coerceIn(0, total)
             ClassificationOperationRunningDialog(
-                title = "正在套用所有規則",
+                title = "正在套用自動分類規則",
                 message = "已處理 $processed / $total 筆交易",
                 progress = if (total == 0) 0f else processed.toFloat() / total,
                 progressDescription = "套用規則進度",
+                onCancel = onStop,
             )
         }
         is ApplyAllRulesUiState.Success -> AlertDialog(
             onDismissRequest = onDismiss,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("所有規則已套用") },
+            title = { Text("自動分類已完成") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("已處理 ${state.processedTransferCount} 筆交易")
-                    Text("符合 ${state.matchedTransferCount} 筆規則")
+                    Text("已分類 ${state.matchedTransferCount} 筆交易")
                     Text("保留 ${state.preservedManualOverrideCount} 筆手動調整")
                 }
             },
@@ -353,7 +360,7 @@ private fun ApplyAllRulesDialog(
         is ApplyAllRulesUiState.Error -> AlertDialog(
             onDismissRequest = onDismiss,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("套用所有規則失敗") },
+            title = { Text("套用自動分類規則失敗") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(state.message)
@@ -428,7 +435,7 @@ private fun ClassificationResetDialog(
             onDismissRequest = onDismiss,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
             title = { Text("分類系統已重設") },
-            text = { Text("已重新分類 ${state.processedTransferCount} 筆交易，符合 ${state.matchedTransferCount} 筆規則。") },
+            text = { Text("已處理 ${state.processedTransferCount} 筆交易，已分類 ${state.matchedTransferCount} 筆交易。") },
             confirmButton = { Button(onClick = onDismiss) { Text("完成") } },
         )
         is ClassificationResetUiState.Error -> AlertDialog(
@@ -465,6 +472,7 @@ private fun ClassificationOperationRunningDialog(
     message: String,
     progress: Float? = null,
     progressDescription: String = title,
+    onCancel: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = {},
@@ -490,7 +498,7 @@ private fun ClassificationOperationRunningDialog(
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = { onCancel?.let { TextButton(onClick = it) { Text("停止並保存進度") } } },
     )
 }
 
@@ -863,7 +871,7 @@ fun AutoRuleEditorDialog(
                     tags.forEach { tag -> FilterChip(tag.id in draft.tagIds, { draft = draft.copy(tagIds = if (tag.id in draft.tagIds) draft.tagIds - tag.id else draft.tagIds + tag.id) }, { Text(tag.name) }, leadingIcon = { ColorDot(tag.color) }) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("啟用規則", modifier = Modifier.weight(1f)); Switch(draft.enabled, { draft = draft.copy(enabled = it) }) }
-                Text("儲存後用於新交易；補分類請使用選單中的「套用所有規則」。")
+                Text("儲存後用於新交易；補分類請使用選單中的「套用自動分類規則」。")
                 OutlinedTextField(draft.priority.toString(), { draft = draft.copy(priority = it.toIntOrNull()?.coerceAtLeast(0) ?: draft.priority) }, label = { Text("同分時優先（數字愈小愈優先）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.fillMaxWidth())
             }
         },

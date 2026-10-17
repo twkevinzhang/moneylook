@@ -27,7 +27,7 @@ class Migration26To27Test {
             MoneylookDatabase::class.java,
         ).addCallback(MoneylookDatabase.defaultClassificationSeedCallback())
             .allowMainThreadQueries()
-            .build()
+            .build().also(::seedLegacyRules)
     }
 
     @After

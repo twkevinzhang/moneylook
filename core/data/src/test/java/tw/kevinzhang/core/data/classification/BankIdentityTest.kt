@@ -5,7 +5,8 @@ import org.junit.Test
 import tw.kevinzhang.core.data.model.Transfer
 
 class BankIdentityTest {
-    private val owned = listOf(OwnedBankAccount("own", "013", "001234567890"))
+    private val source = OwnedBankAccount("source", "700", "999999999999")
+    private val owned = listOf(source, OwnedBankAccount("own", "013", "001234567890"))
     private fun transfer(bank: String? = "013", number: String? = "001234567890") =
         Transfer("t", "source", "ext", "2026-10-18T12:00:00", "轉帳", -100.0, null, "",
             counterpartyBank = bank, counterpartyAccount = number)
@@ -14,13 +15,13 @@ class BankIdentityTest {
         description = "網路跨行",
         sourceFactsJson = """{"branchNumber":{"value":"$number","rawKey":"COS_BRH_NO"}}""",
     )
-    private val taishin = listOf(OwnedBankAccount("taishin", "812", "12345678901234"))
+    private val taishin = listOf(source, OwnedBankAccount("taishin", "812", "12345678901234"))
 
-    @Test fun `post padded full account matches unique logged in account without bank`() {
-        assertTrue(matchesOwnedAccount(post(), taishin, "tw.gov.post.ipost"))
-        assertTrue(matchesOwnedAccount(post().copy(counterpartyAccount = "0012345678901234", sourceFactsJson = null), taishin, "tw.gov.post.ipost"))
+    @Test fun `post padded full account requires explicit matching bank`() {
+        assertFalse(matchesOwnedAccount(post(), taishin, "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post().copy(counterpartyAccount = "0012345678901234", sourceFactsJson = null), taishin, "tw.gov.post.ipost"))
         assertTrue(matchesOwnedAccount(post().copy(counterpartyBank = "812"), taishin, "tw.gov.post.ipost"))
-        assertTrue(matchesOwnedAccount(post(), taishin + taishin.single().copy(accountId = "other-currency"), "tw.gov.post.ipost"))
+        assertFalse(matchesOwnedAccount(post(), taishin + taishin.last().copy(accountId = "other-currency"), "tw.gov.post.ipost"))
     }
     @Test fun `post fallback rejects ambiguity unknown bank and contradictory bank`() {
         assertFalse(matchesOwnedAccount(post(), taishin + OwnedBankAccount("other", "013", "12345678901234"), "tw.gov.post.ipost"))
@@ -62,6 +63,10 @@ class BankIdentityTest {
     @Test fun `unknown bank labels are not fuzzy matched`() {
         assertNull(normalizeBankIdentity("可能是國泰"))
         assertEquals("013", normalizeBankIdentity("013"))
+    }
+    @Test fun `source must be logged in and multiple currency rows do not count as multiple accounts`() {
+        assertFalse(matchesOwnedAccount(transfer(), owned.filter { it.accountId != "source" }))
+        assertFalse(matchesOwnedAccount(transfer(bank="700",number="999999999999"), listOf(source,source.copy(accountId="currency-row"))))
     }
     @Test fun `matching multiple own suffixes does not invent a unique counterpart`() {
         assertTrue(matchesOwnedAccount(transfer(number = "***67890"),

@@ -6,6 +6,7 @@ sealed class Screen(val route: String) {
     object ExcludedTransactions : Screen("ledger_excluded")
     object Marketplace : Screen("marketplace")
     object Settings : Screen("settings")
+    object AiSettings : Screen("ai_settings")
     object ManageRepos : Screen("manage_repos")
     object ExtensionLedger : Screen("ledger/{accountId}") {
         fun route(accountId: String) = "ledger/${java.net.URLEncoder.encode(accountId, "UTF-8")}"

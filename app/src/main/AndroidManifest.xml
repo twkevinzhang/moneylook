@@ -10,6 +10,8 @@
     <application
         android:name=".MoneylookApplication"
         android:allowBackup="false"
+        android:fullBackupContent="@xml/ai_backup_rules"
+        android:dataExtractionRules="@xml/ai_data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
