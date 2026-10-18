@@ -2,6 +2,9 @@ package tw.kevinzhang.core.data.db
 
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import tw.kevinzhang.core.data.model.*
 import java.text.Normalizer
 import java.util.Locale
@@ -13,6 +16,16 @@ fun normalizeAiCategoryName(name: String): String = Normalizer.normalize(name.tr
 
 class AiClassificationStore @Inject constructor(private val db: MoneylookDatabase) {
     private val dao get() = db.aiClassificationDao()
+    fun observePreview(): Flow<AiClassificationPreview> = combine(
+        dao.observeState(), dao.observePending(), dao.observeUncategorized(),
+    ) { state, pending, uncategorized ->
+        val first = state?.complete == false
+        AiClassificationPreview(
+            (if (first) pending else emptyList()).plus(uncategorized).distinct().size,
+            first,
+            state?.started == true,
+        )
+    }.distinctUntilChanged()
     suspend fun isFirst(): Boolean = dao.state()?.complete == false
     suspend fun pendingIds(): List<String> = (if (isFirst()) dao.pending() else emptyList())
         .plus(dao.uncategorized()).distinct().sorted()
