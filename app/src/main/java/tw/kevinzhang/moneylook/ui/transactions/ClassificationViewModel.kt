@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,6 +51,8 @@ import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.moneylook.sync.AutoCategorizer
+import tw.kevinzhang.core.data.db.AiClassificationStore
+import tw.kevinzhang.moneylook.ai.AiSettingsStore
 import tw.kevinzhang.moneylook.sync.AutoCategoryApplicationProgress
 import tw.kevinzhang.moneylook.sync.ClassificationResetProgress
 import tw.kevinzhang.moneylook.sync.ClassificationResetStage
@@ -126,6 +129,9 @@ class ClassificationViewModel @Inject constructor(
     private val autoCategorizer: AutoCategorizer,
     private val ingestionProvenanceDao: IngestionProvenanceDao,
     private val localClassificationStore: tw.kevinzhang.core.data.db.LocalClassificationStore,
+    private val aiSettingsStore: AiSettingsStore,
+    private val aiClassificationStore: AiClassificationStore,
+    private val classificationSessionStore: AutoClassificationSessionStore,
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
     private val _applyAllRulesUiState = MutableStateFlow<ApplyAllRulesUiState>(ApplyAllRulesUiState.Idle)
@@ -133,6 +139,37 @@ class ClassificationViewModel @Inject constructor(
     val applyScopeText = MutableStateFlow("只補分類尚未分類的交易；保留手動設定的分類、標籤與備註。")
     private val _classificationResetUiState = MutableStateFlow<ClassificationResetUiState>(ClassificationResetUiState.Idle)
     private val auditState = MutableStateFlow(TransactionAuditUi())
+    private val aiConfiguration = MutableStateFlow<AiConfigurationSummary>(AiConfigurationSummary.Loading)
+    private val unfinishedSession = MutableStateFlow(classificationSessionStore.hasUnfinishedSession())
+    private var settingsJob: kotlinx.coroutines.Job? = null
+    val autoClassificationOverview: StateFlow<AutoClassificationOverviewState> = combine(
+        aiConfiguration,
+        aiClassificationStore.observePreview().onEach { preview ->
+            if (preview.pendingTransferCount == 0 && unfinishedSession.value &&
+                _applyAllRulesUiState.value == ApplyAllRulesUiState.Idle) {
+                classificationSessionStore.setUnfinishedSession(false)
+                unfinishedSession.value = false
+            }
+        },
+        unfinishedSession,
+        _applyAllRulesUiState,
+        _classificationResetUiState,
+    ) { configuration, preview, unfinished, apply, reset ->
+        AutoClassificationOverviewState(
+            configuration, preview,
+            resolveAutoClassificationAction(configuration, preview, unfinished,
+                apply != ApplyAllRulesUiState.Idle || reset != ClassificationResetUiState.Idle),
+            unfinished || (preview.firstUpgradePending && preview.upgradeStarted),
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AutoClassificationOverviewState())
+
+    fun refreshAiConfiguration() {
+        settingsJob?.cancel()
+        settingsJob = viewModelScope.launch {
+            aiConfiguration.value = AiConfigurationSummary.Loading
+            aiConfiguration.value = aiSettingsStore.load().toConfigurationSummary()
+        }
+    }
 
     init {
         viewModelScope.launch { ensureDefaultCategories() }
@@ -384,14 +421,27 @@ class ClassificationViewModel @Inject constructor(
 
     fun showApplyAllRulesConfirmation() {
         if (
-            _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
+            (_applyAllRulesUiState.value != ApplyAllRulesUiState.Idle && _applyAllRulesUiState.value !is ApplyAllRulesUiState.Error) ||
             _classificationResetUiState.value != ClassificationResetUiState.Idle
         ) return
         _applyAllRulesUiState.value = ApplyAllRulesUiState.Preparing
         applyJob = viewModelScope.launch {
             try {
+                settingsJob?.cancel()
+                val configuration = aiSettingsStore.load().toConfigurationSummary()
+                aiConfiguration.value = configuration
+                if (configuration !is AiConfigurationSummary.Configured) {
+                    _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
+                    return@launch
+                }
                 val (count, first) = autoCategorizer.previewAutoClassification()
-                applyScopeText.value = (if (first) "本次首次套用包含過去由預設規則分類及尚未分類的交易。" else "本次只補分類尚未分類的交易。") +
+                if (count == 0) {
+                    classificationSessionStore.setUnfinishedSession(false)
+                    unfinishedSession.value = false
+                    _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
+                    return@launch
+                }
+                applyScopeText.value = (if (first) "本次包含過去由預設規則分類及尚未分類的交易。" else "只補分類尚未分類的交易。") +
                     "共 $count 筆；每次最多 100 次 AI 請求或 10 分鐘，未完成可接續。手動設定的分類、標籤與備註會保留。"
                 _applyAllRulesUiState.value = ApplyAllRulesUiState.Confirming
             } catch (e: CancellationException) { throw e }
@@ -424,7 +474,7 @@ class ClassificationViewModel @Inject constructor(
             _applyAllRulesUiState.value !is ApplyAllRulesUiState.Error ||
             _classificationResetUiState.value != ClassificationResetUiState.Idle
         ) return
-        runApplyAllRules()
+        showApplyAllRulesConfirmation()
     }
 
     fun dismissApplyAllRules() {
@@ -441,6 +491,15 @@ class ClassificationViewModel @Inject constructor(
         applyJob = viewModelScope.launch {
             var latestProgress: AutoCategoryApplicationProgress? = null
             try {
+                settingsJob?.cancel()
+                val configuration = aiSettingsStore.load().toConfigurationSummary()
+                aiConfiguration.value = configuration
+                if (configuration !is AiConfigurationSummary.Configured || autoCategorizer.previewAutoClassification().first == 0) {
+                    _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
+                    return@launch
+                }
+                classificationSessionStore.setUnfinishedSession(true)
+                unfinishedSession.value = true
                 val result = withContext(Dispatchers.Default) {
                     autoCategorizer.applyToExistingTransactions { progress ->
                         latestProgress = progress
@@ -450,7 +509,12 @@ class ClassificationViewModel @Inject constructor(
                         )
                     }
                 }
-                _applyAllRulesUiState.value = if (result.pendingTransferCount > 0 || result.stopReason != null) ApplyAllRulesUiState.Error(
+                val incomplete = result.pendingTransferCount > 0 || result.stopReason != null
+                if (!incomplete) {
+                    classificationSessionStore.setUnfinishedSession(false)
+                    unfinishedSession.value = false
+                }
+                _applyAllRulesUiState.value = if (incomplete) ApplyAllRulesUiState.Error(
                     message = (result.stopReason ?: "部分交易尚未取得有效分類") + "。已保存結果，尚有 ${result.pendingTransferCount} 筆待處理，可接續。",
                     processedTransferCount = result.processedTransferCount,
                     totalTransferCount = latestProgress?.totalTransferCount ?: 0,
@@ -463,7 +527,7 @@ class ClassificationViewModel @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 _applyAllRulesUiState.value = ApplyAllRulesUiState.Error(
-                    message = "套用規則失敗，請稍後再試。",
+                    message = "分類尚未完成，已保存完成結果，請稍後接續。",
                     lastStage = if (latestProgress == null) {
                         ApplyAllRulesStage.PREPARING
                     } else {
