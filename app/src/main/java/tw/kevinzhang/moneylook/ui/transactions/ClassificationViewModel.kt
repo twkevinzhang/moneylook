@@ -487,7 +487,7 @@ class ClassificationViewModel @Inject constructor(
                 applyScopeText.value = (if (preview.fullReclassification)
                     "自訂規則已變更，本次重新分類整個帳本所有非人工分類交易（包含過去已完成的交易）。"
                     else if (first) "本次包含過去由預設規則分類及尚未分類的交易。" else "只補分類尚未分類的交易。") +
-                    "共 $count 筆；每批最多 20 筆，每次最多 25 次 AI 請求、500 筆交易或 10 分鐘；每次請求輸出上限 4096 tokens、輸入上限 64 KiB。未完成可接續。手動設定的分類、標籤與備註會保留。"
+                    "共 $count 筆；每批最多 20 筆，每次最多 100 次 AI 請求、2000 筆交易或 40 分鐘；每次請求輸出上限 4096 tokens、輸入上限 64 KiB。未完成可接續。手動設定的分類、標籤與備註會保留。"
                 _applyAllRulesUiState.value = ApplyAllRulesUiState.Confirming
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("無法載入待分類交易，請重試") }

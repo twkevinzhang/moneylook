@@ -6,16 +6,19 @@ import org.junit.Test
 class BackgroundClassificationBudgetTest {
     @Test fun requestLimitCannotBeResetByStartingAnotherBatch() {
         val budget = BackgroundClassificationBudget { 0L }
-        repeat(25) { assertTrue(budget.reserveRequest()) }
+        repeat(100) { assertTrue(budget.reserveRequest()) }
         assertFalse(budget.reserveRequest())
-        assertEquals(25, budget.requests)
+        assertEquals(100, budget.requests)
     }
     @Test fun totalTransactionsAndDeadlineAreSharedByRestarts() {
         var clock = 0L
         val budget = BackgroundClassificationBudget { clock }
-        repeat(25) { budget.consider(20) }
+        repeat(100) { budget.consider(20) }
         assertEquals(0, budget.remainingTransactions())
-        clock = 600_000L * 1_000_000L
+        clock = 2_399_999L * 1_000_000L
+        assertEquals(1L, budget.remainingMillis())
+        assertTrue(budget.reserveRequest())
+        clock = 2_400_000L * 1_000_000L
         assertFalse(budget.reserveRequest())
         assertEquals(0L, budget.remainingMillis())
     }

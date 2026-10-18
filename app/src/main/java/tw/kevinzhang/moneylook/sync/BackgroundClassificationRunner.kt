@@ -12,12 +12,12 @@ class BackgroundClassificationBudget(private val nowNanos: () -> Long = System::
     var requests: Int = 0; private set
     var considered: Int = 0; private set
     var stopReason: String? = null
-    fun remainingMillis(): Long = (600_000L - (nowNanos() - started) / 1_000_000L).coerceAtLeast(0L)
-    fun remainingTransactions(): Int = (500 - considered).coerceAtLeast(0)
+    fun remainingMillis(): Long = (2_400_000L - (nowNanos() - started) / 1_000_000L).coerceAtLeast(0L)
+    fun remainingTransactions(): Int = (2000 - considered).coerceAtLeast(0)
     fun consider(count: Int) { require(count in 0..remainingTransactions()); considered += count }
     fun reserveRequest(): Boolean {
-        if (requests >= 25) stopReason = "已達本輪 25 次 AI 請求上限，可再次接續"
-        if (remainingMillis() <= 0) stopReason = "已達本輪 10 分鐘上限，可再次接續"
+        if (requests >= 100) stopReason = "已達本輪 100 次 AI 請求上限，可再次接續"
+        if (remainingMillis() <= 0) stopReason = "已達本輪 40 分鐘上限，可再次接續"
         if (stopReason != null) return false
         requests++; return true
     }
@@ -46,7 +46,7 @@ class BackgroundClassificationRunner @Inject constructor(
                                 val pending = store.pendingIds(generation).filterNot { it in visited }
                                 if (pending.isEmpty()) break
                                 if (budget.remainingTransactions() == 0) {
-                                    budget.stopReason = "已達本輪 500 筆處理上限，可再次接續"; break
+                                    budget.stopReason = "已達本輪 2000 筆處理上限，可再次接續"; break
                                 }
                                 val ids = pending.take(minOf(20, budget.remainingTransactions()))
                                 visited.addAll(ids); budget.consider(ids.size)
@@ -74,7 +74,7 @@ class BackgroundClassificationRunner @Inject constructor(
                 }
             }
         } catch (_: TimeoutCancellationException) {
-            store.pause(attemptId, "已達本輪 10 分鐘上限，可再次接續")
+            store.pause(attemptId, "已達本輪 40 分鐘上限，可再次接續")
         } catch (error: CancellationException) {
             withContext(NonCancellable) { store.pause(attemptId, "已停止並保存進度，可再次接續") }
             throw error

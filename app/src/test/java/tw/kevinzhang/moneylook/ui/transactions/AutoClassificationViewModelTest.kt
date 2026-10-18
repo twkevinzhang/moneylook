@@ -30,9 +30,10 @@ class AutoClassificationViewModelTest {
         var starts = 0
         var stops = 0
         var reconciles = 0
+        val reconciled = CompletableDeferred<Unit>()
         override suspend fun start(): Boolean { starts++; return true }
         override suspend fun stop() { stops++ }
-        override suspend fun reconcile() { reconciles++ }
+        override suspend fun reconcile() { reconciles++; reconciled.complete(Unit) }
     }
 
     private suspend fun withFixture(brokenSettings: Boolean = false, configured: Boolean = false,
@@ -149,6 +150,7 @@ class AutoClassificationViewModelTest {
             assertEquals(AutoClassificationAction.BACKGROUND, updated.action)
             assertTrue(updated.background!!.fullReclassification)
             assertEquals(0, scheduler.starts)
+            withTimeout(10_000) { scheduler.reconciled.await() }
             assertTrue(scheduler.reconciles > 0)
         }
     }
@@ -172,6 +174,7 @@ class AutoClassificationViewModelTest {
             assertEquals(1, jobs.preview().pendingTransferCount)
             assertTrue(vm.applyScopeText.value.contains("整個帳本所有非人工分類交易"))
             assertTrue(vm.applyScopeText.value.contains("共 1 筆"))
+            assertTrue(vm.applyScopeText.value.contains("100 次 AI 請求、2000 筆交易或 40 分鐘"))
             assertEquals("保留備註", db.transferAnnotationDao().observeDetail("manual").first()!!.annotation!!.note)
         }
     }
