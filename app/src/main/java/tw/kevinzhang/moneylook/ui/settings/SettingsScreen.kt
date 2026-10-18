@@ -50,7 +50,7 @@ fun SettingsScreen(
             HorizontalDivider()
             SettingsRow("標籤管理", "建立可套用至多筆交易的標籤", onNavigateToTags)
             HorizontalDivider()
-            SettingsRow("自動分類規則", "依交易文字、收支、金額及帳戶自動套用", onNavigateToRules)
+            SettingsRow("自動分類", "使用 AI 分類交易，並管理自訂規則", onNavigateToRules)
             HorizontalDivider()
             SettingsRow("AI分類設定", "設定 AI 服務、模型與 API Token", onNavigateToAiSettings)
             HorizontalDivider()

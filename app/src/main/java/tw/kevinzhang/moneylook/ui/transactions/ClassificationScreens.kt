@@ -49,9 +49,14 @@ fun TagManagementScreen(
 @Composable
 fun AutoRuleScreen(
     onNavigateUp: () -> Unit,
+    onNavigateToAiSettings: () -> Unit,
     viewModel: ClassificationViewModel = hiltViewModel(),
 ) {
     androidx.compose.runtime.DisposableEffect(viewModel) { onDispose { viewModel.stopApplyAllRules() } }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshAiConfiguration()
+    }
+    val overview = viewModel.autoClassificationOverview.collectAsStateWithLifecycle().value
     val scopeText = viewModel.applyScopeText.collectAsStateWithLifecycle().value
     val rules = viewModel.rules.collectAsStateWithLifecycle().value
     val categories = viewModel.categories.collectAsStateWithLifecycle().value
@@ -60,6 +65,8 @@ fun AutoRuleScreen(
     val applyAllRulesUiState = viewModel.applyAllRulesUiState.collectAsStateWithLifecycle().value
     val classificationResetUiState = viewModel.classificationResetUiState.collectAsStateWithLifecycle().value
     AutoRuleListContent(
+        overview = overview,
+        onNavigateToAiSettings = onNavigateToAiSettings,
         rules = rules,
         categories = categories,
         tags = tags,

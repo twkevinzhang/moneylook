@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,7 +40,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -83,7 +83,6 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleDescriptionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleAmountSign
 import tw.kevinzhang.moneylook.sync.ClassificationResetStage
-import tw.kevinzhang.moneylook.ui.components.fabAwareListContentPadding
 
 data class AccountOption(val id: String, val name: String)
 
@@ -111,6 +110,8 @@ fun AutoRuleListContent(
     onDismissClassificationReset: () -> Unit,
     applyScopeText: String = "只補分類尚未分類的交易；保留手動設定的分類、標籤與備註。",
     onStopApplyAllRules: () -> Unit = {},
+    overview: AutoClassificationOverviewState,
+    onNavigateToAiSettings: () -> Unit,
 ) {
     var editing by remember { mutableStateOf<AutoRuleDraft?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
@@ -171,6 +172,8 @@ fun AutoRuleListContent(
         onDismiss = onDismissApplyAllRules,
         scopeText = applyScopeText,
         onStop = onStopApplyAllRules,
+        resuming = overview.resuming,
+        onOpenSettings = { onDismissApplyAllRules(); onNavigateToAiSettings() },
     )
     ClassificationResetDialog(
         state = classificationResetUiState,
@@ -182,7 +185,7 @@ fun AutoRuleListContent(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("自動分類規則") },
+                title = { Text("自動分類") },
                 navigationIcon = { BackButton(onNavigateUp) },
                 actions = {
                     IconButton(
@@ -196,15 +199,7 @@ fun AutoRuleListContent(
                         onDismissRequest = { moreMenuExpanded = false },
                     ) {
                         DropdownMenuItem(
-                            text = { Text("套用自動分類規則") },
-                            onClick = {
-                                moreMenuExpanded = false
-                                onShowApplyAllRulesConfirmation()
-                            },
-                            enabled = rules.any(AutoRuleDraft::enabled) && !classificationSystemBusy,
-                        )
-                        DropdownMenuItem(
-                            text = { Text("清除並回到預設規則") },
+                            text = { Text("重設分類資料") },
                             onClick = {
                                 moreMenuExpanded = false
                                 onShowResetClassificationConfirmation()
@@ -215,23 +210,16 @@ fun AutoRuleListContent(
                 },
             )
         },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                modifier = Modifier
-                    .testTag("add-auto-rule-fab")
-                    .semantics { contentDescription = "新增規則" },
-                onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) },
-                icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("新增規則") },
+        bottomBar = {
+            AutoClassificationPrimaryAction(
+                state = if (classificationSystemBusy || editing != null || deleteId != null || (selectedRule != null && !isWideLayout)) {
+                    overview.copy(action = AutoClassificationAction.BUSY)
+                } else overview,
+                onOpenSettings = onNavigateToAiSettings,
+                onRequestClassification = onShowApplyAllRulesConfirmation,
             )
         },
     ) { padding ->
-        if (rules.isEmpty()) {
-            Column(modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("尚未設定規則", style = MaterialTheme.typography.bodyLarge)
-                Text("新增規則後，會依匹配條件與同分時優先判斷。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else {
             BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(padding)) {
                 val isWide = maxWidth >= 840.dp
                 SideEffect { isWideLayout = isWide }
@@ -245,6 +233,18 @@ fun AutoRuleListContent(
                 }
                 val listContent: @Composable () -> Unit = {
                     RuleGroupsContent(
+                        header = {
+                            AutoClassificationOverviewHeader(overview, onNavigateToAiSettings)
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("自訂規則", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                                TextButton(
+                                    modifier = Modifier.testTag("auto-rule-add").semantics { contentDescription = "新增規則" },
+                                    enabled = !classificationSystemBusy,
+                                    onClick = { editing = AutoRuleDraft(priority = nextUserRulePriority(rules)) },
+                                ) { Icon(Icons.Default.Add, null); Text("新增") }
+                            }
+                        },
+                        hasRules = rules.isNotEmpty(),
                         groups = groups,
                         query = query,
                         onQueryChange = { query = it },
@@ -270,7 +270,7 @@ fun AutoRuleListContent(
                         onDelete = { deleteId = it.id },
                     )
                 }
-                if (isWide) {
+                if (isWide && rules.isNotEmpty()) {
                     Row(modifier = Modifier.fillMaxSize()) {
                         Box(modifier = Modifier.weight(1f)) { listContent() }
                         VerticalDivider(modifier = Modifier.fillMaxHeight())
@@ -291,7 +291,6 @@ fun AutoRuleListContent(
                     listContent()
                 }
             }
-        }
     }
 }
 
@@ -304,6 +303,8 @@ private fun ApplyAllRulesDialog(
     onDismiss: () -> Unit,
     scopeText: String,
     onStop: () -> Unit,
+    resuming: Boolean,
+    onOpenSettings: () -> Unit,
 ) {
     var applyStartRequested by remember(state) { mutableStateOf(false) }
     when (state) {
@@ -311,7 +312,7 @@ private fun ApplyAllRulesDialog(
         ApplyAllRulesUiState.Confirming -> AlertDialog(
             onDismissRequest = onCancel,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("套用自動分類規則？") },
+            title = { Text(if (resuming) "繼續分類？" else "開始自動分類？") },
             text = {
                 Text(
                     scopeText,
@@ -324,23 +325,23 @@ private fun ApplyAllRulesDialog(
                         onStart()
                     },
                     enabled = !applyStartRequested,
-                ) { Text("套用") }
+                ) { Text(if (resuming) "繼續分類" else "開始分類") }
             },
             dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },
         )
         ApplyAllRulesUiState.Preparing -> ClassificationOperationRunningDialog(
             title = "正在準備交易資料",
-            message = "正在載入交易與規則，請勿關閉此視窗。",
+            message = "正在載入待分類交易，請勿關閉此視窗。",
             onCancel = onStop,
         )
         is ApplyAllRulesUiState.Applying -> {
             val total = state.totalTransferCount.coerceAtLeast(0)
             val processed = state.processedTransferCount.coerceIn(0, total)
             ClassificationOperationRunningDialog(
-                title = "正在套用自動分類規則",
+                title = "正在自動分類",
                 message = "已處理 $processed / $total 筆交易",
                 progress = if (total == 0) 0f else processed.toFloat() / total,
-                progressDescription = "套用規則進度",
+                progressDescription = "自動分類進度",
                 onCancel = onStop,
             )
         }
@@ -360,7 +361,7 @@ private fun ApplyAllRulesDialog(
         is ApplyAllRulesUiState.Error -> AlertDialog(
             onDismissRequest = onDismiss,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("套用自動分類規則失敗") },
+            title = { Text("分類尚未完成") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(state.message)
@@ -371,8 +372,13 @@ private fun ApplyAllRulesDialog(
                     )
                 }
             },
-            confirmButton = { Button(onClick = onRetry) { Text("重試") } },
-            dismissButton = { TextButton(onClick = onDismiss) { Text("關閉") } },
+            confirmButton = { Button(onClick = onRetry) { Text("繼續分類") } },
+            dismissButton = {
+                Column {
+                    TextButton(onClick = onOpenSettings) { Text("AI分類設定") }
+                    TextButton(onClick = onDismiss) { Text("關閉") }
+                }
+            },
         )
     }
 }
@@ -381,7 +387,7 @@ private fun ApplyAllRulesUiState.Error.lastStageDescription(): String =
     when (lastStage) {
         ApplyAllRulesStage.PREPARING -> "失敗階段：正在準備交易資料"
         ApplyAllRulesStage.APPLYING ->
-            "失敗階段：正在套用規則（已處理 ${processedTransferCount.coerceAtLeast(0)} / " +
+            "失敗階段：正在分類（已處理 ${processedTransferCount.coerceAtLeast(0)} / " +
                 "${totalTransferCount.coerceAtLeast(0)} 筆交易）"
     }
 
@@ -399,7 +405,7 @@ private fun ClassificationResetDialog(
         ClassificationResetUiState.Confirming -> AlertDialog(
             onDismissRequest = onCancel,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("清除並回到預設規則？") },
+            title = { Text("重設分類資料？") },
             text = {
                 Text(
                     "這會永久清除所有學習資料、自動分類規則、分類與標籤，並移除所有交易的手動分類與標籤指派。" +
@@ -413,13 +419,13 @@ private fun ClassificationResetDialog(
                         onStart()
                     },
                     enabled = !resetStartRequested,
-                ) { Text("清除並恢復") }
+                ) { Text("重設並重新分類") }
             },
             dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },
         )
         ClassificationResetUiState.ResettingCatalog -> ClassificationOperationRunningDialog(
             title = "正在清除分類資料",
-            message = "正在恢復內建分類、標籤與自動規則，請勿關閉此視窗。",
+            message = "正在重設分類、標籤與規則資料，請勿關閉此視窗。",
         )
         is ClassificationResetUiState.Reclassifying -> {
             val total = state.totalTransferCount.coerceAtLeast(0)
@@ -504,6 +510,8 @@ private fun ClassificationOperationRunningDialog(
 
 @Composable
 private fun RuleGroupsContent(
+    header: @Composable () -> Unit,
+    hasRules: Boolean,
     groups: List<AutoRuleGroupUi>,
     query: String,
     onQueryChange: (String) -> Unit,
@@ -523,10 +531,11 @@ private fun RuleGroupsContent(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag("auto-rule-groups-list"),
-        contentPadding = fabAwareListContentPadding(horizontal = 16.dp, top = 16.dp),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
+        item(key = "overview") { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { header() } }
+        if (hasRules) item {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 TextField(
                     value = query,
@@ -545,10 +554,9 @@ private fun RuleGroupsContent(
                         unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                     ),
                 )
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     FilterChip(
                         selected = groupingMode == AutoRuleGroupingMode.CATEGORY,
@@ -568,7 +576,6 @@ private fun RuleGroupsContent(
                         label = { Text("停用") },
                         leadingIcon = { Icon(Icons.Default.Block, null) },
                     )
-                    Spacer(Modifier.weight(1f))
                     Text("${groups.sumOf { it.rules.size }} 項規則", style = MaterialTheme.typography.labelLarge)
                 }
             }
@@ -580,8 +587,8 @@ private fun RuleGroupsContent(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("找不到符合的規則", style = MaterialTheme.typography.titleMedium)
-                    Text("請調整搜尋文字或篩選條件。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (hasRules) "找不到符合的規則" else "尚未建立自訂規則", style = MaterialTheme.typography.titleMedium)
+                    Text(if (hasRules) "請調整搜尋文字或篩選條件。" else "沒有自訂規則，也能使用 AI 分類。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         } else {

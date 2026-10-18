@@ -218,7 +218,10 @@ fun AppNavHost(navController: NavHostController) {
             TagManagementScreen(onNavigateUp = { navController.popBackStack() })
         }
         composable(Screen.AutoRules.route) {
-            AutoRuleScreen(onNavigateUp = { navController.popBackStack() })
+            AutoRuleScreen(
+                onNavigateUp = { navController.popBackStack() },
+                onNavigateToAiSettings = { navController.navigate(Screen.AiSettings.route) },
+            )
         }
         composable(
             route = Screen.SyncLog.route,
