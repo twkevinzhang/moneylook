@@ -145,8 +145,7 @@ class ClassificationViewModel @Inject constructor(
     val autoClassificationOverview: StateFlow<AutoClassificationOverviewState> = combine(
         aiConfiguration,
         aiClassificationStore.observePreview().onEach { preview ->
-            if (preview.pendingTransferCount == 0 && unfinishedSession.value &&
-                _applyAllRulesUiState.value == ApplyAllRulesUiState.Idle) {
+            if (preview.pendingTransferCount == 0 && unfinishedSession.value) {
                 classificationSessionStore.setUnfinishedSession(false)
                 unfinishedSession.value = false
             }
