@@ -37,8 +37,8 @@ android {
         applicationId = "tw.kevinzhang.moneylook"
         minSdk = 24
         targetSdk = 36
-        versionCode = versionCodeOverride ?: 3
-        versionName = versionNameOverride ?: "1.2.0"
+        versionCode = versionCodeOverride ?: 1_003_000
+        versionName = versionNameOverride ?: "1.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     if (signingKeystoreFile != null) {
