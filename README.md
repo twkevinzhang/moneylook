@@ -181,6 +181,7 @@ sdk.browser.close()
 
 ### 本機簽章設定
 
+
 專案可讓 `debug` 與 `release` 共用同一組本機簽章，方便以 `adb install -r` 更新已安裝的開發裝置 App 並保留私有資料。簽章設定依序讀取環境變數與使用者層級的 `~/.gradle/gradle.properties`；環境變數優先，Android Studio 的 Gradle Sync／Build 會自動讀取後者。
 
 ```properties
