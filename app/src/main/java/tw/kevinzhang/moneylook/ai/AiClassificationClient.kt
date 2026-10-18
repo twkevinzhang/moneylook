@@ -12,15 +12,28 @@ import kotlin.coroutines.resumeWithException
 import tw.kevinzhang.core.data.model.*
 
 @Singleton
-class AiClassificationClient(private val client: OkHttpClient) {
+class AiClassificationClient(client: OkHttpClient) {
+    private val client = client.newBuilder().callTimeout(60, TimeUnit.SECONDS)
+        .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
     @Inject constructor() : this(OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS)
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build())
 
-    suspend fun classify(settings: AiSettings, input: AiClassificationInput): AiCategoryProposal = suspendCancellableCoroutine { continuation ->
-        val call = try { client.newCall(AiProtocol.request(settings, input)) } catch (e: AiClassificationException) {
-            continuation.resumeWithException(e); return@suspendCancellableCoroutine
+    suspend fun classify(settings: AiSettings, input: AiClassificationInput): AiCategoryProposal =
+        execute(AiProtocol.request(settings, input)) { body ->
+            AiProtocol.parse(AiProtocol.content(settings.provider, body), input).copy(provider = settings.provider.name, model = settings.model)
         }
+
+    suspend fun classifyBatch(settings: AiSettings, items: List<AiBatchItem>): AiBatchResult =
+        execute(AiBatchProtocol.request(settings, items)) { body ->
+            val result = AiBatchProtocol.parse(AiProtocol.content(settings.provider, body), items)
+            result.copy(proposals = result.proposals.mapValues { (_, proposal) ->
+                proposal.copy(provider = settings.provider.name, model = settings.model)
+            })
+        }
+
+    private suspend fun <T> execute(request: Request, parse: (String) -> T): T = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -40,7 +53,7 @@ class AiClassificationClient(private val client: OkHttpClient) {
                         if (source.buffer.size > 65536) throw AiClassificationException(AiFailureCode.INVALID_RESPONSE)
                         val body = source.readUtf8()
                         if (body.trimStart().startsWith("<")) throw AiClassificationException(AiFailureCode.ACCESS_OR_AUTH)
-                        AiProtocol.parse(AiProtocol.content(settings.provider, body), input).copy(provider = settings.provider.name, model = settings.model)
+                        parse(body)
                     }
                     if (continuation.isActive) continuation.resume(proposal)
                 } catch (e: Exception) {

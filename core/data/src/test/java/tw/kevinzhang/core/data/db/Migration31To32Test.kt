@@ -34,7 +34,7 @@ class Migration31To32Test {
             sql.version = 31
             initial.close()
             val migrated = Room.databaseBuilder(context, MoneylookDatabase::class.java, name).allowMainThreadQueries()
-                .addMigrations(MIGRATION_31_32, MIGRATION_32_33).build()
+                .addMigrations(MIGRATION_31_32, MIGRATION_32_33, MIGRATION_33_34).build()
             try {
                 val db = migrated.openHelper.writableDatabase
                 db.query("SELECT transferId,categoryId,note,manualOverride FROM transfer_annotations ORDER BY transferId").use {

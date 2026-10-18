@@ -128,7 +128,7 @@ fun AutoRuleListContent(
         buildAutoRuleGroups(rules, categories, tags, groupingMode, query, disabledOnly)
     }
     val classificationSystemBusy =
-        applyAllRulesUiState != ApplyAllRulesUiState.Idle ||
+        (applyAllRulesUiState != ApplyAllRulesUiState.Idle && applyAllRulesUiState !is ApplyAllRulesUiState.Error) ||
             classificationResetUiState != ClassificationResetUiState.Idle
     editing?.let { draft ->
         AutoRuleEditorDialog(
@@ -144,7 +144,7 @@ fun AutoRuleListContent(
         AlertDialog(
             onDismissRequest = { deleteId = null }, title = { Text("刪除自動分類規則？") },
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            text = { Text("不會變更既有交易的分類。") },
+            text = { Text("下次分類會重新處理整個帳本的非人工分類交易；正在執行的背景分類會重新開始。手動分類、標籤與備註會保留。") },
             confirmButton = { TextButton(onClick = { onDelete(id); deleteId = null }) { Text("刪除") } },
             dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } },
         )
@@ -168,12 +168,9 @@ fun AutoRuleListContent(
         state = applyAllRulesUiState,
         onCancel = onCancelApplyAllRules,
         onStart = onStartApplyAllRules,
-        onRetry = onRetryApplyAllRules,
         onDismiss = onDismissApplyAllRules,
         scopeText = applyScopeText,
-        onStop = onStopApplyAllRules,
         resuming = overview.resuming,
-        onOpenSettings = { onDismissApplyAllRules(); onNavigateToAiSettings() },
     )
     ClassificationResetDialog(
         state = classificationResetUiState,
@@ -190,7 +187,7 @@ fun AutoRuleListContent(
                 actions = {
                     IconButton(
                         onClick = { moreMenuExpanded = true },
-                        enabled = !classificationSystemBusy,
+                        enabled = !classificationSystemBusy && overview.background?.active != true,
                     ) {
                         Icon(Icons.Default.MoreVert, "更多選項")
                     }
@@ -204,7 +201,7 @@ fun AutoRuleListContent(
                                 moreMenuExpanded = false
                                 onShowResetClassificationConfirmation()
                             },
-                            enabled = !classificationSystemBusy,
+                            enabled = !classificationSystemBusy && overview.background?.active != true,
                         )
                     }
                 },
@@ -212,7 +209,7 @@ fun AutoRuleListContent(
         },
         bottomBar = {
             AutoClassificationPrimaryAction(
-                state = if (classificationSystemBusy || editing != null || deleteId != null || (selectedRule != null && !isWideLayout)) {
+                state = if (overview.background?.active == true) overview else if (classificationSystemBusy || editing != null || deleteId != null || (selectedRule != null && !isWideLayout)) {
                     overview.copy(action = AutoClassificationAction.BUSY)
                 } else overview,
                 onOpenSettings = onNavigateToAiSettings,
@@ -234,7 +231,9 @@ fun AutoRuleListContent(
                 val listContent: @Composable () -> Unit = {
                     RuleGroupsContent(
                         header = {
-                            AutoClassificationOverviewHeader(overview, onNavigateToAiSettings)
+                            AutoClassificationOverviewHeader(overview, onNavigateToAiSettings, onStopApplyAllRules)
+                            ApplyAllRulesStatusCard(applyAllRulesUiState, onRetryApplyAllRules,
+                                onDismissApplyAllRules, onNavigateToAiSettings)
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("自訂規則", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                                 TextButton(
@@ -299,12 +298,9 @@ private fun ApplyAllRulesDialog(
     state: ApplyAllRulesUiState,
     onCancel: () -> Unit,
     onStart: () -> Unit,
-    onRetry: () -> Unit,
     onDismiss: () -> Unit,
     scopeText: String,
-    onStop: () -> Unit,
     resuming: Boolean,
-    onOpenSettings: () -> Unit,
 ) {
     var applyStartRequested by remember(state) { mutableStateOf(false) }
     when (state) {
@@ -329,22 +325,8 @@ private fun ApplyAllRulesDialog(
             },
             dismissButton = { TextButton(onClick = onCancel) { Text("取消") } },
         )
-        ApplyAllRulesUiState.Preparing -> ClassificationOperationRunningDialog(
-            title = "正在準備交易資料",
-            message = "正在載入待分類交易，請勿關閉此視窗。",
-            onCancel = onStop,
-        )
-        is ApplyAllRulesUiState.Applying -> {
-            val total = state.totalTransferCount.coerceAtLeast(0)
-            val processed = state.processedTransferCount.coerceIn(0, total)
-            ClassificationOperationRunningDialog(
-                title = "正在自動分類",
-                message = "已處理 $processed / $total 筆交易",
-                progress = if (total == 0) 0f else processed.toFloat() / total,
-                progressDescription = "自動分類進度",
-                onCancel = onStop,
-            )
-        }
+        ApplyAllRulesUiState.Preparing,
+        is ApplyAllRulesUiState.Applying -> Unit
         is ApplyAllRulesUiState.Success -> AlertDialog(
             onDismissRequest = onDismiss,
             properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
@@ -358,38 +340,40 @@ private fun ApplyAllRulesDialog(
             },
             confirmButton = { Button(onClick = onDismiss) { Text("完成") } },
         )
-        is ApplyAllRulesUiState.Error -> AlertDialog(
-            onDismissRequest = onDismiss,
-            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-            title = { Text("分類尚未完成") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(state.message)
-                    Text(
-                        state.lastStageDescription(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            },
-            confirmButton = { Button(onClick = onRetry) { Text("繼續分類") } },
-            dismissButton = {
-                Column {
-                    TextButton(onClick = onOpenSettings) { Text("AI分類設定") }
-                    TextButton(onClick = onDismiss) { Text("關閉") }
-                }
-            },
-        )
+        is ApplyAllRulesUiState.Error -> Unit
     }
 }
 
-private fun ApplyAllRulesUiState.Error.lastStageDescription(): String =
-    when (lastStage) {
-        ApplyAllRulesStage.PREPARING -> "失敗階段：正在準備交易資料"
-        ApplyAllRulesStage.APPLYING ->
-            "失敗階段：正在分類（已處理 ${processedTransferCount.coerceAtLeast(0)} / " +
-                "${totalTransferCount.coerceAtLeast(0)} 筆交易）"
+@Composable
+private fun ApplyAllRulesStatusCard(
+    state: ApplyAllRulesUiState,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    if (state != ApplyAllRulesUiState.Preparing && state !is ApplyAllRulesUiState.Applying && state !is ApplyAllRulesUiState.Error) return
+    Card(Modifier.fillMaxWidth().testTag("auto-classification-operation-status")) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (state) {
+                ApplyAllRulesUiState.Preparing -> {
+                    Text("正在準備交易資料")
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                is ApplyAllRulesUiState.Applying -> Text("已處理 ${state.processedTransferCount} / ${state.totalTransferCount} 筆交易")
+                is ApplyAllRulesUiState.Error -> {
+                    Text("分類尚未完成", style = MaterialTheme.typography.titleMedium)
+                    Text(state.message)
+                    Row {
+                        TextButton(onClick = onRetry) { Text("繼續分類") }
+                        TextButton(onClick = onOpenSettings) { Text("AI分類設定") }
+                        TextButton(onClick = onDismiss) { Text("關閉") }
+                    }
+                }
+                else -> Unit
+            }
+        }
     }
+}
 
 @Composable
 private fun ClassificationResetDialog(

@@ -47,22 +47,19 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionGroup
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.Category
 import tw.kevinzhang.core.data.model.CategoryReportingGroup
-import tw.kevinzhang.core.data.model.ClassificationTrigger
 import tw.kevinzhang.core.data.model.Tag
 import tw.kevinzhang.core.data.model.TransferAnnotation
 import tw.kevinzhang.moneylook.sync.AutoCategorizer
+import tw.kevinzhang.core.data.db.ClassificationJobStore
+import tw.kevinzhang.core.data.model.ClassificationJob
+import tw.kevinzhang.moneylook.schedule.BackgroundClassificationScheduler
 import tw.kevinzhang.core.data.db.AiClassificationStore
 import tw.kevinzhang.moneylook.ai.AiSettingsStore
-import tw.kevinzhang.moneylook.sync.AutoCategoryApplicationProgress
 import tw.kevinzhang.moneylook.sync.ClassificationResetProgress
 import tw.kevinzhang.moneylook.sync.ClassificationResetStage
 import java.net.URLDecoder
 import java.util.UUID
-import java.security.MessageDigest
-import android.util.Base64
 import javax.inject.Inject
-import java.io.ByteArrayInputStream
-import java.util.zip.GZIPInputStream
 
 sealed interface ClassificationResetUiState {
     data object Idle : ClassificationResetUiState
@@ -132,6 +129,8 @@ class ClassificationViewModel @Inject constructor(
     private val aiSettingsStore: AiSettingsStore,
     private val aiClassificationStore: AiClassificationStore,
     private val classificationSessionStore: AutoClassificationSessionStore,
+    private val classificationJobStore: ClassificationJobStore,
+    private val backgroundScheduler: BackgroundClassificationScheduler,
 ) : ViewModel() {
     private val isDetailSaving = MutableStateFlow(false)
     private val _applyAllRulesUiState = MutableStateFlow<ApplyAllRulesUiState>(ApplyAllRulesUiState.Idle)
@@ -142,6 +141,12 @@ class ClassificationViewModel @Inject constructor(
     private val aiConfiguration = MutableStateFlow<AiConfigurationSummary>(AiConfigurationSummary.Loading)
     private val unfinishedSession = MutableStateFlow(classificationSessionStore.hasUnfinishedSession())
     private var settingsJob: kotlinx.coroutines.Job? = null
+    private val ruleWrites = MutableStateFlow(0)
+    private val backgroundJob = classificationJobStore.observe()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ClassificationJob())
+    private val effectiveBackground = combine(backgroundJob, ruleWrites) { job, writes ->
+        if (writes > 0) job.copy(status = "RESTARTING") else job
+    }
     val autoClassificationOverview: StateFlow<AutoClassificationOverviewState> = combine(
         aiConfiguration,
         aiClassificationStore.observePreview().onEach { preview ->
@@ -157,8 +162,21 @@ class ClassificationViewModel @Inject constructor(
         AutoClassificationOverviewState(
             configuration, preview,
             resolveAutoClassificationAction(configuration, preview, unfinished,
-                apply != ApplyAllRulesUiState.Idle || reset != ClassificationResetUiState.Idle),
+                (apply != ApplyAllRulesUiState.Idle && apply !is ApplyAllRulesUiState.Error) || reset != ClassificationResetUiState.Idle),
             unfinished || (preview.firstUpgradePending && preview.upgradeStarted),
+        )
+    }.combine(effectiveBackground) { overview, background ->
+        val fullPreview = if (background.fullReclassification && background.status in setOf("PAUSED", "ERROR"))
+            classificationJobStore.preview() else null
+        val preview = overview.preview?.let {
+            fullPreview?.let { full -> it.copy(pendingTransferCount = full.pendingTransferCount) } ?: it
+        }
+        overview.copy(
+            preview = preview,
+            action = resolveAutoClassificationAction(overview.configuration, preview,
+                overview.resuming, overview.action == AutoClassificationAction.BUSY, background),
+            resuming = overview.resuming || background.status in setOf("PAUSED", "ERROR"),
+            background = background,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AutoClassificationOverviewState())
 
@@ -167,6 +185,7 @@ class ClassificationViewModel @Inject constructor(
         settingsJob = viewModelScope.launch {
             aiConfiguration.value = AiConfigurationSummary.Loading
             aiConfiguration.value = aiSettingsStore.load().toConfigurationSummary()
+            backgroundScheduler.reconcile()
         }
     }
 
@@ -407,7 +426,7 @@ class ClassificationViewModel @Inject constructor(
 
     fun saveRule(draft: AutoRuleDraft) {
         val normalized = draft.normalizedOrNull() ?: return
-        viewModelScope.launch {
+        persistRuleChange {
             autoCategoryRuleDao.upsertWithDetails(
                 rule = normalized.rule,
                 conditions = normalized.conditions,
@@ -416,12 +435,31 @@ class ClassificationViewModel @Inject constructor(
         }
     }
 
-    fun deleteRule(id: String) = viewModelScope.launch { autoCategoryRuleDao.deleteById(id) }
+    fun deleteRule(id: String) = persistRuleChange { autoCategoryRuleDao.deleteById(id) }
+
+    private fun persistRuleChange(save: suspend () -> Unit) {
+        ruleWrites.value += 1
+        viewModelScope.launch {
+            try {
+                save()
+                // The database trigger invalidates every nonmanual transaction atomically.
+                val persisted = classificationJobStore.observe().first()
+                backgroundJob.first { it.generation >= persisted.generation }
+                backgroundScheduler.reconcile()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("無法儲存或重新排程規則，請重試。")
+            } finally {
+                ruleWrites.value -= 1
+            }
+        }
+    }
 
     fun showApplyAllRulesConfirmation() {
         if (
             (_applyAllRulesUiState.value != ApplyAllRulesUiState.Idle && _applyAllRulesUiState.value !is ApplyAllRulesUiState.Error) ||
-            _classificationResetUiState.value != ClassificationResetUiState.Idle
+            _classificationResetUiState.value != ClassificationResetUiState.Idle || backgroundJob.value.active || ruleWrites.value > 0
         ) return
         _applyAllRulesUiState.value = ApplyAllRulesUiState.Preparing
         applyJob = viewModelScope.launch {
@@ -433,15 +471,23 @@ class ClassificationViewModel @Inject constructor(
                     _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
                     return@launch
                 }
-                val (count, first) = autoCategorizer.previewAutoClassification()
+                val preview = classificationJobStore.preview()
+                if (preview.active) {
+                    _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
+                    return@launch
+                }
+                val count = preview.pendingTransferCount
+                val first = preview.firstUpgradePending
                 if (count == 0) {
                     classificationSessionStore.setUnfinishedSession(false)
                     unfinishedSession.value = false
                     _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
                     return@launch
                 }
-                applyScopeText.value = (if (first) "本次包含過去由預設規則分類及尚未分類的交易。" else "只補分類尚未分類的交易。") +
-                    "共 $count 筆；每次最多 100 次 AI 請求或 10 分鐘，未完成可接續。手動設定的分類、標籤與備註會保留。"
+                applyScopeText.value = (if (preview.fullReclassification)
+                    "自訂規則已變更，本次重新分類整個帳本所有非人工分類交易（包含過去已完成的交易）。"
+                    else if (first) "本次包含過去由預設規則分類及尚未分類的交易。" else "只補分類尚未分類的交易。") +
+                    "共 $count 筆；每批最多 20 筆，每次最多 25 次 AI 請求、500 筆交易或 10 分鐘；每次請求輸出上限 4096 tokens、輸入上限 64 KiB。未完成可接續。手動設定的分類、標籤與備註會保留。"
                 _applyAllRulesUiState.value = ApplyAllRulesUiState.Confirming
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("無法載入待分類交易，請重試") }
@@ -449,9 +495,11 @@ class ClassificationViewModel @Inject constructor(
     }
 
     fun stopApplyAllRules() {
-        applyJob?.cancel()
-        if (_applyAllRulesUiState.value is ApplyAllRulesUiState.Applying || _applyAllRulesUiState.value == ApplyAllRulesUiState.Preparing)
-            _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("已停止並保存已完成的分類，稍後可接續。")
+        viewModelScope.launch {
+            try { backgroundScheduler.stop() }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("無法停止背景分類，請重試。") }
+        }
     }
 
     fun cancelApplyAllRules() {
@@ -488,58 +536,21 @@ class ClassificationViewModel @Inject constructor(
     private fun runApplyAllRules() {
         _applyAllRulesUiState.value = ApplyAllRulesUiState.Preparing
         applyJob = viewModelScope.launch {
-            var latestProgress: AutoCategoryApplicationProgress? = null
             try {
-                settingsJob?.cancel()
-                val configuration = aiSettingsStore.load().toConfigurationSummary()
-                aiConfiguration.value = configuration
-                if (configuration !is AiConfigurationSummary.Configured || autoCategorizer.previewAutoClassification().first == 0) {
-                    _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
-                    return@launch
-                }
-                classificationSessionStore.setUnfinishedSession(true)
-                unfinishedSession.value = true
-                val result = withContext(Dispatchers.Default) {
-                    autoCategorizer.applyToExistingTransactions { progress ->
-                        latestProgress = progress
-                        _applyAllRulesUiState.value = ApplyAllRulesUiState.Applying(
-                            processedTransferCount = progress.processedTransferCount,
-                            totalTransferCount = progress.totalTransferCount,
-                        )
-                    }
-                }
-                val incomplete = result.pendingTransferCount > 0 || result.stopReason != null
-                if (!incomplete) {
-                    classificationSessionStore.setUnfinishedSession(false)
-                    unfinishedSession.value = false
-                }
-                _applyAllRulesUiState.value = if (incomplete) ApplyAllRulesUiState.Error(
-                    message = (result.stopReason ?: "部分交易尚未取得有效分類") + "。已保存結果，尚有 ${result.pendingTransferCount} 筆待處理，可接續。",
-                    processedTransferCount = result.processedTransferCount,
-                    totalTransferCount = latestProgress?.totalTransferCount ?: 0,
-                ) else ApplyAllRulesUiState.Success(
-                    processedTransferCount = result.processedTransferCount,
-                    matchedTransferCount = result.matchedTransferCount,
-                    preservedManualOverrideCount = result.preservedManualOverrideCount,
-                )
+                backgroundScheduler.start()
+                _applyAllRulesUiState.value = ApplyAllRulesUiState.Idle
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                _applyAllRulesUiState.value = ApplyAllRulesUiState.Error(
-                    message = "分類尚未完成，已保存完成結果，請稍後接續。",
-                    lastStage = if (latestProgress == null) {
-                        ApplyAllRulesStage.PREPARING
-                    } else {
-                        ApplyAllRulesStage.APPLYING
-                    },
-                    processedTransferCount = latestProgress?.processedTransferCount ?: 0,
-                    totalTransferCount = latestProgress?.totalTransferCount ?: 0,
-                )
+            } catch (e: IllegalStateException) {
+                _applyAllRulesUiState.value = ApplyAllRulesUiState.Error(e.message ?: "請允許通知後再開始背景分類。")
+            } catch (_: Exception) {
+                _applyAllRulesUiState.value = ApplyAllRulesUiState.Error("無法啟動背景分類，請稍後重試。")
             }
         }
     }
 
     fun showResetClassificationConfirmation() {
+        if (backgroundJob.value.active || ruleWrites.value > 0) return
         if (
             _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
             _classificationResetUiState.value != ClassificationResetUiState.Idle
@@ -554,6 +565,7 @@ class ClassificationViewModel @Inject constructor(
     }
 
     fun startClassificationReset() {
+        if (backgroundJob.value.active || ruleWrites.value > 0) return
         if (
             _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
             _classificationResetUiState.value != ClassificationResetUiState.Confirming
@@ -562,6 +574,7 @@ class ClassificationViewModel @Inject constructor(
     }
 
     fun retryClassificationReset() {
+        if (backgroundJob.value.active || ruleWrites.value > 0) return
         if (
             _applyAllRulesUiState.value != ApplyAllRulesUiState.Idle ||
             _classificationResetUiState.value !is ClassificationResetUiState.Error

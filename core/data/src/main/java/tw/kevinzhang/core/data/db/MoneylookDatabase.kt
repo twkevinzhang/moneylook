@@ -30,6 +30,8 @@ import tw.kevinzhang.core.data.model.ClassificationExecution
 
 @Database(
     entities = [
+        tw.kevinzhang.core.data.model.ClassificationJob::class,
+        tw.kevinzhang.core.data.model.ClassificationJobItem::class,
         Account::class,
         tw.kevinzhang.core.data.model.ClassificationLearningExample::class,
         tw.kevinzhang.core.data.model.ClassificationLearningToken::class,
@@ -63,11 +65,12 @@ import tw.kevinzhang.core.data.model.ClassificationExecution
         ClassificationConditionEvaluation::class,
         ClassificationExecution::class,
     ],
-    version = 33,
+    version = 34,
     exportSchema = false,
 )
 @TypeConverters(AssetKindConverters::class)
 abstract class MoneylookDatabase : RoomDatabase() {
+    abstract fun classificationJobDao(): ClassificationJobDao
     abstract fun aiClassificationDao(): AiClassificationDao
     abstract fun localClassificationDao(): LocalClassificationDao
     abstract fun accountDao(): AccountDao
@@ -91,6 +94,9 @@ abstract class MoneylookDatabase : RoomDatabase() {
         fun defaultClassificationSeedCallback() = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
                 DefaultClassificationSeeder.seedFreshDatabase(db)
+            }
+            override fun onOpen(db: SupportSQLiteDatabase) {
+                installClassificationRuleTriggers(db)
             }
         }
     }

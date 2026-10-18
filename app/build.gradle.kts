@@ -109,6 +109,7 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(libs.robolectric)
     testImplementation(libs.room.runtime)
+    testImplementation("androidx.work:work-testing:${libs.versions.workmanager.get()}")
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
 

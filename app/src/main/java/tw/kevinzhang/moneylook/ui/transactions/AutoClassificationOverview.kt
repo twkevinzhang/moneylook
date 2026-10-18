@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import tw.kevinzhang.core.data.model.AiClassificationPreview
+import tw.kevinzhang.core.data.model.ClassificationJob
 import tw.kevinzhang.moneylook.ai.AiProvider
 import tw.kevinzhang.moneylook.ai.AiSettingsLoadResult
 
@@ -18,13 +19,14 @@ sealed interface AiConfigurationSummary {
     data class Configured(val providerLabel: String, val model: String) : AiConfigurationSummary
 }
 
-enum class AutoClassificationAction { LOADING, OPEN_SETTINGS, START, RESUME, EMPTY, BUSY }
+enum class AutoClassificationAction { LOADING, OPEN_SETTINGS, START, RESUME, EMPTY, BUSY, BACKGROUND }
 
 data class AutoClassificationOverviewState(
     val configuration: AiConfigurationSummary = AiConfigurationSummary.Loading,
     val preview: AiClassificationPreview? = null,
     val action: AutoClassificationAction = AutoClassificationAction.LOADING,
     val resuming: Boolean = false,
+    val background: ClassificationJob? = null,
 )
 
 fun AiSettingsLoadResult.toConfigurationSummary(): AiConfigurationSummary = when (this) {
@@ -41,12 +43,15 @@ fun resolveAutoClassificationAction(
     preview: AiClassificationPreview?,
     unfinishedSession: Boolean,
     busy: Boolean,
+    background: ClassificationJob? = null,
 ): AutoClassificationAction = when {
+    background?.active == true -> AutoClassificationAction.BACKGROUND
     busy -> AutoClassificationAction.BUSY
     configuration == AiConfigurationSummary.Loading || preview == null -> AutoClassificationAction.LOADING
     configuration !is AiConfigurationSummary.Configured -> AutoClassificationAction.OPEN_SETTINGS
     preview.pendingTransferCount == 0 -> AutoClassificationAction.EMPTY
-    unfinishedSession || (preview.firstUpgradePending && preview.upgradeStarted) -> AutoClassificationAction.RESUME
+    unfinishedSession || background?.status in setOf("PAUSED", "ERROR") ||
+        (preview.firstUpgradePending && preview.upgradeStarted) -> AutoClassificationAction.RESUME
     else -> AutoClassificationAction.START
 }
 
@@ -54,8 +59,33 @@ fun resolveAutoClassificationAction(
 fun AutoClassificationOverviewHeader(
     state: AutoClassificationOverviewState,
     onNavigateToAiSettings: () -> Unit,
+    onStopBackground: () -> Unit = {},
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        state.background?.let { job ->
+            if (job.active || job.message != null || job.status in setOf("PAUSED", "ERROR")) {
+                Card(Modifier.fillMaxWidth().testTag("auto-classification-background-status")) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(when (job.status) {
+                            "QUEUED" -> "背景分類已排入佇列"
+                            "RESTARTING" -> "規則已變更，正在重新準備背景分類"
+                            "STOPPING" -> "正在停止並保存進度"
+                            "RUNNING" -> "背景分類中"
+                            "PAUSED" -> "背景分類已暫停"
+                            "ERROR" -> "背景分類尚未完成"
+                            else -> "背景分類進度"
+                        }, style = MaterialTheme.typography.titleMedium)
+                        Text("已處理 ${job.processed} / ${job.total} 筆交易")
+                        job.message?.let { Text(it) }
+                        if (job.active) {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            TextButton(onClick = onStopBackground, enabled = job.status != "STOPPING",
+                                modifier = Modifier.testTag("auto-classification-stop")) { Text("停止並保存") }
+                        }
+                    }
+                }
+            }
+        }
         Card(onClick = onNavigateToAiSettings,
             modifier = Modifier.fillMaxWidth().testTag("auto-classification-ai-settings"),
             enabled = state.action != AutoClassificationAction.BUSY,
@@ -111,6 +141,7 @@ fun AutoClassificationPrimaryAction(
                 AutoClassificationAction.RESUME -> "繼續分類"
                 AutoClassificationAction.EMPTY -> "目前沒有待分類交易"
                 AutoClassificationAction.BUSY -> "請完成目前操作"
+                AutoClassificationAction.BACKGROUND -> "背景分類中"
             })
         }
     }

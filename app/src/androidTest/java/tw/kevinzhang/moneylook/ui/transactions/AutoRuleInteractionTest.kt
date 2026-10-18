@@ -14,6 +14,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -35,6 +37,7 @@ import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionField
 import tw.kevinzhang.core.data.model.AutoCategoryRuleConditionMatchMode
 import tw.kevinzhang.core.data.model.AutoCategoryRuleOrigin
 import tw.kevinzhang.core.data.model.AiClassificationPreview
+import tw.kevinzhang.core.data.model.ClassificationJob
 
 @RunWith(AndroidJUnit4::class)
 class AutoRuleInteractionTest {
@@ -65,7 +68,7 @@ class AutoRuleInteractionTest {
     }
 
     @Test
-    fun applyAllConfirmationStartsPersistentDialogAndOnlyInvokesOnce() {
+    fun applyAllConfirmationSchedulesOnceAndShowsNonmodalPreparation() {
         var startCount = 0
         var applyState by mutableStateOf<ApplyAllRulesUiState>(ApplyAllRulesUiState.Idle)
         setAutoRuleContent(
@@ -83,7 +86,7 @@ class AutoRuleInteractionTest {
 
         composeRule.runOnIdle { assertEquals(1, startCount) }
         composeRule.onNodeWithText("正在準備交易資料").assertExists()
-        composeRule.onNodeWithContentDescription("正在準備交易資料").assertExists()
+        composeRule.onNodeWithTag("auto-classification-operation-status").assertExists()
         composeRule.onNodeWithText("開始分類").assertDoesNotExist()
         composeRule.onNodeWithText("取消").assertDoesNotExist()
         composeRule.onNodeWithText("關閉").assertDoesNotExist()
@@ -151,7 +154,7 @@ class AutoRuleInteractionTest {
     }
 
     @Test
-    fun applyAllDialogRendersZeroAndNonzeroProgress() {
+    fun inlineProgressRendersZeroAndNonzeroProgress() {
         var applyState by mutableStateOf<ApplyAllRulesUiState>(
             ApplyAllRulesUiState.Applying(processedTransferCount = 0, totalTransferCount = 0),
         )
@@ -160,9 +163,8 @@ class AutoRuleInteractionTest {
             applyState = { applyState },
         )
 
-        composeRule.onNodeWithText("正在自動分類").assertExists()
         composeRule.onNodeWithText("已處理 0 / 0 筆交易").assertExists()
-        composeRule.onNodeWithContentDescription("自動分類進度").assertExists()
+        composeRule.onNodeWithTag("auto-classification-operation-status").assertExists()
 
         composeRule.runOnIdle {
             applyState = ApplyAllRulesUiState.Applying(processedTransferCount = 25, totalTransferCount = 100)
@@ -208,14 +210,14 @@ class AutoRuleInteractionTest {
                 totalTransferCount = 100,
             )
         }
-        composeRule.onNodeWithText("失敗階段：正在分類（已處理 25 / 100 筆交易）").assertExists()
+        composeRule.onNodeWithText("套用規則失敗，請稍後再試。").assertExists()
         composeRule.onNodeWithText("繼續分類").performClick()
         composeRule.runOnIdle { assertEquals(1, retryCount) }
 
         composeRule.runOnIdle {
             applyState = ApplyAllRulesUiState.Error("套用規則失敗，請稍後再試。")
         }
-        composeRule.onNodeWithText("失敗階段：正在準備交易資料").assertExists()
+        composeRule.onNodeWithTag("auto-classification-operation-status").assertExists()
         composeRule.onNodeWithText("關閉").performClick()
         composeRule.runOnIdle { assertEquals(2, finishCount) }
     }
@@ -417,6 +419,23 @@ class AutoRuleInteractionTest {
         composeRule.runOnIdle { assertEquals("structured-rule", deleted) }
     }
 
+    @Test fun backgroundStatusDisablesStartAllowsRuleEditingAndOffersStopWithoutDialog() {
+        var stops = 0
+        setAutoRuleContent(
+            overview = { readyOverview().copy(action = AutoClassificationAction.BACKGROUND,
+                background = ClassificationJob(status = "RUNNING", processed = 20, total = 80)) },
+            onStop = { stops++ },
+        )
+        composeRule.onNodeWithTag("auto-classification-primary-action").assertIsNotEnabled()
+        composeRule.onNodeWithTag("auto-rule-add").assertIsEnabled()
+        composeRule.onNodeWithText("已處理 20 / 80 筆交易").assertExists()
+        composeRule.onAllNodes(isDialog()).assertCountEquals(0)
+        composeRule.onNodeWithTag("auto-classification-stop").performClick()
+        composeRule.runOnIdle { assertEquals(1, stops) }
+        composeRule.onNodeWithTag("auto-rule-add").performClick()
+        composeRule.onNodeWithText("新增自動分類規則").assertExists()
+    }
+
     private fun setAutoRuleContent(
         rules: List<AutoRuleDraft> = emptyList(),
         categories: List<CategoryOption> = emptyList(),
@@ -430,6 +449,7 @@ class AutoRuleInteractionTest {
         onStartApply: () -> Unit = {},
         onRetryApply: () -> Unit = {},
         onDismissApply: () -> Unit = {},
+        onStop: () -> Unit = {},
         onShowReset: () -> Unit = {},
         onCancelReset: () -> Unit = {},
         onStartReset: () -> Unit = {},
@@ -461,6 +481,7 @@ class AutoRuleInteractionTest {
                     onStartApplyAllRules = onStartApply,
                     onRetryApplyAllRules = onRetryApply,
                     onDismissApplyAllRules = onDismissApply,
+                    onStopApplyAllRules = onStop,
                     classificationResetUiState = resetState(),
                     onShowResetClassificationConfirmation = onShowReset,
                     onCancelClassificationReset = onCancelReset,

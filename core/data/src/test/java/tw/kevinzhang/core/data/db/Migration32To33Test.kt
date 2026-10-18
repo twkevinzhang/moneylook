@@ -43,7 +43,7 @@ class Migration32To33Test {
             sql.version = 32
             initial.close()
             val db = Room.databaseBuilder(context, MoneylookDatabase::class.java, name).allowMainThreadQueries()
-                .addMigrations(MIGRATION_32_33).build()
+                .addMigrations(MIGRATION_32_33, MIGRATION_33_34).build()
             try {
                 assertEquals(listOf("deleted-current","old","old-own","orphan","retired"), db.aiClassificationDao().pending())
                 val rules=db.autoCategoryRuleDao().observeAll().first()

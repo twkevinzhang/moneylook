@@ -108,6 +108,7 @@ class AutoCategorizer @Inject constructor(
     private val classificationTraceMaintenanceScheduler: ClassificationTraceMaintenanceScheduler,
     private val aiClassifier: AiClassifier? = null,
     private val aiStore: AiClassificationStore? = null,
+    private val aiBatchClassifier: AiBatchClassifier? = null,
 ) : TransferAutoCategorizer {
     private val categorizationMutex = Mutex()
 
@@ -130,13 +131,28 @@ class AutoCategorizer @Inject constructor(
         onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
     ): AutoCategoryApplicationResult = categorizationMutex.withLock {
         aiStore?.begin()
-        val result = runClassification(aiStore?.pendingIds(), null, trigger, onProgress)
+        val result = runClassification(aiStore?.pendingIds(), null, trigger, onProgress = onProgress)
         aiStore?.finish()
         result.copy(pendingTransferCount = aiStore?.pendingIds()?.size ?: result.pendingTransferCount)
     }
 
     suspend fun previewAutoClassification(): Pair<Int, Boolean> =
         (aiStore?.pendingIds()?.size ?: transferDao.classificationCount()) to (aiStore?.isFirst() == true)
+
+    suspend fun applyBackgroundBatch(
+        ids: List<String>, generation: Long, jobStore: tw.kevinzhang.core.data.db.ClassificationJobStore,
+        budget: BackgroundClassificationBudget,
+    ): AutoCategoryApplicationResult = categorizationMutex.withLock {
+        require(ids.size <= 20)
+        jobStore.requireGeneration(generation)
+        check(aiBatchClassifier != null) { "Batch classifier unavailable" }
+        aiStore?.begin()
+        val context = BackgroundBatchContext(jobStore, generation, jobStore.current().fullReclassification, budget)
+        val result = runClassification(ids, null, ClassificationTrigger.BULK_REAPPLY, background = context)
+        jobStore.requireGeneration(generation)
+        aiStore?.finish()
+        result
+    }
 
     suspend fun resetClassificationSystem(onProgress: (ClassificationResetProgress) -> Unit = {}): AutoCategoryApplicationResult =
         categorizationMutex.withLock {
@@ -156,6 +172,7 @@ class AutoCategorizer @Inject constructor(
 
     private suspend fun runClassification(
         ids: List<String>?, runId: String?, trigger: ClassificationTrigger,
+        background: BackgroundBatchContext? = null,
         onProgress: (AutoCategoryApplicationProgress) -> Unit = {},
     ): AutoCategoryApplicationResult = run {
         localStore.snapshot { localStore.refreshExamples() }
@@ -181,14 +198,17 @@ class AutoCategorizer @Inject constructor(
             if (page.isEmpty() && (ids == null || offset >= ids.size)) break
             if (ids != null) {
                 val present = page.mapTo(mutableSetOf()) { it.transfer.id }
-                ids.subList(offset, minOf(offset + 250, ids.size)).filterNot { it in present }.forEach { aiStore?.skip(it) }
+                ids.subList(offset, minOf(offset + 250, ids.size)).filterNot { it in present }.forEach { id ->
+                    if (background == null) aiStore?.skip(id)
+                    else background.store.guarded(background.generation, id) { aiStore?.skip(id) }
+                }
             }
             for (extensionId in page.map { it.transfer.extensionId }.distinct()) {
                 if (extensionId !in sourceManifests) sourceManifests[extensionId] = localStore.sourceManifestId(extensionId)
             }
             val ownIds = if (canTransfer) page.filter { matchesOwnedAccount(it.transfer, owned, sourceManifests[it.transfer.extensionId]) }.mapTo(mutableSetOf()) { it.transfer.id } else emptySet()
             val before = processed
-            val result = categorize(page, ownIds, runId, trigger, ruleContents, rules, budget) {
+            val result = categorize(page, ownIds, runId, trigger, ruleContents, rules, budget, background) {
                 onProgress(AutoCategoryApplicationProgress(before + it, total))
             }
             processed += result.processedTransferCount
@@ -210,6 +230,7 @@ class AutoCategorizer @Inject constructor(
         ruleSetContentById: Map<String, String>,
         enabledRules: List<AutoCategoryRuleWithTags>,
         budget: ClassificationBudget,
+        background: BackgroundBatchContext? = null,
         onProgress: ((processedTransferCount: Int) -> Unit)? = null,
     ): AutoCategoryApplicationResult {
         if (candidates.isEmpty()) {
@@ -219,6 +240,34 @@ class AutoCategorizer @Inject constructor(
                 preservedManualOverrideCount = 0,
             )
         }
+        val expectedSnapshots = mutableMapOf<String, TransferAnnotation?>()
+        val batchInputs = mutableListOf<AiBatchItem>()
+        val batchTransferIds = mutableMapOf<String, String>()
+        if (background != null) {
+            background.store.requireGeneration(background.generation)
+            val catalog = categoryDao.observeAll().first()
+            for (candidate in candidates) {
+                val transfer = candidate.transfer
+                val expected = annotationDao.getByTransferIds(listOf(transfer.id)).singleOrNull()
+                expectedSnapshots[transfer.id] = expected
+                val legacy = aiStore?.legacy(transfer.id)
+                val staleLegacy = legacy != null && (expected?.categoryId != legacy.categoryId || expected?.autoRuleId != legacy.ruleId || expected?.autoRuleSetId != legacy.ruleSetId)
+                if (expected?.manualOverride == true || transfer.id in internalTransferIds || staleLegacy) continue
+                val forceAi = legacy != null && !background.fullReclassification
+                val decision = if (forceAi) null else enabledRules.evaluateClassification(candidate).decision as? ClassificationDecision.AutoApply
+                val learned = if (forceAi) null else localStore.learned(transfer)
+                val local = learned ?: decision?.evaluation?.ruleWithTags?.rule?.categoryId
+                val history = if (forceAi || local != null) null else localStore.history(transfer)
+                if (local == null && history == null) {
+                    val opaqueId = "item-${batchInputs.size}"
+                    batchTransferIds[opaqueId] = transfer.id
+                    batchInputs.add(AiBatchItem(opaqueId, aiInput(candidate, catalog)))
+                }
+            }
+        }
+        val batchResults = if (background != null && batchInputs.isNotEmpty()) {
+            classifyBackgroundInputs(batchInputs, background).mapNotNull { (id, proposal) -> batchTransferIds[id]?.let { it to proposal } }.toMap()
+        } else emptyMap()
         var matchedTransferCount = 0
         var preservedManualOverrideCount = 0
         var processedTransferCount = 0
@@ -233,16 +282,17 @@ class AutoCategorizer @Inject constructor(
             try {
                 for (candidate in extensionCandidates) {
                     val transfer = candidate.transfer
-                    val expected = annotationDao.getByTransferIds(listOf(transfer.id)).singleOrNull()
+                    val expected = if (background == null) annotationDao.getByTransferIds(listOf(transfer.id)).singleOrNull() else expectedSnapshots[transfer.id]
                     val legacy = aiStore?.legacy(transfer.id)
                     if (legacy != null && trigger == ClassificationTrigger.INGESTION) continue
                     if (legacy != null && (expected?.manualOverride == true || expected?.categoryId != legacy.categoryId ||
                             expected?.autoRuleId != legacy.ruleId || expected?.autoRuleSetId != legacy.ruleSetId)) {
-                        aiStore?.skip(transfer.id)
+                        if (background == null) aiStore?.skip(transfer.id)
+                        else background.store.guarded(background.generation, transfer.id) { aiStore?.skip(transfer.id) }
                         processedTransferCount++
                         continue
                     }
-                    val forceAi = legacy != null
+                    val forceAi = legacy != null && background?.fullReclassification != true
                     val isInternalTransfer = transfer.id in internalTransferIds
                     val evaluation = if (isInternalTransfer || forceAi) {
                         ClassificationEvaluation.empty()
@@ -260,7 +310,10 @@ class AutoCategorizer @Inject constructor(
                         else -> if (forceAi) null else localStore.history(transfer)
                     }
                     var proposal: tw.kevinzhang.core.data.model.AiCategoryProposal? = null
-                    if (choice == null && expected?.manualOverride != true && aiClassifier != null) {
+                    if (background != null && choice == null && expected?.manualOverride != true) {
+                        proposal = batchResults[transfer.id]
+                        if (proposal == null) { budget.failed++; processedTransferCount++; onProgress?.invoke(processedTransferCount); continue }
+                    } else if (choice == null && expected?.manualOverride != true && aiClassifier != null) {
                         if (!budget.canRequest()) break
                         try {
                             budget.requests++
@@ -322,7 +375,7 @@ class AutoCategorizer @Inject constructor(
                         ruleEvaluations = trace.rules,
                         conditionEvaluations = trace.conditions,
                     )
-                    val writeResult = try { if (aiStore != null) aiStore.guarded(transfer, expected) {
+                    suspend fun guardedWrite() = if (aiStore != null) aiStore.guarded(transfer, expected) {
                         val ai = proposal
                         if (ai != null) {
                             val categoryId = try { aiStore.resolve(ai) } catch (_: IllegalArgumentException) {
@@ -330,7 +383,11 @@ class AutoCategorizer @Inject constructor(
                             }
                             write(automaticDecision.copy(categoryId = categoryId, localSource = "AI", localReason = listOfNotNull(ai.provider, ai.model, ai.reason).joinToString(" / "), classifierVersion = "ai-v1"))
                         } else write(automaticDecision)
-                    } else write(automaticDecision) } catch (e: AiClassificationException) {
+                    } else write(automaticDecision)
+                    val writeResult = try {
+                        if (background == null) guardedWrite()
+                        else background.store.guarded(background.generation, transfer.id) { guardedWrite() }
+                    } catch (e: AiClassificationException) {
                         if (e.code != AiFailureCode.INVALID_RESPONSE) throw e
                         budget.failed++
                         processedTransferCount++
@@ -371,6 +428,31 @@ class AutoCategorizer @Inject constructor(
         withContext(NonCancellable) {
             runCatching { classificationTraceStore.failExecution(executionId) }
             wakeTraceMaintenance()
+        }
+    }
+
+    private suspend fun classifyBackgroundInputs(items: List<AiBatchItem>, context: BackgroundBatchContext): Map<String, tw.kevinzhang.core.data.model.AiCategoryProposal> {
+        if (items.isEmpty() || !context.budget.reserveRequest()) return emptyMap()
+        context.store.requireGeneration(context.generation)
+        return try {
+            withTimeout(context.budget.remainingMillis().coerceIn(1L, 60_000L)) {
+                aiBatchClassifier!!.classifyBatch(items).proposals
+            }
+        } catch (error: BatchTooLargeException) {
+            if (items.size == 1) emptyMap() else {
+                val middle = items.size / 2
+                classifyBackgroundInputs(items.take(middle), context) + classifyBackgroundInputs(items.drop(middle), context)
+            }
+        } catch (_: TimeoutCancellationException) {
+            context.budget.stopReason = "AI 連線逾時，已保存進度，可再次接續"; emptyMap()
+        } catch (error: AiClassificationException) {
+            if (error.code == AiFailureCode.INVALID_RESPONSE && items.size > 1) {
+                val middle = items.size / 2
+                classifyBackgroundInputs(items.take(middle), context) + classifyBackgroundInputs(items.drop(middle), context)
+            } else {
+                if (error.code != AiFailureCode.INVALID_RESPONSE) context.budget.stopReason = error.code.message
+                emptyMap()
+            }
         }
     }
 

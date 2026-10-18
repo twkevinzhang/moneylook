@@ -7,12 +7,27 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import tw.kevinzhang.core.data.model.AiClassificationPreview
+import tw.kevinzhang.core.data.model.ClassificationJob
 import tw.kevinzhang.moneylook.ai.*
 
 @RunWith(RobolectricTestRunner::class)
 class AutoClassificationOverviewTest {
     private val configured = AiConfigurationSummary.Configured("自訂服務", "gpt-6-luna")
     private val pending = AiClassificationPreview(2, true, false)
+
+    @Test fun durableActiveJobTakesPriorityOverMissingSettingsEmptyPreviewAndModalBusy() {
+        listOf("QUEUED", "RUNNING", "RESTARTING", "STOPPING").forEach { status ->
+            assertEquals(status, AutoClassificationAction.BACKGROUND,
+                resolveAutoClassificationAction(AiConfigurationSummary.Missing, null, false, true,
+                    ClassificationJob(status = status)))
+        }
+    }
+
+    @Test fun pausedJobCanResumeWithoutLegacySessionHint() {
+        assertEquals(AutoClassificationAction.RESUME,
+            resolveAutoClassificationAction(configured, pending, false, false,
+                ClassificationJob(status = "PAUSED", processed = 1, total = 2)))
+    }
 
     @Test fun actionDependsOnSettingsPendingAndSessionRatherThanRules() {
         data class Case(val settings: AiConfigurationSummary, val preview: AiClassificationPreview?,
